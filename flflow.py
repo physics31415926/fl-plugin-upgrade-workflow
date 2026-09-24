@@ -774,6 +774,9 @@ def make_server(engine: Engine, host: str, port: int, monitor: object | None = N
             if not self._trusted_request():
                 return
             target = urlsplit(self.path)
+            if target.path == "/api/capabilities":
+                self._json(200, {"read_only": False})
+                return
             if target.path in ("/api/codex-sessions", "/api/codex-health"):
                 if sessions is None:
                     self._json(HTTPStatus.SERVICE_UNAVAILABLE, {"error": "Codex sessions are not configured"})

@@ -183,6 +183,7 @@
         <span>vLLM <strong id="vllm-version">—</strong></span>
         <span><span id="adaptation-ci-label">已合入平台适配 CI</span> <strong id="adaptation-ci">—</strong> <a id="adaptation-ci-link" hidden target="_blank" rel="noopener noreferrer">查看验收运行 ↗</a></span>
         <span>采集于 <strong id="observed-at">—</strong></span>
+        <span id="access-mode" hidden>团队只读看板</span>
       </div>
     </section>
     <div class="summary" aria-label="分支概览">
@@ -213,6 +214,8 @@
   "use strict";
   const byId = (id) => document.getElementById(id);
   const expanded = new Set();
+  let readOnly = false;
+  const appUrl = path => new URL(path.replace(/^\/+/, ""), window.location.href).href;
   const labels = {
     merged:"已合入", pending:"待合入", unknown:"未知",
     passed:"通过", recorded_pass:"通过 · 验收记录", failed:"失败", running:"运行中",
@@ -489,9 +492,11 @@
         (latest.detail || "") + " · " + shortSha(latest.commit), latest.url, "查看后续运行"));
     }
     detail.append(meta);
-    const assign = el("a", "", "为 " + (backend.label || id) + " 分配验证机器并跟进升级 ↗");
-    assign.href = "/sessions?branch=" + encodeURIComponent(data.branch) + "&backend=" + encodeURIComponent(id);
-    detail.append(assign);
+    if (!readOnly) {
+      const assign = el("a", "", "为 " + (backend.label || id) + " 分配验证机器并跟进升级 ↗");
+      assign.href = appUrl("sessions") + "?branch=" + encodeURIComponent(data.branch) + "&backend=" + encodeURIComponent(id);
+      detail.append(assign);
+    }
     detail.append(el("h3", "matrix-heading", "适配 Gate 明细"));
     detail.append(el("p", "matrix-help", "场景来自目标分支 tools/adaptation-gate-cases；缺失、过期和失败均不计为通过。"));
     renderMatrix(detail, data, backend);
@@ -522,7 +527,7 @@
     if (fetching || remoteRefreshing) return;
     fetching = true;
     try {
-      const response = await fetch("/api/branch-status?branch=" + encodeURIComponent(branch), {cache:"no-store"});
+      const response = await fetch(appUrl("api/branch-status") + "?branch=" + encodeURIComponent(branch), {cache:"no-store"});
       const data = await response.json().catch(() => ({}));
       if (!response.ok) throw new Error(data.error || "状态接口返回 " + response.status);
       render(data);
@@ -541,7 +546,7 @@
     button.textContent = "刷新中…";
     const branch = byId("branch-select").value || "0.4.0-dev";
     try {
-      const response = await fetch("/api/branch-refresh", {
+      const response = await fetch(appUrl("api/branch-refresh"), {
         method:"POST", headers:{"Content-Type":"application/json"},
         body:JSON.stringify({branch})
       });
@@ -561,9 +566,27 @@
   }
   byId("branch-select").addEventListener("change", () => loadBranch(byId("branch-select").value));
   byId("refresh-remote").addEventListener("click", refreshRemote);
-  const initialBranch = new URLSearchParams(window.location.search).get("branch") || "0.4.0-dev";
-  loadBranch(initialBranch);
-  setInterval(() => loadBranch(byId("branch-select").value || initialBranch), 15000);
+  const requestedBranch = new URLSearchParams(window.location.search).get("branch");
+  let initialBranch = requestedBranch || "0.4.0-dev";
+  async function initialize() {
+    try {
+      const response = await fetch(appUrl("api/capabilities"), {cache:"no-store"});
+      if (response.ok) {
+        const capabilities = await response.json();
+        readOnly = capabilities.read_only === true;
+        if (!requestedBranch && capabilities.default_branch) initialBranch = capabilities.default_branch;
+      }
+    } catch (_) { /* Older local servers expose only the existing status API. */ }
+    if (readOnly) {
+      byId("access-mode").hidden = false;
+      byId("refresh-remote").hidden = true;
+      document.querySelectorAll('.toplinks a[href="/workflow"], .toplinks a[href="/sessions"]').forEach(node => { node.hidden = true; });
+      document.querySelector(".footnote").textContent = "团队只读看板：页面定时更新采集结果。任务控制、机器连接信息及原始私有记录由维护者在本机管理。";
+    }
+    await loadBranch(initialBranch);
+    setInterval(() => loadBranch(byId("branch-select").value || initialBranch), 15000);
+  }
+  initialize();
 })();
 </script>
 </body>
