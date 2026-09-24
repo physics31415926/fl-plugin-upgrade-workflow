@@ -27,6 +27,8 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, urlsplit
 
+from branch_monitor import MonitorError
+
 
 SCHEMA_VERSION = 1
 SHA_RE = re.compile(r"^[0-9a-fA-F]{40}$")
@@ -716,7 +718,7 @@ class Engine:
             self.worker.start()
 
 
-def make_server(engine: Engine, host: str, port: int) -> ThreadingHTTPServer:
+def make_server(engine: Engine, host: str, port: int, monitor: object | None = None) -> ThreadingHTTPServer:
     if host not in ("127.0.0.1", "localhost", "::1"):
         raise WorkflowError("HTTP control must bind to loopback only")
 
@@ -771,6 +773,35 @@ def make_server(engine: Engine, host: str, port: int) -> ThreadingHTTPServer:
             if not self._trusted_request():
                 return
             target = urlsplit(self.path)
+            if target.path == "/api/branch-status":
+                if monitor is None:
+                    self._json(HTTPStatus.SERVICE_UNAVAILABLE, {"error": "Branch monitor is not configured"})
+                    return
+                branch = parse_qs(target.query).get("branch", [None])[0]
+                try:
+                    self._json(200, monitor.status(branch=branch))
+                except (ValueError, MonitorError) as exc:
+                    self._json(HTTPStatus.BAD_REQUEST, {"error": str(exc)})
+                except Exception as exc:
+                    self._json(HTTPStatus.INTERNAL_SERVER_ERROR, {"error": f"Branch monitor failed: {exc}"})
+                return
+            if target.path == "/api/branch-evidence":
+                if monitor is None:
+                    self._json(HTTPStatus.SERVICE_UNAVAILABLE, {"error": "Branch monitor is not configured"})
+                    return
+                query = parse_qs(target.query)
+                fields = {key: query.get(key, [""])[0] for key in ("branch", "backend", "model", "mode", "scenario")}
+                try:
+                    if not all(fields.values()):
+                        raise ValueError("branch, backend, model, mode, and scenario are required")
+                    self._json(200, monitor.read_evidence(**fields))
+                except (ValueError, KeyError, MonitorError) as exc:
+                    self._json(HTTPStatus.BAD_REQUEST, {"error": str(exc)})
+                except FileNotFoundError:
+                    self._json(HTTPStatus.NOT_FOUND, {"error": "Evidence is not available"})
+                except Exception as exc:
+                    self._json(HTTPStatus.INTERNAL_SERVER_ERROR, {"error": f"Could not read evidence: {exc}"})
+                return
             if target.path == "/api/status":
                 self._json(200, engine.status())
                 return
@@ -798,10 +829,11 @@ def make_server(engine: Engine, host: str, port: int) -> ThreadingHTTPServer:
                 except (KeyError, IndexError, ValueError):
                     self._json(400, {"error": "Invalid platform, attempt, or tail"})
                 return
-            if target.path in ("/", "/index.html"):
-                path = Path(__file__).with_name("index.html")
+            if target.path in ("/", "/index.html", "/workflow", "/workflow.html"):
+                filename = "workflow.html" if target.path in ("/workflow", "/workflow.html") else "index.html"
+                path = Path(__file__).with_name(filename)
                 if not path.is_file():
-                    self._json(404, {"error": "index.html is not installed"})
+                    self._json(404, {"error": f"{filename} is not installed"})
                     return
                 data = path.read_bytes()
                 self.send_response(200)
@@ -826,7 +858,15 @@ def make_server(engine: Engine, host: str, port: int) -> ThreadingHTTPServer:
                 body = json.loads(self.rfile.read(length) or b"{}")
                 if not isinstance(body, dict):
                     raise WorkflowError("Request body must be a JSON object")
-                if target == "/api/start":
+                if target == "/api/branch-refresh":
+                    if monitor is None:
+                        self._json(HTTPStatus.SERVICE_UNAVAILABLE, {"error": "Branch monitor is not configured"})
+                    else:
+                        branch = body.get("branch")
+                        if branch is not None and not isinstance(branch, str):
+                            raise WorkflowError("branch must be a string")
+                        self._json(200, monitor.refresh_branch(branch=branch))
+                elif target == "/api/start":
                     engine.launch(dry_run=body.get("dry_run", False) is True)
                     self._json(HTTPStatus.ACCEPTED, {"accepted": True})
                 elif target in ("/api/retry", "/api/retry-failed"):
@@ -836,14 +876,16 @@ def make_server(engine: Engine, host: str, port: int) -> ThreadingHTTPServer:
                     self._json(200, engine.request(target.removeprefix("/api/")))
                 else:
                     self._json(404, {"error": "Not found"})
-            except (WorkflowError, json.JSONDecodeError, ValueError) as exc:
+            except (WorkflowError, MonitorError, json.JSONDecodeError, ValueError) as exc:
                 self._json(400, {"error": str(exc)})
+            except Exception as exc:
+                self._json(HTTPStatus.INTERNAL_SERVER_ERROR, {"error": f"Request failed: {exc}"})
 
     return ThreadingHTTPServer((host, port), Handler)
 
 
-def serve(engine: Engine, host: str, port: int) -> None:
-    server = make_server(engine, host, port)
+def serve(engine: Engine, host: str, port: int, monitor: object | None = None) -> None:
+    server = make_server(engine, host, port, monitor)
     print(f"FL workflow dashboard: http://{host}:{server.server_port}/", flush=True)
     try:
         server.serve_forever()
@@ -862,6 +904,7 @@ def main(argv: list[str] | None = None) -> int:
         if action == "serve":
             cmd.add_argument("--host", default="127.0.0.1")
             cmd.add_argument("--port", type=int, default=8765)
+            cmd.add_argument("--monitor-config", type=Path)
     args = parser.parse_args(argv)
     try:
         engine = Engine(args.config)
@@ -869,7 +912,11 @@ def main(argv: list[str] | None = None) -> int:
             print(json.dumps({"valid": True, "platforms": [p["name"] for p in engine.cfg["platforms"]]}, indent=2))
             return 0
         if args.action == "serve":
-            serve(engine, args.host, args.port)
+            from branch_monitor import BranchMonitor
+
+            monitor_path = args.monitor_config or args.config.resolve().parent / "branch-monitor.json"
+            monitor = BranchMonitor(monitor_path) if monitor_path.is_file() else None
+            serve(engine, args.host, args.port, monitor)
             return 0
         if args.action == "start":
             result = engine.start(args.dry_run)

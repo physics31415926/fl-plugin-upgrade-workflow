@@ -1,6 +1,34 @@
 # vllm-plugin-FL 升级工作流：可配置首版
 
-这个目录提供一个本地编排器和控制面板。它先在 CUDA 工作树中适配公共层并验收，再从该提交为其他 backend 建立独立工作树，并行运行配置中的适配命令和验收命令。面板由本地 HTTP 服务提供，可在 Codex 桌面端的内置 Browser 面板打开。
+这个目录提供分支适配监控面板和本地编排器。监控面板按目标分支当前提交分别显示 backend 的代码合入、CI 和 adaptation gate 状态；编排器先在 CUDA 工作树中适配公共层，再从该提交为其他 backend 建立独立工作树并行运行。面板由本地 HTTP 服务提供，可在 Codex 桌面端的内置 Browser 面板打开。
+
+## 分支适配监控
+
+将 `branch-monitor.example.json` 复制为 `branch-monitor.json`，核对插件仓库路径、remote、分支、模型和 backend PR 编号。启动 `python flflow.py serve --config workflow.json --monitor-config branch-monitor.json` 后，首页 `/` 显示分支监控；原工作流控制页在 `/workflow`。页面可切换本地 remote-tracking 分支，并用“刷新远端”更新目标分支 Git ref 与 GitHub CI。`branch-monitor.json` 是本机配置，已被 Git 忽略。
+
+监控服务优先通过已登录的 `gh api` 读取 GitHub 状态；若未安装或不可用，则用 GitHub HTTP API（可通过 `GH_TOKEN` 或 `GITHUB_TOKEN` 提高配额）。远端数据缓存 5 分钟；页面每 15 秒轮询本地服务，点击“刷新远端”会立即重新获取。网络故障会明确显示为“未知”和错误信息，不会沿用旧的成功状态。
+
+监控清单从**所选分支**的 `.github/configs/platforms.yml` 和 `tools/adaptation-gate-cases/test_*.py` 读取。当前 `0.4.0-dev` 的 gate 包含两个 Qwen3.6 模型、eager/graph 两种模式、每组 5 个 pytest 场景（合计 20 个场景、104 个请求）。代码已合入、CI 成功和 Gate 通过是三个独立状态。Gate 逐项结果必须由运行清单绑定 backend、分支提交、模型、模式和端口，再检查每个 JSON 的原子请求结果；缺失或旧提交的结果不会算通过。`workflow.json` 中的本机演示结果也不会计入分支监控。
+
+要让 Gate 显示真实结果，在 `evidence_dir` 下为每次 backend / 模型 / 模式运行放一个 `manifest.json`，并把 `tools/adaptation-gate-cases` 写出的 5 个场景 JSON 放在清单指定的 `results_dir`。例如 `runs/gate-evidence/cuda/Qwen3.6-27B/eager/run-001/manifest.json`：
+
+```json
+{
+  "schema_version": 1,
+  "run_id": "run-001",
+  "backend": "cuda",
+  "branch": "0.4.0-dev",
+  "commit": "e88e4db75ece36e482a5fcc288929d4461d53184",
+  "model": "Qwen3.6-27B",
+  "mode": "eager",
+  "port": 8000,
+  "results_dir": "results"
+}
+```
+
+`results_dir` 相对清单所在目录。只有清单的 commit 等于所选分支 HEAD、五个 JSON 全部对应当前 case 且每个请求的检查均通过，该模型 / 模式下的五个 case 才会显示通过。完整 backend Gate 还需两个模型的两种模式全部通过。当前仓库不自动从 GPU 或 CI 下载这些 JSON。
+
+截至 2026-09-24，`0.4.0-dev` 已合入 [NVIDIA 适配 PR #484](https://github.com/flagos-ai/vllm-plugin-FL/pull/484)，但该分支提交的 [GitHub CI](https://github.com/flagos-ai/vllm-plugin-FL/actions/runs/35660209641) 为失败，且未找到可绑定提交的 adaptation gate 原始 JSON。面板因此显示 NVIDIA“已合入”，不会把它标成整体验收通过。Ascend、MetaX 和 CoreX 的候选 PR 会显示在各自 backend 行。
 
 **当前是框架，不是一次已完成的插件升级。** `workflow.example.json` 中的仓库路径、commit 和模型清单必须替换；本目录未连接 GPU、未运行插件验收、未创建 PR。编排器只运行配置中明确给出的命令，不自动下载模型或配置远程机器。
 

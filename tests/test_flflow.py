@@ -282,6 +282,51 @@ class FlflowTests(unittest.TestCase):
             server.server_close()
             worker.join(timeout=3)
 
+    def test_branch_monitor_uses_separate_read_and_refresh_routes(self) -> None:
+        self.config()
+
+        class FakeMonitor:
+            def status(self, branch=None):
+                return {"branch": branch or "0.4.0-dev", "head": "a" * 40}
+
+            def refresh_branch(self, branch=None):
+                return {"branch": branch or "0.4.0-dev", "refreshed": True}
+
+            def read_evidence(self, branch, backend, model, mode, scenario):
+                return {"branch": branch, "backend": backend, "model": model,
+                        "mode": mode, "scenario": scenario, "summary": {"passed": True}}
+
+        server = flflow.make_server(flflow.Engine(self.config_path), "127.0.0.1", 0, FakeMonitor())
+        worker = threading.Thread(target=server.serve_forever, daemon=True)
+        worker.start()
+        port = server.server_port
+        try:
+            connection = HTTPConnection("127.0.0.1", port, timeout=3)
+            connection.request("GET", "/api/branch-status?branch=0.4.0-dev")
+            response = connection.getresponse()
+            self.assertEqual(response.status, 200)
+            self.assertEqual(json.loads(response.read())["head"], "a" * 40)
+            connection.close()
+
+            connection = HTTPConnection("127.0.0.1", port, timeout=3)
+            connection.request("GET", "/api/branch-evidence?branch=0.4.0-dev&backend=cuda&model=Qwen3.6-27B&mode=eager&scenario=text_single")
+            response = connection.getresponse()
+            self.assertEqual(response.status, 200)
+            self.assertEqual(json.loads(response.read())["scenario"], "text_single")
+            connection.close()
+
+            connection = HTTPConnection("127.0.0.1", port, timeout=3)
+            connection.request("POST", "/api/branch-refresh", body='{"branch":"0.4.0-dev"}',
+                               headers={"Content-Type": "application/json"})
+            response = connection.getresponse()
+            self.assertEqual(response.status, 200)
+            self.assertTrue(json.loads(response.read())["refreshed"])
+            connection.close()
+        finally:
+            server.shutdown()
+            server.server_close()
+            worker.join(timeout=3)
+
     def test_one_unexecuted_case_rejects_positive_aggregate(self) -> None:
         self.config()
         config = json.loads(self.config_path.read_text(encoding="utf-8"))

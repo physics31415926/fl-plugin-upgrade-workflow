@@ -1,0 +1,28 @@
+{
+  "repo": "../vllm-plugin-FL",
+  "remote": "upstream",
+  "branch": "0.4.0-dev",
+  "github_repo": "flagos-ai/vllm-plugin-FL",
+  "evidence_dir": "runs/gate-evidence",
+  "models": ["Qwen3.6-27B", "Qwen3.6-35B-A3B"],
+  "modes": ["eager", "graph"],
+  "backend_labels": {
+    "cuda": "NVIDIA",
+    "ascend": "Ascend",
+    "metax": "MetaX",
+    "corex": "CoreX",
+    "hygon": "Hygon",
+    "musa": "Moore Threads",
+    "enflame": "Enflame",
+    "kunlunxin": "Kunlunxin"
+  },
+  "backend_prs": {
+    "cuda": 484,
+    "ascend": 487,
+    "metax": 554,
+    "corex": 527
+  },
+  "merged_commits": {
+    "cuda": "e88e4db75ece36e482a5fcc288929d4461d53184"
+  }
+}
