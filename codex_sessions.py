@@ -156,7 +156,7 @@ class AppServerClient:
 
 class CodexSessionManager:
     ACTIVE = {"starting", "running", "waiting_approval", "waiting_input", "interrupting"}
-    BACKENDS = {"cuda", "ascend", "metax", "corex", "hygon", "musa", "enflame", "kunlunxin"}
+    BACKENDS = {"cuda", "ascend", "metax", "corex", "hygon", "musa", "enflame", "kunlunxin", "thead"}
 
     def __init__(self, config, base_dir, client_factory=AppServerClient):
         self.config = config
@@ -215,27 +215,35 @@ class CodexSessionManager:
             raise SessionError(f"{field} is required")
         return value
 
-    def _machine(self, payload):
+    def _machine(self, payload, require_ready=True):
         backend = payload.get("backend", "")
         if backend == "nvidia":
             backend = "cuda"
-        if not isinstance(backend, str) or backend not in self.backends:
+        if not isinstance(backend, str) or (backend not in self.backends and (require_ready or backend != "")):
             raise SessionError("Choose a configured backend")
+        role = payload.get("role", "compute")
+        if role not in ("compute", "gateway"):
+            raise SessionError("Machine role must be compute or gateway")
+        if require_ready and role != "compute":
+            raise SessionError("A gateway cannot be used as a backend validation machine")
         alias = self._name(payload.get("ssh_alias", ""), "SSH alias")
-        workspace = self._text(payload.get("remote_workspace", ""), "remote_workspace", required=True)
-        if not workspace.startswith("/") or any(c in workspace for c in "\r\n\x00"):
+        workspace = self._text(payload.get("remote_workspace", ""), "remote_workspace", required=require_ready)
+        if workspace and (not workspace.startswith("/") or any(c in workspace for c in "\r\n\x00")):
             raise SessionError("remote_workspace must be an absolute Linux path")
         models = payload.get("model_paths", {})
         if not isinstance(models, dict) or len(models) > 20:
             raise SessionError("model_paths must map model names to machine paths")
         models = {self._text(k, "model name", 200, True): self._text(v, "model path", 2000, True) for k, v in models.items()}
-        return {"backend": backend, "ssh_alias": alias, "remote_workspace": workspace, "model_paths": models}
+        return {"backend": backend, "ssh_alias": alias, "remote_workspace": workspace, "model_paths": models, "role": role}
 
     def save_profile(self, payload):
-        profile = self._machine(payload)
         profile_id = self._name(payload.get("id") or uuid.uuid4().hex, "profile id")
-        profile.update(id=profile_id, label=self._text(payload.get("label") or profile["ssh_alias"], "label", 200, True))
         with self._lock:
+            values = {**self._profiles.get(profile_id, {}), **payload}
+            profile = self._machine(values, require_ready=False)
+            profile.update(id=profile_id, label=self._text(values.get("label") or profile["ssh_alias"], "label", 200, True))
+            for field in ("hardware", "source", "backend_source", "notes"):
+                profile[field] = self._text(values.get(field, ""), field, 2000)
             self._profiles[profile_id] = profile
             atomic_json(self.root / "machines.json", self._profiles)
         return dict(profile)

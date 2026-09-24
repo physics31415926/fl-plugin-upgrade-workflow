@@ -105,6 +105,28 @@ class SessionsTest(unittest.TestCase):
             self.manager.start(session["id"])
         self.assertEqual(other["status"], "prepared")
 
+    def test_imported_machine_profiles_can_be_incomplete_but_cannot_start(self):
+        profile = self.manager.save_profile({"id": "ssh-import", "ssh_alias": "gpu_unknown",
+            "backend": "", "remote_workspace": "", "hardware": "Unverified",
+            "source": "SSH config", "backend_source": "unknown", "notes": "Needs classification"})
+        self.assertEqual(profile["backend"], "")
+        with self.assertRaises(SessionError):
+            self.manager.create({"profile_id": profile["id"]})
+        profile = self.manager.save_profile({"id": profile["id"], "backend": "thead", "backend_source": "manual"})
+        self.assertEqual(profile["source"], "SSH config")
+        self.assertEqual(profile["hardware"], "Unverified")
+        with self.assertRaises(SessionError):
+            self.manager.create({"profile_id": profile["id"]})
+        self.manager.save_profile({"id": profile["id"], "remote_workspace": "/work/plugin"})
+        session = self.manager.create({"profile_id": profile["id"]})
+        self.assertEqual(session["backend"], "thead")
+        self.assertEqual(session["status"], "prepared")
+
+    def test_gateway_profile_is_inventory_only(self):
+        profile = self.manager.save_profile({"ssh_alias": "jump_host", "role": "gateway"})
+        with self.assertRaisesRegex(SessionError, "gateway"):
+            self.manager.create({"profile_id": profile["id"], "backend": "cuda", "remote_workspace": "/work/plugin"})
+
     def test_cancel_during_client_start_keeps_machine_leased_until_acknowledged(self):
         entered, release = threading.Event(), threading.Event()
 
