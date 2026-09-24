@@ -49,6 +49,9 @@
     .stat-note { margin-top: 5px; color: var(--muted); font-size: 11px; }
     .guidance { display: flex; align-items: start; gap: 10px; padding: 12px 15px; border: 1px solid #cbdcf8; border-radius: 10px; background: #ecf3ff; color: #35537e; font-size: 12px; }
     .guidance .symbol { color: var(--blue); font-size: 17px; line-height: 1.1; }
+    .ci-history { margin-top: 10px; padding: 11px 15px; border: 1px solid var(--line); border-radius: 10px; background: var(--panel); font-size: 12px; color: var(--muted); }
+    .ci-history summary { cursor: pointer; color: var(--ink); }
+    .ci-history p { margin: 10px 0 0; }
     .notice { margin-top: 13px; padding: 12px 15px; border: 1px solid #f1c9cd; border-radius: 10px; background: #fff4f4; color: #9c3542; white-space: pre-wrap; }
     .section-heading { display: flex; align-items: end; justify-content: space-between; flex-wrap: wrap; gap: 10px; margin: 31px 0 13px; }
     .section-heading h2 { margin: 0; font-size: 19px; letter-spacing: -.025em; }
@@ -178,7 +181,7 @@
         <span>Ref <strong id="branch-ref" class="mono">—</strong></span>
         <span>HEAD <strong id="head" class="mono">—</strong></span>
         <span>vLLM <strong id="vllm-version">—</strong></span>
-        <span>最新分支 CI <strong id="branch-ci">—</strong> <a id="branch-ci-link" hidden target="_blank" rel="noopener noreferrer">查看运行 ↗</a></span>
+        <span><span id="adaptation-ci-label">已合入平台适配 CI</span> <strong id="adaptation-ci">—</strong> <a id="adaptation-ci-link" hidden target="_blank" rel="noopener noreferrer">查看验收运行 ↗</a></span>
         <span>采集于 <strong id="observed-at">—</strong></span>
       </div>
     </section>
@@ -188,7 +191,13 @@
       <div class="stat"><span class="stat-label">Gate 通过</span><strong class="stat-value" id="gate-count">—</strong><div class="stat-note">逐项结果或已核验的验收记录</div></div>
       <div class="stat"><span class="stat-label">Gate case 覆盖</span><strong class="stat-value" id="case-count">—</strong><div class="stat-note">目标分支上的场景</div></div>
     </div>
-    <div class="guidance"><span class="symbol" aria-hidden="true">ⓘ</span><span>适配验收与最新分支 CI 分别展示。历史验收只有在代码树与当前分支相同、用例清单一致时才计入；“验收记录”会保留原始运行和对话来源。</span></div>
+    <div class="guidance"><span class="symbol" aria-hidden="true">ⓘ</span><span>顶部汇总已合入平台的适配 CI。历史验收只有在代码树与当前分支相同、用例清单一致时才计入；“验收记录”会保留原始运行和对话来源。最近一次分支工作流见下方记录。</span></div>
+    <details class="ci-history">
+      <summary>最近一次分支 CI 记录</summary>
+      <p>该次工作流结论：<strong id="branch-ci">—</strong> <a id="branch-ci-link" hidden target="_blank" rel="noopener noreferrer">查看运行 ↗</a></p>
+      <p id="branch-ci-detail"></p>
+      <p>此处保留最近一次工作流的实际结果。各 backend 的适配验收来源、提交与后续运行记录可在平台明细中查看。</p>
+    </details>
     <div id="notice" class="notice" role="alert" hidden></div>
     <div class="section-heading">
       <div><h2>Backend 状态</h2><p>点击平台展开模型、执行模式和具体适配 Gate case。</p></div>
@@ -319,6 +328,19 @@
     byId("head").title = safe(data.head);
     put("vllm-version", data.vllm_version);
     put("observed-at", dateText(data.observed_at));
+    const integrated = (Array.isArray(data.backends) ? data.backends : []).filter(b => b.integration?.status === "merged");
+    const outcomes = integrated.map(b => effectiveCi(b, data.head));
+    const passedCount = outcomes.filter(status => status === "passed").length;
+    const summaryStatus = !outcomes.length ? "missing" : outcomes.includes("failed") ? "failed" :
+      outcomes.every(status => status === "passed") ? "passed" : outcomes.includes("running") ? "running" :
+      passedCount ? "partial" : "unknown";
+    put("adaptation-ci-label", integrated.length === 1 ? (integrated[0].label || integrated[0].id) + " 适配 CI" : "已合入平台适配 CI");
+    byId("adaptation-ci").replaceChildren(badge(summaryStatus), document.createTextNode(" " + passedCount + "/" + integrated.length));
+    byId("adaptation-ci").title = integrated.length ? integrated.map(b => (b.label || b.id) + ": " + labels[effectiveCi(b, data.head)]).join("；") : "尚无已合入平台的适配 CI";
+    const adaptationLink = byId("adaptation-ci-link");
+    const acceptedTarget = integrated.length === 1 ? link(integrated[0].ci?.url, "查看验收运行 ↗") : null;
+    adaptationLink.hidden = !acceptedTarget;
+    if (acceptedTarget) adaptationLink.href = acceptedTarget.href;
     const branchCi = data.branch_ci || {};
     const branchCiBox = byId("branch-ci");
     branchCiBox.replaceChildren(badge(branchCi.status || "missing"));
@@ -327,6 +349,7 @@
     const target = link(branchCi.url, "查看运行 ↗");
     ciLink.hidden = !target;
     if (target) ciLink.href = target.href;
+    put("branch-ci-detail", branchCi.detail);
     const repoLink = byId("repository-link");
     const headLink = link(data.head_url, "查看 HEAD");
     repoLink.hidden = !headLink;
