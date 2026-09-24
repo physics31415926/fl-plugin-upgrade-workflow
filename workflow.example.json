@@ -1,0 +1,70 @@
+{
+  "repo": "/absolute/path/to/vllm-plugin-FL",
+  "upstream_repo": "/absolute/path/to/vllm",
+  "work_dir": "/absolute/path/to/fl-upgrade-runs",
+  "plugin_base_sha": "REPLACE_WITH_40_CHARACTER_PLUGIN_COMMIT_SHA",
+  "target_vllm_ref": "REPLACE_WITH_TARGET_VLLM_TAG_OR_REF",
+  "target_vllm_commit": "REPLACE_WITH_40_CHARACTER_UPSTREAM_COMMIT_SHA",
+  "platforms": [
+    {
+      "name": "cuda",
+      "kind": "cuda",
+      "adapt_command": [
+        "codex", "exec", "--cd", "{worktree}", "--sandbox", "workspace-write",
+        "Use the vllm-upgrade-flagos skill to adapt this vllm-plugin-FL worktree to upstream vLLM {target_vllm_ref} at {target_vllm_commit}. Upstream source: {upstream_repo}. Preserve cross-platform current_platform.torch_device_fn, FL dispatch and custom ops. Update the version pin and run incremental import checks. Do not change acceptance tests or commit the work."
+      ],
+      "test_commands": [
+        {
+          "scope": "unit",
+          "argv": ["python", "{tool_dir}/strict_test.py", "--platform", "cuda", "--device", "a100", "--scope", "unit", "--evidence-file", "{evidence_file}", "--target-vllm-commit", "{target_vllm_commit}", "--plugin-commit", "{plugin_commit}"],
+          "evidence_file": "{work_dir}/evidence/{platform}-{scope}-{attempt}.json"
+        },
+        {
+          "scope": "functional",
+          "argv": ["python", "{tool_dir}/strict_test.py", "--platform", "cuda", "--device", "a100", "--scope", "functional", "--evidence-file", "{evidence_file}", "--target-vllm-commit", "{target_vllm_commit}", "--plugin-commit", "{plugin_commit}"],
+          "evidence_file": "{work_dir}/evidence/{platform}-{scope}-{attempt}.json"
+        },
+        {
+          "scope": "e2e",
+          "argv": ["python", "{tool_dir}/strict_test.py", "--platform", "cuda", "--device", "a100", "--scope", "e2e", "--cases-json", "{tool_dir}/cases.cuda.example.json", "--evidence-file", "{evidence_file}", "--target-vllm-commit", "{target_vllm_commit}", "--plugin-commit", "{plugin_commit}"],
+          "evidence_file": "{work_dir}/evidence/{platform}-{scope}-{attempt}.json"
+        },
+        {
+          "scope": "benchmark",
+          "argv": ["python", "{tool_dir}/strict_test.py", "--platform", "cuda", "--device", "a100", "--scope", "benchmark", "--evidence-file", "{evidence_file}", "--target-vllm-commit", "{target_vllm_commit}", "--plugin-commit", "{plugin_commit}"],
+          "evidence_file": "{work_dir}/evidence/{platform}-{scope}-{attempt}.json"
+        }
+      ]
+    },
+    {
+      "name": "metax",
+      "kind": "backend",
+      "adapt_command": [
+        "codex", "exec", "--cd", "{worktree}", "--sandbox", "workspace-write",
+        "Adapt the MetaX backend of vllm-plugin-FL to upstream vLLM {target_vllm_ref} at {target_vllm_commit}, starting from CUDA baseline {cuda_baseline_commit}. Upstream source: {upstream_repo}. Keep changes backend-scoped, preserve platform abstraction, run import checks, do not change acceptance tests or commit the work."
+      ],
+      "test_commands": [
+        {
+          "scope": "unit",
+          "argv": ["python", "{tool_dir}/strict_test.py", "--platform", "metax", "--device", "c550", "--scope", "unit", "--evidence-file", "{evidence_file}", "--target-vllm-commit", "{target_vllm_commit}", "--plugin-commit", "{plugin_commit}"],
+          "evidence_file": "{work_dir}/evidence/{platform}-{scope}-{attempt}.json"
+        },
+        {
+          "scope": "functional",
+          "argv": ["python", "{tool_dir}/strict_test.py", "--platform", "metax", "--device", "c550", "--scope", "functional", "--evidence-file", "{evidence_file}", "--target-vllm-commit", "{target_vllm_commit}", "--plugin-commit", "{plugin_commit}"],
+          "evidence_file": "{work_dir}/evidence/{platform}-{scope}-{attempt}.json"
+        },
+        {
+          "scope": "e2e",
+          "argv": ["python", "{tool_dir}/strict_test.py", "--platform", "metax", "--device", "c550", "--scope", "e2e", "--cases-json", "{tool_dir}/cases.metax.example.json", "--evidence-file", "{evidence_file}", "--target-vllm-commit", "{target_vllm_commit}", "--plugin-commit", "{plugin_commit}"],
+          "evidence_file": "{work_dir}/evidence/{platform}-{scope}-{attempt}.json"
+        },
+        {
+          "scope": "benchmark",
+          "argv": ["python", "{tool_dir}/strict_test.py", "--platform", "metax", "--device", "c550", "--scope", "benchmark", "--evidence-file", "{evidence_file}", "--target-vllm-commit", "{target_vllm_commit}", "--plugin-commit", "{plugin_commit}"],
+          "evidence_file": "{work_dir}/evidence/{platform}-{scope}-{attempt}.json"
+        }
+      ]
+    }
+  ]
+}
