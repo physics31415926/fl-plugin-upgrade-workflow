@@ -127,6 +127,16 @@ class SessionsTest(unittest.TestCase):
         with self.assertRaisesRegex(SessionError, "gateway"):
             self.manager.create({"profile_id": profile["id"], "backend": "cuda", "remote_workspace": "/work/plugin"})
 
+    def test_development_machine_stays_inventory_only_even_with_task_overrides(self):
+        profile = self.manager.save_profile({"id": "dashboard-host", "ssh_alias": "dev_host",
+            "role": "development", "backend": "cuda", "label": "Development / dashboard deployment"})
+        self.assertEqual(profile["backend"], "")
+        self.assertEqual(self.manager.snapshot()["machine_profiles"][0]["role"], "development")
+        for overrides in ({"profile_id": profile["id"]}, {"ssh_alias": profile["ssh_alias"]}):
+            with self.subTest(overrides=overrides), self.assertRaisesRegex(SessionError, "development"):
+                self.manager.create({**self.payload, **overrides, "role": "compute"})
+        self.assertEqual(self.manager.snapshot()["sessions"], [])
+
     def test_cancel_during_client_start_keeps_machine_leased_until_acknowledged(self):
         entered, release = threading.Event(), threading.Event()
 

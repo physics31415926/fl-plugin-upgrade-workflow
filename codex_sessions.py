@@ -216,16 +216,18 @@ class CodexSessionManager:
         return value
 
     def _machine(self, payload, require_ready=True):
+        role = payload.get("role", "compute")
+        if role not in ("compute", "gateway", "development"):
+            raise SessionError("Machine role must be compute, gateway or development")
+        if require_ready and role != "compute":
+            raise SessionError(f"A {role} machine cannot be used as a backend validation machine")
         backend = payload.get("backend", "")
+        if role != "compute":
+            backend = ""
         if backend == "nvidia":
             backend = "cuda"
         if not isinstance(backend, str) or (backend not in self.backends and (require_ready or backend != "")):
             raise SessionError("Choose a configured backend")
-        role = payload.get("role", "compute")
-        if role not in ("compute", "gateway"):
-            raise SessionError("Machine role must be compute or gateway")
-        if require_ready and role != "compute":
-            raise SessionError("A gateway cannot be used as a backend validation machine")
         alias = self._name(payload.get("ssh_alias", ""), "SSH alias")
         workspace = self._text(payload.get("remote_workspace", ""), "remote_workspace", required=require_ready)
         if workspace and (not workspace.startswith("/") or any(c in workspace for c in "\r\n\x00")):
@@ -283,8 +285,13 @@ class CodexSessionManager:
             profile = self._profiles.get(payload["profile_id"])
             if not profile:
                 raise SessionError("Unknown machine profile")
+            if profile.get("role", "compute") != "compute":
+                raise SessionError(f"A {profile['role']} machine cannot be used as a backend validation machine")
             payload = {**profile, **payload}
         machine = self._machine(payload)
+        for profile in self._profiles.values():
+            if profile["ssh_alias"] == machine["ssh_alias"] and profile.get("role", "compute") != "compute":
+                raise SessionError(f"A {profile['role']} machine cannot be used as a backend validation machine")
         branch = self._text(payload.get("branch", self.default_branch), "branch", 200, True)
         if branch.startswith("-") or any(c.isspace() for c in branch):
             raise SessionError("Invalid branch")
