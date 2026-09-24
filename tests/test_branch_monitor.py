@@ -171,6 +171,21 @@ class BranchMonitorTests(unittest.TestCase):
         self.assertEqual(self._backend(status)["gate"]["status"], "missing")
         self.assertTrue(status["errors"])
 
+    def test_branch_ci_rechecks_exact_sha_after_empty_branch_page(self) -> None:
+        def transient_empty(url: str) -> dict:
+            if "/actions/runs?branch=" in url:
+                return {"workflow_runs": []}
+            if "/actions/runs?head_sha=" in url:
+                return {"workflow_runs": [{"id": 1, "name": "CI", "head_sha": self.head,
+                                           "head_branch": "0.4.0-dev", "status": "completed",
+                                           "conclusion": "failure", "created_at": "2026-09-24T00:00:00Z"}]}
+            return self._transport(url)
+
+        status = BranchMonitor(self.config, transport=transient_empty).status()
+        self.assertEqual(status["branch_ci"]["status"], "failed")
+        self.assertEqual(self._backend(status)["ci"]["status"], "failed")
+        self.assertFalse(status["errors"])
+
     def test_partial_ci_and_foreign_pr_do_not_count_as_pass_or_candidate(self) -> None:
         self.assertEqual(BranchMonitor._ci_status([
             {"status": "completed", "conclusion": "success"},

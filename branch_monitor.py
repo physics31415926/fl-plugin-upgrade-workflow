@@ -268,7 +268,14 @@ class BranchMonitor:
             return result, []
         try:
             data = self._api(f"actions/runs?branch={quote(branch, safe='')}&per_page=30", force)
-            runs = [r for r in data.get("workflow_runs", []) if r.get("head_sha") == sha and r.get("name") == "CI"]
+            runs = [r for r in data.get("workflow_runs", []) if r.get("head_sha") == sha and
+                    r.get("name") == "CI" and r.get("head_branch", branch) == branch]
+            if not runs:
+                # GitHub can briefly return an empty branch-filtered page after
+                # refresh. Recheck the exact commit before showing unknown CI.
+                data = self._api(f"actions/runs?head_sha={sha}&per_page=30", force)
+                runs = [r for r in data.get("workflow_runs", []) if r.get("head_sha") == sha and
+                        r.get("name") == "CI" and r.get("head_branch", branch) == branch]
             if not runs:
                 return result, []
             run = max(runs, key=lambda r: r.get("created_at", ""))
