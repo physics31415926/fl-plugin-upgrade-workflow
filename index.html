@@ -3,210 +3,532 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>vllm-plugin-FL 升级工作流</title>
+  <title>分支适配监控 · vllm-plugin-FL</title>
   <style>
-    :root { color-scheme: light dark; font: 14px/1.5 system-ui, sans-serif; }
+    :root {
+      color-scheme: light;
+      font: 14px/1.5 system-ui, -apple-system, "Segoe UI", sans-serif;
+      --bg: #f4f7fb; --panel: #fff; --ink: #18243a; --muted: #64748b;
+      --line: #e1e8f0; --blue: #315bdb; --green: #117a55;
+      --amber: #a3660b; --red: #bf4050; --soft: #f8fafd;
+      --shadow: 0 10px 30px rgba(25, 45, 76, .055);
+    }
     * { box-sizing: border-box; }
-    body { margin: 0; background: light-dark(#f6f8fb, #111722); color: light-dark(#17212f, #e9eef5); }
-    main { max-width: 1120px; margin: auto; padding: 30px 22px 60px; }
-    header { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: start; gap: 18px; margin-bottom: 24px; }
-    h1 { font-size: 25px; margin: 0 0 5px; font-weight: 650; letter-spacing: -.02em; }
-    h2 { font-size: 17px; margin: 0 0 16px; font-weight: 650; }
-    p { margin: 0; }
-    .subtle { color: light-dark(#5e6c7d, #a5b2c4); }
-    .controls { display: flex; flex-wrap: wrap; gap: 8px; }
-    button { font: inherit; border: 1px solid light-dark(#cfd7e2, #465367); border-radius: 8px; padding: 8px 13px; color: inherit; background: light-dark(#fff, #202a39); cursor: pointer; }
-    button:hover:not(:disabled) { background: light-dark(#ecf2f8, #2d3a4c); }
-    button:disabled { opacity: .45; cursor: default; }
-    button.primary { background: light-dark(#1856d3, #78a7ff); color: light-dark(#fff, #101a2c); border-color: transparent; }
-    button.primary:hover:not(:disabled) { background: light-dark(#1349b8, #9abaff); }
-    .summary { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px; margin-bottom: 22px; }
-    .summary > div, section { border: 1px solid light-dark(#dce3eb, #344154); background: light-dark(#fff, #1b2533); border-radius: 12px; }
-    .summary > div { padding: 14px 16px; min-height: 88px; }
-    .label { display: block; color: light-dark(#667487, #a5b2c4); font-size: 12px; margin-bottom: 9px; }
-    .value { font-size: 18px; font-weight: 650; overflow-wrap: anywhere; }
-    section { padding: 20px; margin-bottom: 16px; }
-    .flow { display: grid; grid-template-columns: repeat(5, minmax(0,1fr)); gap: 8px; }
-    .step { border-left: 4px solid light-dark(#cbd4df, #536174); padding: 4px 10px; min-height: 70px; }
-    .step.running { border-color: #4285f4; }
-    .step.passed { border-color: #3ca66a; }
-    .step.failed, .step.blocked { border-color: #d35b5b; }
-    .step.ready_for_integration { border-color: #d7a83d; }
-    .step.simulated { border-color: #d7a83d; }
-    .step .name { font-weight: 600; }
-    .step .state { display: block; color: light-dark(#667487, #a5b2c4); font-size: 12px; margin-top: 4px; }
-    .table-wrap { overflow-x: auto; }
-    table { width: 100%; border-collapse: collapse; text-align: left; }
-    th, td { padding: 11px 8px; border-bottom: 1px solid light-dark(#e9edf2, #344154); vertical-align: top; }
-    th { color: light-dark(#667487, #a5b2c4); font-size: 12px; font-weight: 600; }
-    tr:last-child td { border-bottom: 0; }
-    .pill { display: inline-block; padding: 2px 8px; border-radius: 99px; font-size: 12px; font-weight: 600; background: light-dark(#edf1f6, #344154); }
-    .pill.passed { background: light-dark(#e6f5ec, #183b2a); color: light-dark(#1f7542, #85dda4); }
-    .pill.running { background: light-dark(#e6f0ff, #193458); color: light-dark(#2259ae, #9abaff); }
-    .pill.failed, .pill.blocked { background: light-dark(#fceaea, #4a2429); color: light-dark(#a63f3f, #ff9b9b); }
-    .pill.simulated { background: light-dark(#fff4d9, #4a3b18); color: light-dark(#856300, #f0cd75); }
-    .mono { font-family: ui-monospace, Consolas, monospace; font-size: 12px; overflow-wrap: anywhere; }
-    .notice { margin-bottom: 16px; padding: 11px 14px; border-left: 4px solid #d35b5b; background: light-dark(#fff0f0, #372126); border-radius: 4px; }
-    .empty { color: light-dark(#667487, #a5b2c4); padding: 12px 0; }
-    .log { margin: 10px 0 0; max-height: 310px; overflow: auto; padding: 12px; border-radius: 8px; background: light-dark(#f4f6f9, #121a26); color: inherit; white-space: pre-wrap; overflow-wrap: anywhere; font: 12px/1.5 ui-monospace, Consolas, monospace; }
-    .text-button { border: 0; background: transparent; padding: 0; color: light-dark(#1856d3, #9abaff); text-decoration: underline; }
-    footer { color: light-dark(#667487, #a5b2c4); font-size: 12px; margin-top: 18px; }
-    @media (max-width: 780px) { .summary { grid-template-columns: repeat(2,1fr); } .flow { grid-template-columns: 1fr; } .step { min-height: auto; } }
-    @media (max-width: 480px) { main { padding: 20px 14px 40px; } .summary { grid-template-columns: 1fr; } .controls { width: 100%; } }
+    body { margin: 0; color: var(--ink); background: radial-gradient(circle at 86% -13%, #e7efff 0, transparent 32%), var(--bg); }
+    button, select { font: inherit; }
+    a { color: var(--blue); text-decoration: none; }
+    a:hover { text-decoration: underline; }
+    .shell { max-width: 1320px; margin: auto; padding: 0 30px 52px; }
+    .topbar { min-height: 76px; display: flex; align-items: center; justify-content: space-between; gap: 20px; }
+    .brand { display: flex; align-items: center; gap: 11px; font-size: 15px; font-weight: 700; letter-spacing: -.02em; }
+    .mark { display: grid; place-items: center; width: 34px; height: 34px; color: white; border-radius: 10px; background: linear-gradient(145deg, #204cbd, #6c8ef3); box-shadow: 0 5px 13px #305bd339; }
+    .toplinks { display: flex; align-items: center; gap: 17px; color: var(--muted); font-size: 13px; }
+    .toplinks a { color: inherit; }
+    .toplinks .demo { padding: 7px 11px; border: 1px solid var(--line); border-radius: 8px; background: #fff; color: #375379; }
+    .hero { position: relative; overflow: hidden; border-radius: 18px; padding: 30px 34px; color: #edf4ff; background: linear-gradient(122deg, #132a50 7%, #1a3e77 61%, #3159a0); box-shadow: 0 15px 35px #1a3a6d23; }
+    .hero::after { content: ""; position: absolute; right: -120px; top: -240px; width: 600px; height: 600px; border: 1px solid #ffffff1d; border-radius: 50%; box-shadow: 0 0 0 72px #ffffff08, 0 0 0 145px #ffffff07; pointer-events: none; }
+    .hero-content { position: relative; z-index: 1; display: flex; justify-content: space-between; align-items: flex-start; gap: 25px; }
+    .eyebrow { color: #b8cdf5; font-size: 11px; font-weight: 750; letter-spacing: .15em; text-transform: uppercase; }
+    .hero h1 { margin: 8px 0 7px; font-size: clamp(27px, 4vw, 38px); line-height: 1.15; letter-spacing: -.04em; }
+    .hero p { margin: 0; max-width: 610px; color: #c4d5f2; }
+    .hero-actions { display: flex; align-items: end; gap: 9px; flex-wrap: wrap; justify-content: flex-end; }
+    .field-label { display: block; margin-bottom: 6px; color: #bdd0f3; font-size: 11px; font-weight: 650; }
+    select, .button { min-height: 38px; padding: 8px 12px; border: 1px solid #b6c6e1; border-radius: 8px; background: #fff; color: #1d3355; cursor: pointer; }
+    select { min-width: 165px; }
+    .button { font-weight: 650; }
+    .button:hover:not(:disabled), select:hover:not(:disabled) { background: #edf3ff; }
+    .button:disabled { opacity: .56; cursor: wait; }
+    .hero-meta { position: relative; z-index: 1; display: flex; flex-wrap: wrap; align-items: center; gap: 9px 22px; margin-top: 27px; padding-top: 17px; border-top: 1px solid #ffffff30; font-size: 12px; color: #c5d7f4; }
+    .hero-meta strong { color: #fff; font-weight: 650; }
+    .hero-meta a { color: #d6e6ff; text-decoration: underline; text-underline-offset: 3px; }
+    .mono { font-family: ui-monospace, SFMono-Regular, Consolas, monospace; font-variant-numeric: tabular-nums; }
+    .summary { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 13px; margin: 19px 0; }
+    .stat { min-height: 108px; padding: 17px 19px; border: 1px solid var(--line); border-radius: 13px; background: var(--panel); box-shadow: var(--shadow); }
+    .stat-label { color: var(--muted); font-size: 12px; }
+    .stat-value { display: block; margin-top: 8px; font-size: 25px; line-height: 1.1; letter-spacing: -.04em; font-weight: 720; font-variant-numeric: tabular-nums; }
+    .stat-note { margin-top: 5px; color: var(--muted); font-size: 11px; }
+    .guidance { display: flex; align-items: start; gap: 10px; padding: 12px 15px; border: 1px solid #cbdcf8; border-radius: 10px; background: #ecf3ff; color: #35537e; font-size: 12px; }
+    .guidance .symbol { color: var(--blue); font-size: 17px; line-height: 1.1; }
+    .notice { margin-top: 13px; padding: 12px 15px; border: 1px solid #f1c9cd; border-radius: 10px; background: #fff4f4; color: #9c3542; white-space: pre-wrap; }
+    .section-heading { display: flex; align-items: end; justify-content: space-between; flex-wrap: wrap; gap: 10px; margin: 31px 0 13px; }
+    .section-heading h2 { margin: 0; font-size: 19px; letter-spacing: -.025em; }
+    .section-heading p { margin: 4px 0 0; color: var(--muted); font-size: 12px; }
+    .section-heading .stamp { color: var(--muted); font-size: 12px; }
+    .columns { display: grid; grid-template-columns: minmax(190px, 1.45fr) minmax(120px, .7fr) minmax(150px, .85fr) minmax(145px, .85fr) minmax(110px, .65fr) 24px; gap: 12px; align-items: center; }
+    .table-head { padding: 0 17px 9px; color: var(--muted); font-size: 11px; font-weight: 700; }
+    .backend-list { display: grid; gap: 9px; }
+    .backend { overflow: hidden; border: 1px solid var(--line); border-radius: 12px; background: var(--panel); box-shadow: var(--shadow); }
+    .backend-toggle { width: 100%; padding: 17px; border: 0; background: transparent; color: inherit; text-align: left; cursor: pointer; }
+    .backend-toggle:hover { background: var(--soft); }
+    .backend-name { display: flex; align-items: center; gap: 11px; font-size: 15px; font-weight: 700; }
+    .backend-dot { display: inline-block; flex: 0 0 auto; width: 10px; height: 10px; border-radius: 50%; background: #94a3b8; box-shadow: 0 0 0 4px #f1f5f9; }
+    .backend-dot.merged { background: #20a16b; box-shadow: 0 0 0 4px #e6f6ef; }
+    .backend-sub { margin: 3px 0 0 21px; color: var(--muted); font-size: 11px; font-weight: 400; }
+    .cell-label { display: none; color: var(--muted); font-size: 11px; margin-bottom: 4px; }
+    .pill { display: inline-flex; align-items: center; gap: 6px; max-width: 100%; padding: 4px 9px; border-radius: 100px; background: #eef2f7; color: #57677f; font-size: 11px; font-weight: 700; white-space: nowrap; }
+    .pill.merged, .pill.passed { color: #08724e; background: #e2f5ec; }
+    .pill.pending, .pill.running { color: #275eac; background: #e6f0ff; }
+    .pill.failed { color: #b23b48; background: #fce9eb; }
+    .pill.stale, .pill.partial { color: #a4660d; background: #fff2db; }
+    .pill.missing, .pill.unknown { color: #64748b; background: #edf1f6; }
+    .meter { display: flex; align-items: center; gap: 9px; font-size: 12px; color: #4d6078; white-space: nowrap; }
+    .meter-track { width: 74px; height: 6px; overflow: hidden; border-radius: 99px; background: #e9edf3; }
+    .meter-fill { display: block; height: 100%; border-radius: inherit; background: #4a78ec; }
+    .chevron { color: #8c9aae; font-size: 21px; line-height: 1; transition: transform .15s ease; }
+    .backend-toggle[aria-expanded="true"] .chevron { transform: rotate(90deg); }
+    .backend-detail { border-top: 1px solid var(--line); padding: 17px 20px 20px; background: #fcfdff; }
+    .detail-meta { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; margin-bottom: 22px; }
+    .detail-meta > div { border: 1px solid var(--line); border-radius: 9px; padding: 11px 12px; background: #fff; min-width: 0; }
+    .detail-meta dt { color: var(--muted); font-size: 11px; }
+    .detail-meta dd { margin: 5px 0 0; font-size: 12px; overflow-wrap: anywhere; }
+    .detail-meta a { font-weight: 600; }
+    .matrix-heading { margin: 0 0 9px; font-size: 14px; }
+    .matrix-help { color: var(--muted); font-size: 11px; margin-bottom: 14px; }
+    .matrix-group { margin-top: 11px; border: 1px solid var(--line); border-radius: 9px; overflow: hidden; background: #fff; }
+    .matrix-title { display: flex; justify-content: space-between; align-items: center; gap: 12px; padding: 10px 13px; background: #f4f7fb; font-size: 12px; font-weight: 700; }
+    .matrix-title small { color: var(--muted); font-size: 11px; font-weight: 500; }
+    .case-row { display: grid; grid-template-columns: minmax(190px, 1.6fr) minmax(70px, .45fr) minmax(105px, .65fr) minmax(150px, 1.4fr) minmax(80px, .45fr); gap: 9px; align-items: center; padding: 9px 13px; border-top: 1px solid #edf0f4; font-size: 11px; }
+    .case-row:hover { background: #fafcff; }
+    .case-title { font-weight: 650; font-size: 12px; }
+    .case-path { display: block; color: var(--muted); font-size: 10px; font-weight: 400; overflow-wrap: anywhere; }
+    .case-reason { color: var(--muted); overflow-wrap: anywhere; }
+    .case-evidence { white-space: nowrap; }
+    .empty { padding: 24px; border: 1px dashed #cbd5e1; border-radius: 10px; background: #fff; color: var(--muted); text-align: center; }
+    .footnote { margin-top: 21px; color: var(--muted); font-size: 11px; }
+    [hidden] { display: none !important; }
+    @media (prefers-color-scheme: dark) {
+      :root { color-scheme: dark; --bg:#101827; --panel:#1b2637; --ink:#edf2f9; --muted:#a0aec2; --line:#334257; --blue:#9bb8ff; --soft:#223048; --shadow:none; }
+      body { background: radial-gradient(circle at 86% -13%, #1a3153 0, transparent 32%), var(--bg); }
+      .toplinks .demo, .stat, .backend, .detail-meta > div, .matrix-group, .empty { background: var(--panel); }
+      .hero { background: linear-gradient(122deg, #142a4b, #1a3c71); }
+      .guidance { border-color:#36557f; background:#1b3457; color:#c5d6f0; }
+      .notice { border-color:#704148; background:#41272d; color:#ffbcc3; }
+      .backend-detail { background:#172232; }
+      .matrix-title { background:#243349; }
+      .case-row { border-color:#2e3c50; }
+      .case-row:hover { background:#243349; }
+      .pill.merged, .pill.passed { background:#173f32; color:#8ee0b8; }
+      .pill.pending, .pill.running { background:#1d395f; color:#acc8ff; }
+      .pill.failed { background:#4a2934; color:#ffadb6; }
+      .pill.stale, .pill.partial { background:#493921; color:#f7cd83; }
+      .pill.missing, .pill.unknown { background:#354154; color:#c2ccdb; }
+      .meter-track { background:#354154; }
+    }
+    @media (max-width: 900px) {
+      .summary { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+      .columns { grid-template-columns: minmax(140px, 1.2fr) repeat(3, minmax(95px, .7fr)) 22px; }
+      .columns > :nth-child(5) { display: none; }
+      .detail-meta { grid-template-columns: 1fr; }
+      .case-row { grid-template-columns: minmax(0, 1fr) auto; gap: 4px 8px; }
+      .case-row > :first-child { grid-column: 1; }
+      .case-row > :nth-child(2) { grid-column: 2; grid-row: 1; text-align: right; }
+      .case-row > :nth-child(3) { grid-column: 1; grid-row: 2; }
+      .case-row > :nth-child(4) { grid-column: 1; grid-row: 3; }
+      .case-row > :nth-child(5) { grid-column: 2; grid-row: 2 / 4; text-align: right; }
+    }
+    @media (max-width: 640px) {
+      .shell { padding: 0 15px 32px; }
+      .topbar { min-height: 64px; }
+      .toplinks { gap: 8px; }
+      .toplinks .secondary { display: none; }
+      .hero { padding: 22px 19px; }
+      .hero-content { display: block; }
+      .hero-actions { margin-top: 20px; justify-content: start; }
+      .hero-meta { gap: 8px 14px; }
+      .summary { gap: 8px; }
+      .stat { padding: 13px; min-height: 97px; }
+      .stat-value { font-size: 22px; }
+      .table-head { display: none; }
+      .backend-toggle { padding: 14px; }
+      .columns { grid-template-columns: repeat(3, minmax(0, 1fr)) 18px; gap: 10px; }
+      .columns > :first-child { grid-column: 1 / -1; }
+      .columns > :nth-child(5) { display: none; }
+      .cell-label { display: block; }
+      .backend-detail { padding: 14px; }
+    }
   </style>
 </head>
 <body>
-<main>
-  <header>
-    <div><h1>vllm-plugin-FL 升级工作流</h1><p class="subtle">版本固定 · CUDA 基线 · 多 backend 并行 · 严格验收</p></div>
-    <div class="controls" aria-label="运行控制">
-      <button id="start" class="primary" type="button">启动</button>
-      <button id="pause" type="button">暂停后续阶段</button>
-      <button id="resume" type="button">继续</button>
-      <button id="retry" type="button">重试失败项</button>
-      <button id="cancel" type="button">取消</button>
-    </div>
+<div class="shell">
+  <header class="topbar">
+    <div class="brand"><span class="mark" aria-hidden="true">FL</span><span>vllm-plugin-FL <span style="font-weight:400;color:var(--muted)">/ 适配监控</span></span></div>
+    <nav class="toplinks" aria-label="页面导航">
+      <a class="secondary" id="repository-link" hidden target="_blank" rel="noopener noreferrer">查看 HEAD</a>
+      <a class="demo" href="/workflow">演示流程控制 ↗</a>
+    </nav>
   </header>
-  <div id="notice" class="notice" role="alert" hidden></div>
-  <div class="summary">
-    <div><span class="label">运行状态</span><span class="value" id="status">连接中</span></div>
-    <div><span class="label">目标 vLLM</span><span class="value mono" id="target">—</span></div>
-    <div><span class="label">插件基线</span><span class="value mono" id="base">—</span></div>
-    <div><span class="label">运行编号</span><span class="value mono" id="run-id">—</span></div>
-  </div>
-  <section aria-labelledby="flow-heading">
-    <h2 id="flow-heading">执行阶段</h2>
-    <div id="flow" class="flow"></div>
-  </section>
-  <section aria-labelledby="lanes-heading">
-    <h2 id="lanes-heading">Backend 适配与验收</h2>
-    <div class="table-wrap"><table>
-      <thead><tr><th>平台</th><th>适配</th><th>验收</th><th>实际测试</th><th>问题</th><th>日志</th></tr></thead>
-      <tbody id="lanes"><tr><td colspan="6" class="empty">等待状态数据</td></tr></tbody>
-    </table></div>
-  </section>
-  <section aria-labelledby="details-heading">
-    <h2 id="details-heading">当前详情</h2>
-    <p id="details" class="subtle">启动后显示命令结果与阻塞原因。</p>
-    <pre id="log" class="log" hidden></pre>
-  </section>
-  <footer id="updated">页面每 2 秒刷新状态；“暂停”只阻止下一阶段开始，已运行的命令会继续执行。</footer>
-</main>
+  <main>
+    <section class="hero" aria-labelledby="page-title">
+      <div class="hero-content">
+        <div>
+          <div class="eyebrow">Branch adaptation monitor</div>
+          <h1 id="page-title">正在读取分支…</h1>
+          <p>在分支当前提交上查看各 backend 的代码合入、CI 和适配 Gate。三种状态分别显示。</p>
+        </div>
+        <div class="hero-actions">
+          <div>
+            <label class="field-label" for="branch-select">目标分支</label>
+            <select id="branch-select" aria-label="目标分支"><option value="0.4.0-dev">0.4.0-dev</option></select>
+          </div>
+          <button class="button" id="refresh-remote" type="button" title="向远端重新采集分支和 CI 状态">刷新远端</button>
+        </div>
+      </div>
+      <div class="hero-meta">
+        <span>Ref <strong id="branch-ref" class="mono">—</strong></span>
+        <span>HEAD <strong id="head" class="mono">—</strong></span>
+        <span>vLLM <strong id="vllm-version">—</strong></span>
+        <span>分支 CI <strong id="branch-ci">—</strong> <a id="branch-ci-link" hidden target="_blank" rel="noopener noreferrer">查看运行 ↗</a></span>
+        <span>采集于 <strong id="observed-at">—</strong></span>
+      </div>
+    </section>
+    <div class="summary" aria-label="分支概览">
+      <div class="stat"><span class="stat-label">已合入 backend</span><strong class="stat-value" id="merged-count">—</strong><div class="stat-note">代码合入目标分支</div></div>
+      <div class="stat"><span class="stat-label">相关 CI 通过</span><strong class="stat-value" id="ci-count">—</strong><div class="stat-note">分支或 PR 提交，见每行范围</div></div>
+      <div class="stat"><span class="stat-label">Gate 通过</span><strong class="stat-value" id="gate-count">—</strong><div class="stat-note">完整 case 证据</div></div>
+      <div class="stat"><span class="stat-label">Gate case 覆盖</span><strong class="stat-value" id="case-count">—</strong><div class="stat-note">目标分支上的场景</div></div>
+    </div>
+    <div class="guidance"><span class="symbol" aria-hidden="true">ⓘ</span><span>“已合入”只表示代码在目标分支；“CI 通过”和“Gate 通过”各自需要该提交的可核验证据。演示流程的结果不计入本面板。</span></div>
+    <div id="notice" class="notice" role="alert" hidden></div>
+    <div class="section-heading">
+      <div><h2>Backend 状态</h2><p>点击平台展开模型、执行模式和具体适配 Gate case。</p></div>
+      <span class="stamp" id="refresh-stamp">自动更新中</span>
+    </div>
+    <div class="table-head columns" aria-hidden="true"><span>平台 / PR</span><span>代码合入</span><span>CI</span><span>Gate 验收</span><span>场景覆盖</span><span></span></div>
+    <div id="backend-list" class="backend-list" aria-live="polite"><div class="empty">正在读取 backend 状态…</div></div>
+    <p class="footnote">状态每 15 秒从本地监控服务更新一次。点击“刷新远端”会重新采集 GitHub 分支与 CI；Gate case 只有上传或采集到逐项结果后才会显示通过。</p>
+  </main>
+</div>
 <script>
 (() => {
-  const $ = id => document.getElementById(id);
-  const names = {idle:'未启动', pending:'待运行', preparing:'准备中', queued:'排队中', running:'运行中', passed:'通过', completed:'完成', failed:'失败', blocked:'阻塞', paused:'已暂停', pausing:'暂停中', cancelling:'取消中', cancelled:'已取消', simulated:'模拟完成（未验收）', skipped:'跳过', ready_for_integration:'待汇合验收'};
-  const safe = value => value == null || value === '' ? '—' : String(value);
-  const stateName = value => names[String(value || '').toLowerCase()] || safe(value);
-  const pill = value => { const span = document.createElement('span'); span.className = 'pill ' + String(value || '').toLowerCase(); span.textContent = stateName(value); return span; };
-  let busy = false;
-  let current = {};
-  const phases = [['preflight','版本与环境预检'],['cuda_adapt','CUDA 公共适配'],['cuda_test','CUDA 基线验收'],['backend','其他平台并行'],['gate','最终门禁']];
-  function setText(id, value) { $(id).textContent = safe(value); }
-  function showNotice(message) { $('notice').hidden = !message; $('notice').textContent = message || ''; }
-  function statusOf(node) { return typeof node === 'string' ? node : node?.status || node?.state || 'pending'; }
-  function renderFlow(data) {
-    const stages = data.stages || data.phases || {};
-    const lanes = Object.values(data.platforms || {});
-    const cuda = lanes.find(x => x.kind === 'cuda');
-    const others = lanes.filter(x => x.kind !== 'cuda');
-    const cudaAttempt = cuda?.attempts?.at(-1);
-    const adapt = cudaAttempt?.commands?.find(x => x.label === 'adapt');
-    const cudaTests = Object.values(cudaAttempt?.tests || {});
-    const inferred = {
-      preflight: data.status === 'idle' ? 'pending' : data.status === 'blocked' && !cudaAttempt ? 'blocked' : 'passed',
-      cuda_adapt: adapt?.status || (data.phase === 'cuda_adapt' ? 'running' : 'pending'),
-      cuda_test: cuda?.status === 'passed' ? 'passed' : cudaTests.some(x => x.status === 'failed') ? 'failed' : data.phase === 'cuda_test' ? 'running' : 'pending',
-      backend: others.length === 0 ? (cuda?.status === 'passed' ? 'passed' : 'pending') : others.every(x => x.status === 'passed') ? 'passed' : others.some(x => x.status === 'failed') ? 'failed' : data.phase === 'backend_adapt_test' ? 'running' : 'pending',
-      gate: data.status === 'passed' ? 'passed' : data.status === 'ready_for_integration' ? 'ready_for_integration' : data.status === 'failed' ? 'failed' : 'pending'
-    };
-    if (data.status === 'simulated') for (const key of phases.map(x => x[0])) inferred[key] = 'simulated';
-    const box = $('flow'); box.replaceChildren();
-    for (const [key,label] of phases) {
-      const phase = stages[key] || inferred[key];
-      const step = document.createElement('div');
-      const status = statusOf(phase);
-      step.className = 'step ' + status;
-      const name = document.createElement('span'); name.className = 'name'; name.textContent = label;
-      const detail = document.createElement('span'); detail.className = 'state'; detail.textContent = stateName(status);
-      step.append(name, detail); box.append(step);
-    }
-  }
-  function renderLanes(data) {
-    const source = data.platforms || data.backends || {};
-    const lanes = Array.isArray(source) ? source.map(x => [x.name || x.platform || '—',x]) : Object.entries(source);
-    const body = $('lanes'); body.replaceChildren();
-    if (!lanes.length) { const tr=document.createElement('tr'), td=document.createElement('td'); td.colSpan=6; td.className='empty'; td.textContent='尚未配置平台'; tr.append(td); body.append(tr); return; }
-    for (const [name,lane] of lanes) {
-      const tr = document.createElement('tr');
-      const nameCell = document.createElement('td'); nameCell.textContent = name;
-      const attempt = lane.attempts?.at(-1) || {};
-      const adapt = attempt.commands?.find(x => x.label === 'adapt');
-      const tests = Object.values(attempt.tests || {});
-      const adaptCell = document.createElement('td'); adaptCell.append(pill(statusOf(adapt || lane.adapt || lane)));
-      const testStatus = tests.length && tests.every(x => x.status === 'passed') && lane.status === 'passed' ? 'passed' : tests.some(x => x.status === 'failed') ? 'failed' : tests.some(x => x.status === 'running') ? 'running' : 'pending';
-      const testCell = document.createElement('td'); testCell.append(pill(testStatus));
-      const counts = tests.reduce((n,x) => { for (const key of ['executed','passed','failed','skipped']) n[key] += x.evidence?.[key] || 0; return n; }, {executed:0,passed:0,failed:0,skipped:0});
-      const countCell = document.createElement('td'); countCell.className='mono';
-      countCell.textContent = counts.executed ? `执行 ${counts.executed} · 通过 ${counts.passed} · 失败 ${counts.failed} · 跳过 ${counts.skipped}` : '—';
-      const errCell = document.createElement('td'); errCell.className='subtle'; errCell.textContent = attempt.error || lane.error || '—';
-      const logCell = document.createElement('td');
-      if (attempt.number) { const button=document.createElement('button'); button.type='button'; button.className='text-button'; button.textContent='查看'; button.addEventListener('click',() => loadLog(name,attempt.number)); logCell.append(button); }
-      else logCell.textContent='—';
-      tr.append(nameCell,adaptCell,testCell,countCell,errCell,logCell); body.append(tr);
-    }
-  }
-  async function loadLog(platform, attempt) {
+  "use strict";
+  const byId = (id) => document.getElementById(id);
+  const expanded = new Set();
+  const labels = {
+    merged:"已合入", pending:"待合入", unknown:"未知",
+    passed:"通过", failed:"失败", running:"运行中",
+    missing:"无证据", stale:"证据过期", partial:"部分通过", cancelled:"已取消",
+    skipped:"跳过"
+  };
+  const scenarioLabels = {
+    text_single:"长文本单请求",
+    text_concurrent_8:"文本并发 8 请求",
+    image_single:"图片单请求",
+    image_concurrent_8:"图片并发 8 请求",
+    mixed_concurrent_8:"图文混合并发 8 请求"
+  };
+  const reasonLabels = {
+    "No evidence manifest":"尚无运行清单",
+    "Case JSON is missing":"缺少场景结果 JSON",
+    "All requests passed":"所有请求通过",
+    "One or more requests or summary checks failed":"请求或汇总检查失败",
+    "Case JSON is invalid":"场景结果 JSON 无效",
+    "Incomplete case result":"场景结果不完整"
+  };
+  const reasonText = (value) => {
+    if (!value) return "—";
+    if (String(value).startsWith("Evidence belongs to ")) return "证据属于旧提交 " + String(value).slice(20);
+    return reasonLabels[value] || value;
+  };
+  const safe = (value) => value == null || value === "" ? "—" : String(value);
+  const shortSha = (value) => value ? String(value).slice(0, 10) : "—";
+  const normalized = (value) => {
+    const name = String(value || "unknown").toLowerCase();
+    if (name === "success") return "passed";
+    if (name === "failure" || name === "error") return "failed";
+    if (name === "queued" || name === "in_progress") return "running";
+    if (name === "not_run" || name === "no_evidence") return "missing";
+    if (name === "open" || name === "draft") return "pending";
+    if (name === "closed") return "unknown";
+    return Object.prototype.hasOwnProperty.call(labels, name) ? name : "unknown";
+  };
+  const el = (tag, className, value) => {
+    const node = document.createElement(tag);
+    if (className) node.className = className;
+    if (value !== undefined) node.textContent = safe(value);
+    return node;
+  };
+  const badge = (status, customText) => {
+    const state = normalized(status);
+    return el("span", "pill " + state, customText || labels[state]);
+  };
+  const put = (id, value) => { byId(id).textContent = safe(value); };
+  const dateText = (value) => {
+    if (!value) return "—";
+    const date = new Date(value);
+    return Number.isNaN(date.getTime()) ? String(value) : date.toLocaleString("zh-CN", {hour12:false});
+  };
+  function link(url, label) {
+    if (!url) return null;
     try {
-      const url = `/api/logs?platform=${encodeURIComponent(platform)}&attempt=${attempt}&tail=120`;
-      const response = await fetch(url, {cache:'no-store'});
-      const result = await response.json();
-      if (!response.ok) throw new Error(result.error || `日志接口返回 ${response.status}`);
-      const content = (result.logs || []).map(x => `# ${x.label}\n${(x.lines || []).join('\n')}`).join('\n\n');
-      $('details').textContent = `${platform} · 第 ${attempt} 次尝试`;
-      $('log').textContent = content || '尚无日志';
-      $('log').hidden = false;
-      $('log').scrollIntoView({behavior:'smooth',block:'nearest'});
-    } catch (error) { showNotice(`无法读取日志：${error.message}`); }
+      const parsed = new URL(url, window.location.href);
+      if (parsed.protocol !== "https:" && parsed.protocol !== "http:") return null;
+      const anchor = el("a", "", label);
+      anchor.href = parsed.href;
+      anchor.target = "_blank";
+      anchor.rel = "noopener noreferrer";
+      return anchor;
+    } catch (_) { return null; }
+  }
+  function showNotice(message) {
+    const box = byId("notice");
+    box.hidden = !message;
+    box.textContent = message || "";
+  }
+  function effectiveCi(backend, head) {
+    const ci = backend.ci || {};
+    const status = normalized(ci.status);
+    if (status === "passed" && ci.scope === "branch" && ci.commit && head && ci.commit !== head) return "stale";
+    return status;
+  }
+  function effectiveGate(backend, head) {
+    const gate = backend.gate || {};
+    const status = normalized(gate.status);
+    if (status === "passed" && backend.integration && backend.integration.status === "merged" &&
+        gate.latest_commit && head && gate.latest_commit !== head) return "stale";
+    return status;
+  }
+  function branchOptions(data) {
+    const select = byId("branch-select");
+    const selected = data.branch || select.value || "0.4.0-dev";
+    const names = Array.isArray(data.branches) ? data.branches : [];
+    const unique = [...new Set([selected, ...names].filter(Boolean))];
+    select.replaceChildren();
+    for (const name of unique) {
+      const option = el("option", "", name);
+      option.value = name;
+      select.append(option);
+    }
+    select.value = selected;
+  }
+  function renderSummary(data) {
+    const backends = Array.isArray(data.backends) ? data.backends : [];
+    put("merged-count", backends.filter((b) => b.integration && b.integration.status === "merged").length + " / " + backends.length);
+    put("ci-count", backends.filter((b) => effectiveCi(b, data.head) === "passed").length + " / " + backends.length);
+    put("gate-count", backends.filter((b) => effectiveGate(b, data.head) === "passed").length + " / " + backends.length);
+    const passed = backends.reduce((sum, b) => sum + (effectiveGate(b, data.head) === "stale" ? 0 : Math.max(0, Number((b.gate || {}).passed) || 0)), 0);
+    const total = backends.reduce((sum, b) => sum + Math.max(0, Number((b.gate || {}).total) || 0), 0);
+    put("case-count", passed + " / " + total);
+  }
+  function renderHeader(data) {
+    const name = data.branch || "0.4.0-dev";
+    put("page-title", name);
+    put("branch-ref", data.branch_ref);
+    put("head", shortSha(data.head));
+    byId("head").title = safe(data.head);
+    put("vllm-version", data.vllm_version);
+    put("observed-at", dateText(data.observed_at));
+    const branchCi = data.branch_ci || {};
+    const branchCiBox = byId("branch-ci");
+    branchCiBox.replaceChildren(badge(branchCi.status || "missing"));
+    branchCiBox.title = safe(branchCi.detail);
+    const ciLink = byId("branch-ci-link");
+    const target = link(branchCi.url, "查看运行 ↗");
+    ciLink.hidden = !target;
+    if (target) ciLink.href = target.href;
+    const repoLink = byId("repository-link");
+    const headLink = link(data.head_url, "查看 HEAD");
+    repoLink.hidden = !headLink;
+    if (headLink) repoLink.href = headLink.href;
+    byId("refresh-stamp").textContent = "页面更新 " + new Date().toLocaleTimeString("zh-CN", {hour12:false});
+  }
+  function infoBox(label, detail, url, linkLabel) {
+    const box = el("div");
+    box.append(el("dt", "", label));
+    const value = el("dd", "", detail);
+    const anchor = link(url, linkLabel);
+    if (anchor) value.append(" · ", anchor);
+    box.append(value);
+    return box;
+  }
+  function expectedRows(data, backend) {
+    const cases = Array.isArray(data.cases) ? data.cases : [];
+    const results = Array.isArray(backend.results) ? backend.results : [];
+    const models = Array.isArray(data.models) ? data.models : [];
+    const modes = Array.isArray(data.modes) ? data.modes : [];
+    const groups = [];
+    for (const model of models) {
+      for (const mode of modes) {
+        const rows = cases.map((descriptor) => {
+          const result = results.find((r) => r.model === model && r.mode === mode && r.scenario === descriptor.scenario);
+          return {descriptor, result: result || null};
+        });
+        groups.push({model, mode, rows});
+      }
+    }
+    return groups;
+  }
+  function renderMatrix(container, data, backend) {
+    const groups = expectedRows(data, backend);
+    const stale = effectiveGate(backend, data.head) === "stale";
+    if (!groups.length || !Array.isArray(data.cases) || !data.cases.length) {
+      container.append(el("div", "empty", "目标分支尚无可读取的 adaptation-gate-cases 清单。"));
+      return;
+    }
+    for (const group of groups) {
+      const groupBox = el("div", "matrix-group");
+      const title = el("div", "matrix-title");
+      title.append(el("span", "", group.model + " · " + group.mode));
+      const passed = stale ? 0 : group.rows.filter((row) => normalized(row.result && row.result.status) === "passed").length;
+      title.append(el("small", "", passed + " / " + group.rows.length + " 场景通过"));
+      groupBox.append(title);
+      for (const row of group.rows) {
+        const descriptor = row.descriptor;
+        const result = row.result || {};
+        const recordedStatus = row.result ? normalized(result.status) : "missing";
+        const status = stale && recordedStatus === "passed" ? "stale" : recordedStatus;
+        const count = Number.isInteger(descriptor.requests) ? descriptor.requests : Number(result.requests) || 0;
+        const item = el("div", "case-row");
+        const titleCell = el("div", "case-title", scenarioLabels[descriptor.scenario] || descriptor.scenario);
+        titleCell.append(el("span", "case-path mono", descriptor.file || descriptor.test || descriptor.scenario));
+        item.append(titleCell);
+        item.append(el("span", "mono", count ? count + " 请求" : "—"));
+        const statusCell = el("div");
+        statusCell.append(badge(status));
+        item.append(statusCell);
+        item.append(el("div", "case-reason", result.reason ? reasonText(result.reason) :
+          (status === "missing" ? "尚无该提交的逐项结果" : "—")));
+        const evidenceCell = el("div", "case-evidence");
+        const evidence = link(result.evidence_url, "查看证据 ↗");
+        evidenceCell.append(evidence || el("span", "case-reason", "—"));
+        item.append(evidenceCell);
+        groupBox.append(item);
+      }
+      container.append(groupBox);
+    }
+  }
+  function renderBackend(data, backend, index) {
+    const id = String(backend.id || "backend-" + index);
+    const integration = backend.integration || {};
+    const ci = backend.ci || {};
+    const gate = backend.gate || {};
+    const pr = backend.pr || {};
+    const mergeStatus = normalized(integration.status);
+    const ciStatus = effectiveCi(backend, data.head);
+    const gateStatus = effectiveGate(backend, data.head);
+    const card = el("article", "backend");
+    const toggle = el("button", "backend-toggle columns");
+    toggle.type = "button";
+    const open = expanded.has(id);
+    toggle.setAttribute("aria-expanded", String(open));
+    const detailId = "backend-detail-" + index;
+    toggle.setAttribute("aria-controls", detailId);
+    const nameCell = el("div");
+    const nameLine = el("div", "backend-name");
+    nameLine.append(el("span", "backend-dot " + mergeStatus));
+    nameLine.append(el("span", "", backend.label || id));
+    nameCell.append(nameLine);
+    const subtitle = pr.number ? "PR #" + pr.number + (pr.draft ? " · 草稿" : "") : (backend.ci_enabled ? "CI 已接入" : "CI 尚未接入");
+    nameCell.append(el("div", "backend-sub", subtitle));
+    toggle.append(nameCell);
+    for (const [label, status, text] of [
+      ["代码合入", mergeStatus, mergeStatus === "merged" ? "已合入" : mergeStatus === "pending" ? "待合入" : "未知"],
+      ["CI", ciStatus, !backend.ci_enabled && (ciStatus === "missing" || ciStatus === "unknown") ? "未接入" : labels[ciStatus]],
+      ["Gate 验收", gateStatus, gateStatus === "passed" ? "验收通过" : gateStatus === "failed" ? "验收失败" : labels[gateStatus]]
+    ]) {
+      const cell = el("div");
+      cell.append(el("span", "cell-label", label), badge(status, text));
+      toggle.append(cell);
+    }
+    const countCell = el("div", "meter");
+    countCell.append(el("span", "cell-label", "场景覆盖"));
+    const track = el("span", "meter-track");
+    const fill = el("span", "meter-fill");
+    const total = Math.max(0, Number(gate.total) || 0);
+    const passed = gateStatus === "stale" ? 0 : Math.max(0, Number(gate.passed) || 0);
+    fill.style.width = (total ? Math.min(100, passed / total * 100) : 0) + "%";
+    track.append(fill);
+    countCell.append(track, el("span", "mono", passed + "/" + total));
+    toggle.append(countCell);
+    toggle.append(el("span", "chevron", "›"));
+    card.append(toggle);
+    const detail = el("div", "backend-detail");
+    detail.id = detailId;
+    detail.hidden = !open;
+    const meta = el("dl", "detail-meta");
+    const mergeDetail = (integration.detail || labels[mergeStatus]) +
+      (integration.commit ? " · " + shortSha(integration.commit) : "") +
+      (pr.title ? " · " + pr.title : "");
+    meta.append(infoBox("代码合入", mergeDetail, pr.url, pr.number ? "PR #" + pr.number : ""));
+    const ciScope = ci.scope ? String(ci.scope) + " · " : "";
+    const ciDetail = ciScope + (ci.detail || labels[ciStatus]) + (ci.commit ? " · " + shortSha(ci.commit) : "");
+    meta.append(infoBox("CI 运行", ciDetail, ci.url, "查看运行"));
+    const gateDetail = (gate.run_id ? "运行 " + gate.run_id + " · " : "") +
+      (gate.latest_commit ? shortSha(gate.latest_commit) + " · " : "") +
+      (Math.max(0, Number(gate.requests_passed) || 0) + "/" + Math.max(0, Number(gate.requests_total) || 0) + " 请求通过");
+    meta.append(infoBox("Gate 证据", gateDetail));
+    detail.append(meta);
+    detail.append(el("h3", "matrix-heading", "适配 Gate 明细"));
+    detail.append(el("p", "matrix-help", "场景来自目标分支 tools/adaptation-gate-cases；缺失、过期和失败均不计为通过。"));
+    renderMatrix(detail, data, backend);
+    card.append(detail);
+    toggle.addEventListener("click", () => {
+      const next = toggle.getAttribute("aria-expanded") !== "true";
+      toggle.setAttribute("aria-expanded", String(next));
+      detail.hidden = !next;
+      if (next) expanded.add(id); else expanded.delete(id);
+    });
+    return card;
   }
   function render(data) {
-    current = data || {};
-    const status = data.status || data.state || 'idle';
-    setText('status', stateName(status));
-    setText('target', data.target_vllm_ref || data.target || data.config?.target_vllm_ref);
-    setText('base', data.base_sha || data.plugin_base_sha || data.config?.base_sha);
-    setText('run-id', data.run_id || data.id);
-    renderFlow(data); renderLanes(data);
-    setText('details', data.error || data.message || data.detail || '当前没有需要处理的问题。');
-    const active = ['running','pausing','paused'].includes(status);
-    $('start').disabled = busy || active;
-    $('pause').disabled = busy || status !== 'running';
-    $('resume').disabled = busy || status !== 'paused';
-    $('cancel').disabled = busy || !active;
-    const lanes = Object.values(data.platforms || {});
-    $('retry').disabled = busy || status !== 'failed' || !lanes.some(x => x.kind === 'cuda' && x.status === 'passed') || !lanes.some(x => x.kind !== 'cuda' && x.status === 'failed');
-    $('updated').textContent = `最近刷新：${new Date().toLocaleTimeString()} · 页面每 2 秒刷新状态；暂停只阻止下一阶段开始。`;
+    branchOptions(data);
+    renderHeader(data);
+    renderSummary(data);
+    const box = byId("backend-list");
+    box.replaceChildren();
+    const backends = Array.isArray(data.backends) ? data.backends : [];
+    if (!backends.length) box.append(el("div", "empty", "没有发现 backend。请检查目标分支和监控服务配置。"));
+    backends.forEach((backend, index) => box.append(renderBackend(data, backend, index)));
+    const errors = Array.isArray(data.errors) ? data.errors.filter(Boolean) : [];
+    showNotice(errors.join("\n"));
   }
-  async function refresh() {
+  let fetching = false;
+  let remoteRefreshing = false;
+  async function loadBranch(branch) {
+    if (fetching || remoteRefreshing) return;
+    fetching = true;
     try {
-      const response = await fetch('/api/status', {cache:'no-store'});
-      if (!response.ok) throw new Error(`状态接口返回 ${response.status}`);
-      render(await response.json());
-      showNotice('');
-    } catch (error) { showNotice(`无法读取工作流状态：${error.message}`); }
+      const response = await fetch("/api/branch-status?branch=" + encodeURIComponent(branch), {cache:"no-store"});
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(data.error || "状态接口返回 " + response.status);
+      render(data);
+      const url = new URL(window.location.href);
+      url.searchParams.set("branch", data.branch || branch);
+      window.history.replaceState(null, "", url);
+    } catch (error) {
+      showNotice("无法读取分支状态：" + error.message);
+    } finally { fetching = false; }
   }
-  async function action(name) {
-    busy = true; render(current);
+  async function refreshRemote() {
+    if (remoteRefreshing || fetching) return;
+    remoteRefreshing = true;
+    const button = byId("refresh-remote");
+    button.disabled = true;
+    button.textContent = "刷新中…";
+    const branch = byId("branch-select").value || "0.4.0-dev";
     try {
-      const response = await fetch('/api/' + name, {method:'POST',headers:{'Content-Type':'application/json'},body:'{}'});
+      const response = await fetch("/api/branch-refresh", {
+        method:"POST", headers:{"Content-Type":"application/json"},
+        body:JSON.stringify({branch})
+      });
       const result = await response.json().catch(() => ({}));
-      if (!response.ok) throw new Error(result.error || result.message || `操作失败 (${response.status})`);
-      showNotice(''); await refresh();
-    } catch(error) { showNotice(error.message); }
-    finally { busy = false; render(current); }
+      if (!response.ok) throw new Error(result.error || "刷新接口返回 " + response.status);
+    } catch (error) {
+      showNotice("刷新远端失败：" + error.message);
+      remoteRefreshing = false;
+      button.disabled = false;
+      button.textContent = "刷新远端";
+      return;
+    }
+    remoteRefreshing = false;
+    button.disabled = false;
+    button.textContent = "刷新远端";
+    await loadBranch(branch);
   }
-  for (const [id,endpoint] of Object.entries({start:'start',pause:'pause',resume:'resume',retry:'retry',cancel:'cancel'})) $(id).addEventListener('click', () => action(endpoint));
-  refresh(); setInterval(refresh, 2000);
+  byId("branch-select").addEventListener("change", () => loadBranch(byId("branch-select").value));
+  byId("refresh-remote").addEventListener("click", refreshRemote);
+  const initialBranch = new URLSearchParams(window.location.search).get("branch") || "0.4.0-dev";
+  loadBranch(initialBranch);
+  setInterval(() => loadBranch(byId("branch-select").value || initialBranch), 15000);
 })();
 </script>
 </body>

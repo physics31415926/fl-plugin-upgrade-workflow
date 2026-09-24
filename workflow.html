@@ -1,0 +1,213 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>vllm-plugin-FL 升级工作流</title>
+  <style>
+    :root { color-scheme: light dark; font: 14px/1.5 system-ui, sans-serif; }
+    * { box-sizing: border-box; }
+    body { margin: 0; background: light-dark(#f6f8fb, #111722); color: light-dark(#17212f, #e9eef5); }
+    main { max-width: 1120px; margin: auto; padding: 30px 22px 60px; }
+    header { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: start; gap: 18px; margin-bottom: 24px; }
+    h1 { font-size: 25px; margin: 0 0 5px; font-weight: 650; letter-spacing: -.02em; }
+    h2 { font-size: 17px; margin: 0 0 16px; font-weight: 650; }
+    p { margin: 0; }
+    .subtle { color: light-dark(#5e6c7d, #a5b2c4); }
+    .controls { display: flex; flex-wrap: wrap; gap: 8px; }
+    button { font: inherit; border: 1px solid light-dark(#cfd7e2, #465367); border-radius: 8px; padding: 8px 13px; color: inherit; background: light-dark(#fff, #202a39); cursor: pointer; }
+    button:hover:not(:disabled) { background: light-dark(#ecf2f8, #2d3a4c); }
+    button:disabled { opacity: .45; cursor: default; }
+    button.primary { background: light-dark(#1856d3, #78a7ff); color: light-dark(#fff, #101a2c); border-color: transparent; }
+    button.primary:hover:not(:disabled) { background: light-dark(#1349b8, #9abaff); }
+    .summary { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px; margin-bottom: 22px; }
+    .summary > div, section { border: 1px solid light-dark(#dce3eb, #344154); background: light-dark(#fff, #1b2533); border-radius: 12px; }
+    .summary > div { padding: 14px 16px; min-height: 88px; }
+    .label { display: block; color: light-dark(#667487, #a5b2c4); font-size: 12px; margin-bottom: 9px; }
+    .value { font-size: 18px; font-weight: 650; overflow-wrap: anywhere; }
+    section { padding: 20px; margin-bottom: 16px; }
+    .flow { display: grid; grid-template-columns: repeat(5, minmax(0,1fr)); gap: 8px; }
+    .step { border-left: 4px solid light-dark(#cbd4df, #536174); padding: 4px 10px; min-height: 70px; }
+    .step.running { border-color: #4285f4; }
+    .step.passed { border-color: #3ca66a; }
+    .step.failed, .step.blocked { border-color: #d35b5b; }
+    .step.ready_for_integration { border-color: #d7a83d; }
+    .step.simulated { border-color: #d7a83d; }
+    .step .name { font-weight: 600; }
+    .step .state { display: block; color: light-dark(#667487, #a5b2c4); font-size: 12px; margin-top: 4px; }
+    .table-wrap { overflow-x: auto; }
+    table { width: 100%; border-collapse: collapse; text-align: left; }
+    th, td { padding: 11px 8px; border-bottom: 1px solid light-dark(#e9edf2, #344154); vertical-align: top; }
+    th { color: light-dark(#667487, #a5b2c4); font-size: 12px; font-weight: 600; }
+    tr:last-child td { border-bottom: 0; }
+    .pill { display: inline-block; padding: 2px 8px; border-radius: 99px; font-size: 12px; font-weight: 600; background: light-dark(#edf1f6, #344154); }
+    .pill.passed { background: light-dark(#e6f5ec, #183b2a); color: light-dark(#1f7542, #85dda4); }
+    .pill.running { background: light-dark(#e6f0ff, #193458); color: light-dark(#2259ae, #9abaff); }
+    .pill.failed, .pill.blocked { background: light-dark(#fceaea, #4a2429); color: light-dark(#a63f3f, #ff9b9b); }
+    .pill.simulated { background: light-dark(#fff4d9, #4a3b18); color: light-dark(#856300, #f0cd75); }
+    .mono { font-family: ui-monospace, Consolas, monospace; font-size: 12px; overflow-wrap: anywhere; }
+    .notice { margin-bottom: 16px; padding: 11px 14px; border-left: 4px solid #d35b5b; background: light-dark(#fff0f0, #372126); border-radius: 4px; }
+    .empty { color: light-dark(#667487, #a5b2c4); padding: 12px 0; }
+    .log { margin: 10px 0 0; max-height: 310px; overflow: auto; padding: 12px; border-radius: 8px; background: light-dark(#f4f6f9, #121a26); color: inherit; white-space: pre-wrap; overflow-wrap: anywhere; font: 12px/1.5 ui-monospace, Consolas, monospace; }
+    .text-button { border: 0; background: transparent; padding: 0; color: light-dark(#1856d3, #9abaff); text-decoration: underline; }
+    footer { color: light-dark(#667487, #a5b2c4); font-size: 12px; margin-top: 18px; }
+    @media (max-width: 780px) { .summary { grid-template-columns: repeat(2,1fr); } .flow { grid-template-columns: 1fr; } .step { min-height: auto; } }
+    @media (max-width: 480px) { main { padding: 20px 14px 40px; } .summary { grid-template-columns: 1fr; } .controls { width: 100%; } }
+  </style>
+</head>
+<body>
+<main>
+  <header>
+    <div><h1>vllm-plugin-FL 升级工作流</h1><p class="subtle">版本固定 · CUDA 基线 · 多 backend 并行 · 严格验收</p></div>
+    <div class="controls" aria-label="运行控制">
+      <button id="start" class="primary" type="button">启动</button>
+      <button id="pause" type="button">暂停后续阶段</button>
+      <button id="resume" type="button">继续</button>
+      <button id="retry" type="button">重试失败项</button>
+      <button id="cancel" type="button">取消</button>
+    </div>
+  </header>
+  <div id="notice" class="notice" role="alert" hidden></div>
+  <div class="summary">
+    <div><span class="label">运行状态</span><span class="value" id="status">连接中</span></div>
+    <div><span class="label">目标 vLLM</span><span class="value mono" id="target">—</span></div>
+    <div><span class="label">插件基线</span><span class="value mono" id="base">—</span></div>
+    <div><span class="label">运行编号</span><span class="value mono" id="run-id">—</span></div>
+  </div>
+  <section aria-labelledby="flow-heading">
+    <h2 id="flow-heading">执行阶段</h2>
+    <div id="flow" class="flow"></div>
+  </section>
+  <section aria-labelledby="lanes-heading">
+    <h2 id="lanes-heading">Backend 适配与验收</h2>
+    <div class="table-wrap"><table>
+      <thead><tr><th>平台</th><th>适配</th><th>验收</th><th>实际测试</th><th>问题</th><th>日志</th></tr></thead>
+      <tbody id="lanes"><tr><td colspan="6" class="empty">等待状态数据</td></tr></tbody>
+    </table></div>
+  </section>
+  <section aria-labelledby="details-heading">
+    <h2 id="details-heading">当前详情</h2>
+    <p id="details" class="subtle">启动后显示命令结果与阻塞原因。</p>
+    <pre id="log" class="log" hidden></pre>
+  </section>
+  <footer id="updated">页面每 2 秒刷新状态；“暂停”只阻止下一阶段开始，已运行的命令会继续执行。</footer>
+</main>
+<script>
+(() => {
+  const $ = id => document.getElementById(id);
+  const names = {idle:'未启动', pending:'待运行', preparing:'准备中', queued:'排队中', running:'运行中', passed:'通过', completed:'完成', failed:'失败', blocked:'阻塞', paused:'已暂停', pausing:'暂停中', cancelling:'取消中', cancelled:'已取消', simulated:'模拟完成（未验收）', skipped:'跳过', ready_for_integration:'待汇合验收'};
+  const safe = value => value == null || value === '' ? '—' : String(value);
+  const stateName = value => names[String(value || '').toLowerCase()] || safe(value);
+  const pill = value => { const span = document.createElement('span'); span.className = 'pill ' + String(value || '').toLowerCase(); span.textContent = stateName(value); return span; };
+  let busy = false;
+  let current = {};
+  const phases = [['preflight','版本与环境预检'],['cuda_adapt','CUDA 公共适配'],['cuda_test','CUDA 基线验收'],['backend','其他平台并行'],['gate','最终门禁']];
+  function setText(id, value) { $(id).textContent = safe(value); }
+  function showNotice(message) { $('notice').hidden = !message; $('notice').textContent = message || ''; }
+  function statusOf(node) { return typeof node === 'string' ? node : node?.status || node?.state || 'pending'; }
+  function renderFlow(data) {
+    const stages = data.stages || data.phases || {};
+    const lanes = Object.values(data.platforms || {});
+    const cuda = lanes.find(x => x.kind === 'cuda');
+    const others = lanes.filter(x => x.kind !== 'cuda');
+    const cudaAttempt = cuda?.attempts?.at(-1);
+    const adapt = cudaAttempt?.commands?.find(x => x.label === 'adapt');
+    const cudaTests = Object.values(cudaAttempt?.tests || {});
+    const inferred = {
+      preflight: data.status === 'idle' ? 'pending' : data.status === 'blocked' && !cudaAttempt ? 'blocked' : 'passed',
+      cuda_adapt: adapt?.status || (data.phase === 'cuda_adapt' ? 'running' : 'pending'),
+      cuda_test: cuda?.status === 'passed' ? 'passed' : cudaTests.some(x => x.status === 'failed') ? 'failed' : data.phase === 'cuda_test' ? 'running' : 'pending',
+      backend: others.length === 0 ? (cuda?.status === 'passed' ? 'passed' : 'pending') : others.every(x => x.status === 'passed') ? 'passed' : others.some(x => x.status === 'failed') ? 'failed' : data.phase === 'backend_adapt_test' ? 'running' : 'pending',
+      gate: data.status === 'passed' ? 'passed' : data.status === 'ready_for_integration' ? 'ready_for_integration' : data.status === 'failed' ? 'failed' : 'pending'
+    };
+    if (data.status === 'simulated') for (const key of phases.map(x => x[0])) inferred[key] = 'simulated';
+    const box = $('flow'); box.replaceChildren();
+    for (const [key,label] of phases) {
+      const phase = stages[key] || inferred[key];
+      const step = document.createElement('div');
+      const status = statusOf(phase);
+      step.className = 'step ' + status;
+      const name = document.createElement('span'); name.className = 'name'; name.textContent = label;
+      const detail = document.createElement('span'); detail.className = 'state'; detail.textContent = stateName(status);
+      step.append(name, detail); box.append(step);
+    }
+  }
+  function renderLanes(data) {
+    const source = data.platforms || data.backends || {};
+    const lanes = Array.isArray(source) ? source.map(x => [x.name || x.platform || '—',x]) : Object.entries(source);
+    const body = $('lanes'); body.replaceChildren();
+    if (!lanes.length) { const tr=document.createElement('tr'), td=document.createElement('td'); td.colSpan=6; td.className='empty'; td.textContent='尚未配置平台'; tr.append(td); body.append(tr); return; }
+    for (const [name,lane] of lanes) {
+      const tr = document.createElement('tr');
+      const nameCell = document.createElement('td'); nameCell.textContent = name;
+      const attempt = lane.attempts?.at(-1) || {};
+      const adapt = attempt.commands?.find(x => x.label === 'adapt');
+      const tests = Object.values(attempt.tests || {});
+      const adaptCell = document.createElement('td'); adaptCell.append(pill(statusOf(adapt || lane.adapt || lane)));
+      const testStatus = tests.length && tests.every(x => x.status === 'passed') && lane.status === 'passed' ? 'passed' : tests.some(x => x.status === 'failed') ? 'failed' : tests.some(x => x.status === 'running') ? 'running' : 'pending';
+      const testCell = document.createElement('td'); testCell.append(pill(testStatus));
+      const counts = tests.reduce((n,x) => { for (const key of ['executed','passed','failed','skipped']) n[key] += x.evidence?.[key] || 0; return n; }, {executed:0,passed:0,failed:0,skipped:0});
+      const countCell = document.createElement('td'); countCell.className='mono';
+      countCell.textContent = counts.executed ? `执行 ${counts.executed} · 通过 ${counts.passed} · 失败 ${counts.failed} · 跳过 ${counts.skipped}` : '—';
+      const errCell = document.createElement('td'); errCell.className='subtle'; errCell.textContent = attempt.error || lane.error || '—';
+      const logCell = document.createElement('td');
+      if (attempt.number) { const button=document.createElement('button'); button.type='button'; button.className='text-button'; button.textContent='查看'; button.addEventListener('click',() => loadLog(name,attempt.number)); logCell.append(button); }
+      else logCell.textContent='—';
+      tr.append(nameCell,adaptCell,testCell,countCell,errCell,logCell); body.append(tr);
+    }
+  }
+  async function loadLog(platform, attempt) {
+    try {
+      const url = `/api/logs?platform=${encodeURIComponent(platform)}&attempt=${attempt}&tail=120`;
+      const response = await fetch(url, {cache:'no-store'});
+      const result = await response.json();
+      if (!response.ok) throw new Error(result.error || `日志接口返回 ${response.status}`);
+      const content = (result.logs || []).map(x => `# ${x.label}\n${(x.lines || []).join('\n')}`).join('\n\n');
+      $('details').textContent = `${platform} · 第 ${attempt} 次尝试`;
+      $('log').textContent = content || '尚无日志';
+      $('log').hidden = false;
+      $('log').scrollIntoView({behavior:'smooth',block:'nearest'});
+    } catch (error) { showNotice(`无法读取日志：${error.message}`); }
+  }
+  function render(data) {
+    current = data || {};
+    const status = data.status || data.state || 'idle';
+    setText('status', stateName(status));
+    setText('target', data.target_vllm_ref || data.target || data.config?.target_vllm_ref);
+    setText('base', data.base_sha || data.plugin_base_sha || data.config?.base_sha);
+    setText('run-id', data.run_id || data.id);
+    renderFlow(data); renderLanes(data);
+    setText('details', data.error || data.message || data.detail || '当前没有需要处理的问题。');
+    const active = ['running','pausing','paused'].includes(status);
+    $('start').disabled = busy || active;
+    $('pause').disabled = busy || status !== 'running';
+    $('resume').disabled = busy || status !== 'paused';
+    $('cancel').disabled = busy || !active;
+    const lanes = Object.values(data.platforms || {});
+    $('retry').disabled = busy || status !== 'failed' || !lanes.some(x => x.kind === 'cuda' && x.status === 'passed') || !lanes.some(x => x.kind !== 'cuda' && x.status === 'failed');
+    $('updated').textContent = `最近刷新：${new Date().toLocaleTimeString()} · 页面每 2 秒刷新状态；暂停只阻止下一阶段开始。`;
+  }
+  async function refresh() {
+    try {
+      const response = await fetch('/api/status', {cache:'no-store'});
+      if (!response.ok) throw new Error(`状态接口返回 ${response.status}`);
+      render(await response.json());
+      showNotice('');
+    } catch (error) { showNotice(`无法读取工作流状态：${error.message}`); }
+  }
+  async function action(name) {
+    busy = true; render(current);
+    try {
+      const response = await fetch('/api/' + name, {method:'POST',headers:{'Content-Type':'application/json'},body:'{}'});
+      const result = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(result.error || result.message || `操作失败 (${response.status})`);
+      showNotice(''); await refresh();
+    } catch(error) { showNotice(error.message); }
+    finally { busy = false; render(current); }
+  }
+  for (const [id,endpoint] of Object.entries({start:'start',pause:'pause',resume:'resume',retry:'retry',cancel:'cancel'})) $(id).addEventListener('click', () => action(endpoint));
+  refresh(); setInterval(refresh, 2000);
+})();
+</script>
+</body>
+</html>
