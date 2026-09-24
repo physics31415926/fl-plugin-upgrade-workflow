@@ -327,6 +327,59 @@ class FlflowTests(unittest.TestCase):
             server.server_close()
             worker.join(timeout=3)
 
+    def test_session_routes_require_explicit_start_and_local_origin(self) -> None:
+        self.config()
+        calls = []
+
+        class FakeSessions:
+            def snapshot(self):
+                return {"sessions": []}
+
+            def create(self, payload):
+                calls.append(("create", payload))
+                return {"id": "abc", "status": "prepared"}
+
+            def start(self, session_id):
+                calls.append(("start", session_id))
+                return {"id": session_id, "status": "starting"}
+
+            def respond(self, session_id, request_id, response):
+                calls.append(("respond", session_id, request_id, response))
+                return {"id": session_id, "status": "running"}
+
+        server = flflow.make_server(flflow.Engine(self.config_path), "127.0.0.1", 0,
+                                    sessions=FakeSessions())
+        worker = threading.Thread(target=server.serve_forever, daemon=True)
+        worker.start()
+
+        def request(path, payload, origin=None):
+            connection = HTTPConnection("127.0.0.1", server.server_port, timeout=3)
+            try:
+                headers = {"Content-Type": "application/json"}
+                if origin:
+                    headers["Origin"] = origin
+                connection.request("POST", path, json.dumps(payload), headers)
+                response = connection.getresponse()
+                return response.status, json.loads(response.read())
+            finally:
+                connection.close()
+
+        try:
+            self.assertEqual(request("/api/codex-sessions", {})[1]["status"], "prepared")
+            self.assertEqual([c[0] for c in calls], ["create"])
+            self.assertEqual(request("/api/codex-sessions", {"start": True})[1]["status"], "starting")
+            self.assertEqual([c[0] for c in calls], ["create", "create", "start"])
+            self.assertEqual(request("/api/codex-sessions/abc/respond", {
+                "request_id": 7, "response": {"decision": "decline"}})[0], 200)
+            self.assertEqual(calls[-1], ("respond", "abc", 7, {"decision": "decline"}))
+            count = len(calls)
+            self.assertEqual(request("/api/codex-sessions", {"start": True}, "http://evil.example")[0], 403)
+            self.assertEqual(len(calls), count)
+        finally:
+            server.shutdown()
+            server.server_close()
+            worker.join(timeout=3)
+
     def test_one_unexecuted_case_rejects_positive_aggregate(self) -> None:
         self.config()
         config = json.loads(self.config_path.read_text(encoding="utf-8"))

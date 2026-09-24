@@ -19,7 +19,7 @@
     a { color: var(--blue); text-decoration: none; }
     a:hover { text-decoration: underline; }
     .shell { max-width: 1320px; margin: auto; padding: 0 30px 52px; }
-    .topbar { min-height: 76px; display: flex; align-items: center; justify-content: space-between; gap: 20px; }
+    .topbar { min-height: 76px; display: flex; align-items: center; justify-content: space-between; gap: 20px; flex-wrap: wrap; padding: 12px 0; }
     .brand { display: flex; align-items: center; gap: 11px; font-size: 15px; font-weight: 700; letter-spacing: -.02em; }
     .mark { display: grid; place-items: center; width: 34px; height: 34px; color: white; border-radius: 10px; background: linear-gradient(145deg, #204cbd, #6c8ef3); box-shadow: 0 5px 13px #305bd339; }
     .toplinks { display: flex; align-items: center; gap: 17px; color: var(--muted); font-size: 13px; }
@@ -66,7 +66,7 @@
     .backend-sub { margin: 3px 0 0 21px; color: var(--muted); font-size: 11px; font-weight: 400; }
     .cell-label { display: none; color: var(--muted); font-size: 11px; margin-bottom: 4px; }
     .pill { display: inline-flex; align-items: center; gap: 6px; max-width: 100%; padding: 4px 9px; border-radius: 100px; background: #eef2f7; color: #57677f; font-size: 11px; font-weight: 700; white-space: nowrap; }
-    .pill.merged, .pill.passed { color: #08724e; background: #e2f5ec; }
+    .pill.merged, .pill.passed, .pill.recorded_pass { color: #08724e; background: #e2f5ec; }
     .pill.pending, .pill.running { color: #275eac; background: #e6f0ff; }
     .pill.failed { color: #b23b48; background: #fce9eb; }
     .pill.stale, .pill.partial { color: #a4660d; background: #fff2db; }
@@ -107,7 +107,7 @@
       .matrix-title { background:#243349; }
       .case-row { border-color:#2e3c50; }
       .case-row:hover { background:#243349; }
-      .pill.merged, .pill.passed { background:#173f32; color:#8ee0b8; }
+      .pill.merged, .pill.passed, .pill.recorded_pass { background:#173f32; color:#8ee0b8; }
       .pill.pending, .pill.running { background:#1d395f; color:#acc8ff; }
       .pill.failed { background:#4a2934; color:#ffadb6; }
       .pill.stale, .pill.partial { background:#493921; color:#f7cd83; }
@@ -154,7 +154,8 @@
     <div class="brand"><span class="mark" aria-hidden="true">FL</span><span>vllm-plugin-FL <span style="font-weight:400;color:var(--muted)">/ 适配监控</span></span></div>
     <nav class="toplinks" aria-label="页面导航">
       <a class="secondary" id="repository-link" hidden target="_blank" rel="noopener noreferrer">查看 HEAD</a>
-      <a class="demo" href="/workflow">演示流程控制 ↗</a>
+      <a class="secondary" href="/workflow">演示流程</a>
+      <a class="demo" href="/sessions">分配机器 · Codex 任务 ↗</a>
     </nav>
   </header>
   <main>
@@ -177,23 +178,23 @@
         <span>Ref <strong id="branch-ref" class="mono">—</strong></span>
         <span>HEAD <strong id="head" class="mono">—</strong></span>
         <span>vLLM <strong id="vllm-version">—</strong></span>
-        <span>分支 CI <strong id="branch-ci">—</strong> <a id="branch-ci-link" hidden target="_blank" rel="noopener noreferrer">查看运行 ↗</a></span>
+        <span>最新分支 CI <strong id="branch-ci">—</strong> <a id="branch-ci-link" hidden target="_blank" rel="noopener noreferrer">查看运行 ↗</a></span>
         <span>采集于 <strong id="observed-at">—</strong></span>
       </div>
     </section>
     <div class="summary" aria-label="分支概览">
       <div class="stat"><span class="stat-label">已合入 backend</span><strong class="stat-value" id="merged-count">—</strong><div class="stat-note">代码合入目标分支</div></div>
-      <div class="stat"><span class="stat-label">相关 CI 通过</span><strong class="stat-value" id="ci-count">—</strong><div class="stat-note">分支或 PR 提交，见每行范围</div></div>
-      <div class="stat"><span class="stat-label">Gate 通过</span><strong class="stat-value" id="gate-count">—</strong><div class="stat-note">完整 case 证据</div></div>
+      <div class="stat"><span class="stat-label">适配 CI 通过</span><strong class="stat-value" id="ci-count">—</strong><div class="stat-note">验收提交或候选 PR，见明细</div></div>
+      <div class="stat"><span class="stat-label">Gate 通过</span><strong class="stat-value" id="gate-count">—</strong><div class="stat-note">逐项结果或已核验的验收记录</div></div>
       <div class="stat"><span class="stat-label">Gate case 覆盖</span><strong class="stat-value" id="case-count">—</strong><div class="stat-note">目标分支上的场景</div></div>
     </div>
-    <div class="guidance"><span class="symbol" aria-hidden="true">ⓘ</span><span>“已合入”只表示代码在目标分支；“CI 通过”和“Gate 通过”各自需要该提交的可核验证据。演示流程的结果不计入本面板。</span></div>
+    <div class="guidance"><span class="symbol" aria-hidden="true">ⓘ</span><span>适配验收与最新分支 CI 分别展示。历史验收只有在代码树与当前分支相同、用例清单一致时才计入；“验收记录”会保留原始运行和对话来源。</span></div>
     <div id="notice" class="notice" role="alert" hidden></div>
     <div class="section-heading">
       <div><h2>Backend 状态</h2><p>点击平台展开模型、执行模式和具体适配 Gate case。</p></div>
       <span class="stamp" id="refresh-stamp">自动更新中</span>
     </div>
-    <div class="table-head columns" aria-hidden="true"><span>平台 / PR</span><span>代码合入</span><span>CI</span><span>Gate 验收</span><span>场景覆盖</span><span></span></div>
+    <div class="table-head columns" aria-hidden="true"><span>平台 / PR</span><span>代码合入</span><span>适配 CI</span><span>Gate 验收</span><span>场景覆盖</span><span></span></div>
     <div id="backend-list" class="backend-list" aria-live="polite"><div class="empty">正在读取 backend 状态…</div></div>
     <p class="footnote">状态每 15 秒从本地监控服务更新一次。点击“刷新远端”会重新采集 GitHub 分支与 CI；Gate case 只有上传或采集到逐项结果后才会显示通过。</p>
   </main>
@@ -205,7 +206,7 @@
   const expanded = new Set();
   const labels = {
     merged:"已合入", pending:"待合入", unknown:"未知",
-    passed:"通过", failed:"失败", running:"运行中",
+    passed:"通过", recorded_pass:"通过 · 验收记录", failed:"失败", running:"运行中",
     missing:"无证据", stale:"证据过期", partial:"部分通过", cancelled:"已取消",
     skipped:"跳过"
   };
@@ -231,6 +232,7 @@
   };
   const safe = (value) => value == null || value === "" ? "—" : String(value);
   const shortSha = (value) => value ? String(value).slice(0, 10) : "—";
+  const isPassed = (status) => status === "passed" || status === "recorded_pass";
   const normalized = (value) => {
     const name = String(value || "unknown").toLowerCase();
     if (name === "success") return "passed";
@@ -283,7 +285,7 @@
   function effectiveGate(backend, head) {
     const gate = backend.gate || {};
     const status = normalized(gate.status);
-    if (status === "passed" && backend.integration && backend.integration.status === "merged" &&
+    if (isPassed(status) && !gate.tree_matches_head && backend.integration && backend.integration.status === "merged" &&
         gate.latest_commit && head && gate.latest_commit !== head) return "stale";
     return status;
   }
@@ -304,7 +306,7 @@
     const backends = Array.isArray(data.backends) ? data.backends : [];
     put("merged-count", backends.filter((b) => b.integration && b.integration.status === "merged").length + " / " + backends.length);
     put("ci-count", backends.filter((b) => effectiveCi(b, data.head) === "passed").length + " / " + backends.length);
-    put("gate-count", backends.filter((b) => effectiveGate(b, data.head) === "passed").length + " / " + backends.length);
+    put("gate-count", backends.filter((b) => isPassed(effectiveGate(b, data.head))).length + " / " + backends.length);
     const passed = backends.reduce((sum, b) => sum + (effectiveGate(b, data.head) === "stale" ? 0 : Math.max(0, Number((b.gate || {}).passed) || 0)), 0);
     const total = backends.reduce((sum, b) => sum + Math.max(0, Number((b.gate || {}).total) || 0), 0);
     put("case-count", passed + " / " + total);
@@ -368,14 +370,14 @@
       const groupBox = el("div", "matrix-group");
       const title = el("div", "matrix-title");
       title.append(el("span", "", group.model + " · " + group.mode));
-      const passed = stale ? 0 : group.rows.filter((row) => normalized(row.result && row.result.status) === "passed").length;
+      const passed = stale ? 0 : group.rows.filter((row) => isPassed(normalized(row.result && row.result.status))).length;
       title.append(el("small", "", passed + " / " + group.rows.length + " 场景通过"));
       groupBox.append(title);
       for (const row of group.rows) {
         const descriptor = row.descriptor;
         const result = row.result || {};
         const recordedStatus = row.result ? normalized(result.status) : "missing";
-        const status = stale && recordedStatus === "passed" ? "stale" : recordedStatus;
+        const status = stale && isPassed(recordedStatus) ? "stale" : recordedStatus;
         const count = Number.isInteger(descriptor.requests) ? descriptor.requests : Number(result.requests) || 0;
         const item = el("div", "case-row");
         const titleCell = el("div", "case-title", scenarioLabels[descriptor.scenario] || descriptor.scenario);
@@ -422,7 +424,7 @@
     toggle.append(nameCell);
     for (const [label, status, text] of [
       ["代码合入", mergeStatus, mergeStatus === "merged" ? "已合入" : mergeStatus === "pending" ? "待合入" : "未知"],
-      ["CI", ciStatus, !backend.ci_enabled && (ciStatus === "missing" || ciStatus === "unknown") ? "未接入" : labels[ciStatus]],
+      ["适配 CI", ciStatus, !backend.ci_enabled && (ciStatus === "missing" || ciStatus === "unknown") ? "未接入" : labels[ciStatus]],
       ["Gate 验收", gateStatus, gateStatus === "passed" ? "验收通过" : gateStatus === "failed" ? "验收失败" : labels[gateStatus]]
     ]) {
       const cell = el("div");
@@ -449,14 +451,24 @@
       (integration.commit ? " · " + shortSha(integration.commit) : "") +
       (pr.title ? " · " + pr.title : "");
     meta.append(infoBox("代码合入", mergeDetail, pr.url, pr.number ? "PR #" + pr.number : ""));
-    const ciScope = ci.scope ? String(ci.scope) + " · " : "";
+    const ciScope = ci.scope === "accepted-tree" ? "已验收代码树 · " : ci.scope === "pr" ? "候选 PR · " : "当前分支 · ";
     const ciDetail = ciScope + (ci.detail || labels[ciStatus]) + (ci.commit ? " · " + shortSha(ci.commit) : "");
     meta.append(infoBox("CI 运行", ciDetail, ci.url, "查看运行"));
-    const gateDetail = (gate.run_id ? "运行 " + gate.run_id + " · " : "") +
+    const gateDetail = (gate.evidence_type === "audited_record" ? "历史验收 · " : gate.run_id ? "运行 " + gate.run_id + " · " : "") +
       (gate.latest_commit ? shortSha(gate.latest_commit) + " · " : "") +
-      (Math.max(0, Number(gate.requests_passed) || 0) + "/" + Math.max(0, Number(gate.requests_total) || 0) + " 请求通过");
+      (gate.requests_passed == null ? "覆盖 " + gate.requests_total + " 请求，见原始证据来源" :
+        Math.max(0, Number(gate.requests_passed) || 0) + "/" + Math.max(0, Number(gate.requests_total) || 0) + " 请求通过") +
+      (gate.detail ? " · " + gate.detail : "");
     meta.append(infoBox("Gate 证据", gateDetail));
+    if (ci.scope === "accepted-tree" && backend.current_ci) {
+      const latest = backend.current_ci;
+      meta.append(infoBox("后续分支 CI", labels[normalized(latest.status)] + " · " +
+        (latest.detail || "") + " · " + shortSha(latest.commit), latest.url, "查看后续运行"));
+    }
     detail.append(meta);
+    const assign = el("a", "", "为 " + (backend.label || id) + " 分配验证机器并跟进升级 ↗");
+    assign.href = "/sessions?branch=" + encodeURIComponent(data.branch) + "&backend=" + encodeURIComponent(id);
+    detail.append(assign);
     detail.append(el("h3", "matrix-heading", "适配 Gate 明细"));
     detail.append(el("p", "matrix-help", "场景来自目标分支 tools/adaptation-gate-cases；缺失、过期和失败均不计为通过。"));
     renderMatrix(detail, data, backend);

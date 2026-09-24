@@ -1,10 +1,11 @@
 #!/usr/bin/env python3
 """Read-only branch, CI, and adaptation-gate monitor.
 
-Gate evidence is intentionally separate from GitHub CI. A case passes only when
-the exact branch HEAD is bound to a manifest and every request in its JSON
-result passes. Neither an integrated PR nor a successful CI job implies that
-the manual adaptation gate ran.
+Gate evidence is intentionally separate from GitHub CI. Fresh results bind the
+exact branch HEAD to a manifest and validate every request. Audited historical
+acceptance is labeled separately, requires an identical Git tree and case set,
+and retains the original raw execution provenance. Neither an integrated PR
+nor a successful CI job implies that the manual adaptation gate ran.
 
 Manifest schema (one per backend/model/mode run):
   {"schema_version": 1, "run_id": "unique-id", "backend": "cuda",
@@ -109,10 +110,13 @@ class BranchMonitor:
         self.backend_prs = self.config.get("backend_prs", {})
         self.merged_commits = self.config.get("merged_commits", {})
         self.backend_labels = self.config.get("backend_labels", {})
+        self.accepted_ci_runs = self.config.get("accepted_ci_runs", {})
         if not isinstance(self.backend_prs, dict) or not isinstance(self.merged_commits, dict):
             raise MonitorError("backend_prs and merged_commits must be objects")
         if not isinstance(self.backend_labels, dict):
             raise MonitorError("backend_labels must be an object")
+        if not isinstance(self.accepted_ci_runs, dict):
+            raise MonitorError("accepted_ci_runs must be an object")
         self.transport = transport or self._http_json
         self._api_cache: dict[str, tuple[float, dict[str, Any]]] = {}
         self._cache_lock = threading.RLock()
@@ -311,6 +315,42 @@ class BranchMonitor:
             return False
         return self._git("merge-base", "--is-ancestor", ancestor, head, check=False).returncode == 0
 
+    def _tree(self, commit: str) -> str | None:
+        if not isinstance(commit, str) or not SHA.fullmatch(commit):
+            return None
+        done = self._git("rev-parse", "--verify", f"{commit}^{{tree}}", check=False)
+        value = done.stdout.strip()
+        return value if done.returncode == 0 and SHA.fullmatch(value) else None
+
+    def _accepted_ci(self, backend: str, branch: str, sha: str, force: bool,
+                     errors: list[str]) -> dict[str, Any] | None:
+        record = self.accepted_ci_runs.get(backend)
+        if not isinstance(record, dict) or record.get("branch") != branch or not self.github_repo:
+            return None
+        commit = record.get("commit")
+        tree = self._tree(commit)
+        if not tree or tree != self._tree(sha):
+            return None
+        run_id, attempt = record.get("run_id"), record.get("attempt")
+        if type(run_id) is not int or type(attempt) is not int or run_id < 1 or attempt < 1:
+            errors.append(f"Invalid accepted CI run for {backend}")
+            return None
+        try:
+            endpoint = f"actions/runs/{run_id}/attempts/{attempt}"
+            run = self._api(endpoint, force)
+            if run.get("head_sha") != commit or run.get("run_attempt") != attempt:
+                raise MonitorError("Accepted CI run commit or attempt does not match its record")
+            data = self._api(endpoint + "/jobs?per_page=100", force)
+            jobs = [job for job in data.get("jobs", []) if job.get("name", "").startswith(f"test-{backend} / ") and
+                    not any(part in job.get("name", "") for part in (" / notify / ", " / Setup ("))]
+            return {"status": self._ci_status(jobs), "scope": "accepted-tree", "commit": commit,
+                    "target_commit": sha, "tree": tree, "tree_matches_head": True,
+                    "url": run.get("html_url"), "run_id": run_id, "attempt": attempt,
+                    "detail": f"适配 CI 第 {attempt} 次运行，{len(jobs)} 个 backend 测试；验收代码树与当前分支相同"}
+        except (OSError, ValueError, MonitorError) as exc:
+            errors.append(f"Accepted {backend} CI unavailable: {exc}")
+            return None
+
     def _integration(self, backend: str, branch: str, sha: str, pr_data: dict[str, Any] | None) -> dict[str, Any]:
         fallback = self.merged_commits.get(backend)
         if branch == self.branch and isinstance(fallback, str) and self._ancestor(fallback.lower(), sha):
@@ -372,6 +412,57 @@ class BranchMonitor:
                 continue
         return found
 
+    def _audit_record(self, backend: str, branch: str) -> dict[str, Any] | None:
+        path = self.evidence_dir / backend / "acceptance.json"
+        if not _inside(path, self.evidence_dir) or not path.is_file():
+            return None
+        try:
+            record = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            return None
+        if (not isinstance(record, dict) or record.get("schema_version") != 1 or
+                record.get("evidence_type") != "audited_record" or record.get("backend") != backend or
+                record.get("branch") != branch or not record.get("sources")):
+            return None
+        return record
+
+    def _audit_matches(self, record: dict[str, Any], sha: str, cases: list[dict[str, Any]]) -> bool:
+        tree = self._tree(record.get("tested_commit"))
+        if not tree or tree != record.get("tree") or tree != self._tree(sha) or not cases:
+            return False
+        gate = record.get("gate", {})
+        if not isinstance(gate, dict) or gate.get("status") != "passed":
+            return False
+        definitions = gate.get("scenario_definitions", [])
+        if not isinstance(definitions, list) or len(definitions) != len(cases):
+            return False
+        expected = {(case["scenario"], case["requests"]) for case in cases}
+        if any(not isinstance(row, dict) for row in definitions):
+            return False
+        if {(row.get("scenario"), row.get("requests")) for row in definitions} != expected:
+            return False
+        groups = gate.get("groups", [])
+        matrix = {(model, mode) for model in self.models for mode in self.modes}
+        if not isinstance(groups, list) or len(groups) != len(matrix) or any(not isinstance(row, dict) for row in groups):
+            return False
+        if {(row.get("model"), row.get("mode")) for row in groups} != matrix:
+            return False
+        requests = sum(case["requests"] for case in cases)
+        return (all(row.get("scenarios_passed") == len(cases) and row.get("scenarios_total") == len(cases) and
+                    row.get("requests_total") == requests for row in groups) and
+                gate.get("scenarios_passed") == len(cases) * len(matrix) and
+                gate.get("scenarios_total") == len(cases) * len(matrix) and
+                gate.get("requests_total") == requests * len(matrix))
+
+    def _audit_case(self, record: dict[str, Any], model: str, mode: str, scenario: str,
+                    requests: int) -> tuple[str, str, Path | None, int]:
+        group = next((row for row in record["gate"]["groups"] if row["model"] == model and row["mode"] == mode), {})
+        if not group.get("raw_results_dir"):
+            return "missing", "原始请求 JSON 未归档", None, 0
+        manifest = {"schema_version": 1, "run_id": "historical-acceptance", "model": model,
+                    "port": group.get("port"), "results_dir": group["raw_results_dir"]}
+        return self._result(self.evidence_dir / record["backend"] / "acceptance.json", manifest, scenario, requests)
+
     def _result(self, manifest_path: Path, manifest: dict[str, Any], scenario: str, requests: int) -> tuple[str, str, Path | None, int]:
         if manifest.get("schema_version") != 1 or not isinstance(manifest.get("run_id"), str) or not manifest["run_id"]:
             return "failed", "Invalid manifest schema or run_id", None, 0
@@ -426,6 +517,8 @@ class BranchMonitor:
               manifests: list[tuple[Path, dict[str, Any]]]) -> tuple[dict[str, Any], list[dict[str, Any]]]:
         rows: list[dict[str, Any]] = []
         used: list[tuple[Path, dict[str, Any]]] = []
+        audit = self._audit_record(backend, branch)
+        audit_matches = bool(audit and self._audit_matches(audit, sha, cases))
         for model in self.models:
             for mode in self.modes:
                 options = [(path, data) for path, data in manifests if
@@ -450,8 +543,21 @@ class BranchMonitor:
                                             "model": model, "mode": mode, "scenario": scenario})) if evidence_path else None
                             row.update(status=status, reason=reason, evidence_url=evidence_url,
                                        requests_passed=passed_count)
+                    if row["status"] in ("missing", "stale") and audit_matches:
+                        row.update(status="recorded_pass", evidence_type="audited_record",
+                                   reason=f"该模型和模式的 {len(cases)}/{len(cases)} 验收记录；原始请求 JSON 未归档",
+                                   evidence_url="/api/branch-evidence?" + urlencode({"branch": branch, "backend": backend,
+                                       "model": model, "mode": mode, "scenario": scenario}), requests_passed=None)
+                        raw_status, raw_reason, raw_path, raw_passed = self._audit_case(audit, model, mode, scenario, requests)
+                        if raw_status == "passed":
+                            row.update(reason="历史验收记录；原始请求 JSON 已核验，运行来源见证据", requests_passed=raw_passed,
+                                       raw_results_available=True)
+                        elif raw_status == "failed":
+                            row.update(status="failed", reason="验收记录与原始结果冲突：" + raw_reason, requests_passed=raw_passed)
+                    elif row["status"] == "missing" and audit and not audit_matches:
+                        row.update(status="stale", reason="历史验收记录与当前代码树或用例清单不一致")
                     rows.append(row)
-        totals = {status: sum(row["status"] == status for row in rows) for status in ("passed", "failed", "missing", "stale")}
+        totals = {status: sum(row["status"] == status for row in rows) for status in ("passed", "recorded_pass", "failed", "missing", "stale")}
         if not rows:
             gate_status = "missing"
         elif totals["failed"]:
@@ -460,15 +566,28 @@ class BranchMonitor:
             gate_status = "stale"
         elif totals["missing"]:
             gate_status = "missing" if not totals["passed"] else "partial"
+        elif totals["recorded_pass"]:
+            gate_status = "recorded_pass"
         else:
             gate_status = "passed"
         latest = max(used, key=lambda item: (str(item[1].get("created_at", "")), item[0].stat().st_mtime_ns))[1] if used else None
-        gate = {"status": gate_status, "passed": totals["passed"], "total": len(rows),
+        gate = {"status": gate_status, "passed": totals["passed"] + totals["recorded_pass"], "total": len(rows),
                 "failed": totals["failed"], "missing": totals["missing"] + totals["stale"],
-                "requests_passed": sum(row.get("requests_passed", 0) for row in rows),
+                "requests_passed": None if any(row.get("requests_passed") is None and row["status"] == "recorded_pass" for row in rows)
+                    else sum(row.get("requests_passed", 0) or 0 for row in rows),
                 "requests_total": sum(row["requests"] for row in rows),
                 "latest_commit": latest.get("commit") if latest else None,
                 "run_id": latest.get("run_id") if latest else None}
+        if audit:
+            gate.update(audit_sources=audit.get("sources"), source_thread=audit.get("source_thread"),
+                        evidence_type="audited_record" if totals["recorded_pass"] else "raw_json",
+                        tree_matches_head=audit_matches, recorded_cases=totals["recorded_pass"])
+            if totals["recorded_pass"]:
+                raw_available = all(row.get("raw_results_available") for row in rows if row["status"] == "recorded_pass")
+                gate.update(latest_commit=audit.get("tested_commit"), run_id="historical-acceptance",
+                            raw_results_available=raw_available,
+                            detail=f"历史验收 {gate['passed']}/{len(rows)}；已核对验收代码树相同。" +
+                                ("原始请求 JSON 已归档，原始运行时间与提交见证据。" if raw_available else "原始请求 JSON 未归档。"))
         return gate, rows
 
     def status(self, branch: str | None = None, force: bool = False) -> dict[str, Any]:
@@ -485,10 +604,14 @@ class BranchMonitor:
             pr, pr_data = self._pr(backend, force, errors)
             integration = self._integration(backend, branch, sha, pr_data)
             ci = self._backend_ci(backend, integration, jobs, branch_ci, pr_data, force, errors)
+            current_ci = ci
+            accepted_ci = self._accepted_ci(backend, branch, sha, force, errors)
+            if accepted_ci:
+                ci = accepted_ci
             gate, results = self._gate(backend, branch, sha, cases, manifests)
             backends.append({"id": backend, "label": self.backend_labels.get(backend, LABELS.get(backend, backend)),
                              "ci_enabled": registry.get(backend, False), "integration": integration,
-                             "ci": ci, "pr": pr, "gate": gate, "results": results})
+                             "ci": ci, "current_ci": current_ci, "pr": pr, "gate": gate, "results": results})
         return {"branch": branch, "branch_ref": ref, "head": sha,
                 "head_url": f"https://github.com/{self.github_repo}/commit/{sha}" if self.github_repo else None,
                 "observed_at": _utc_now(), "vllm_version": self._version(sha),
@@ -522,15 +645,24 @@ class BranchMonitor:
         cases = {case["scenario"]: case for case in self._cases(sha)}
         if scenario not in cases:
             raise MonitorError("Unknown gate scenario")
+        def historical_evidence() -> dict[str, Any]:
+            audit = self._audit_record(backend, branch)
+            if not audit or not self._audit_matches(audit, sha, list(cases.values())):
+                raise MonitorError("No current-HEAD evidence manifest or matching acceptance record")
+            status, reason, path, _ = self._audit_case(audit, model, mode, scenario, cases[scenario]["requests"])
+            raw = json.loads(path.read_text(encoding="utf-8")) if path and _inside(path, self.evidence_dir) else None
+            return {"evidence_type": "audited_record", "record": audit, "raw_result": raw,
+                    "raw_validation": status, "note": reason,
+                    "provenance": next(row for row in audit["gate"]["groups"] if row["model"] == model and row["mode"] == mode)}
         candidates = [(path, data) for path, data in self._manifests() if
                       data.get("backend") == backend and data.get("branch") == branch and
                       data.get("commit") == sha and data.get("model") == model and data.get("mode") == mode]
         if not candidates:
-            raise MonitorError("No current-HEAD evidence manifest")
+            return historical_evidence()
         path, manifest = max(candidates, key=lambda item: (str(item[1].get("created_at", "")), item[0].stat().st_mtime_ns))
         _, _, result_path, _ = self._result(path, manifest, scenario, cases[scenario]["requests"])
         if result_path is None or not _inside(result_path, self.evidence_dir):
-            raise MonitorError("No case result in selected manifest")
+            return historical_evidence()
         try:
             result = json.loads(result_path.read_text(encoding="utf-8"))
         except (OSError, ValueError) as exc:

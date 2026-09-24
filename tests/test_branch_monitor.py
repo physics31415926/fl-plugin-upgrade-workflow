@@ -186,6 +186,80 @@ class BranchMonitorTests(unittest.TestCase):
         self.assertEqual(self._backend(status)["ci"]["status"], "failed")
         self.assertFalse(status["errors"])
 
+    def _write_audit(self) -> Path:
+        record = {"schema_version": 1, "evidence_type": "audited_record", "backend": "cuda",
+                  "branch": "0.4.0-dev", "tested_commit": self.head,
+                  "tree": git(self.repo, "rev-parse", f"{self.head}^{{tree}}"),
+                  "sources": [{"url": "https://example.test/acceptance"}],
+                  "gate": {"status": "passed", "scenarios_passed": 20, "scenarios_total": 20,
+                           "requests_total": 104,
+                           "scenario_definitions": [{"scenario": name, "requests": count} for name, count in SCENARIOS.items()],
+                           "groups": [{"model": model, "mode": mode, "scenarios_passed": 5,
+                                       "scenarios_total": 5, "requests_total": 26} for model in MODELS for mode in MODES]}}
+        path = self.evidence / "cuda" / "acceptance.json"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps(record), encoding="utf-8")
+        return path
+
+    def test_historical_acceptance_requires_same_tree_and_keeps_provenance(self) -> None:
+        self._write_audit()
+        git(self.repo, "commit", "--allow-empty", "-qm", "merge-equivalent")
+        merged = git(self.repo, "rev-parse", "HEAD")
+        git(self.repo, "update-ref", "refs/remotes/upstream/0.4.0-dev", merged)
+        monitor = BranchMonitor(dict(self.config, github_repo=""))
+        gate = self._backend(monitor.status())["gate"]
+        self.assertEqual(gate["status"], "recorded_pass")
+        self.assertEqual(gate["passed"], 20)
+        self.assertIsNone(gate["requests_passed"])
+        self.assertTrue(gate["tree_matches_head"])
+        evidence = monitor.read_evidence("0.4.0-dev", "cuda", MODELS[0], "eager", "text_single")
+        self.assertEqual(evidence["record"]["tested_commit"], self.head)
+        self.assertIsNone(evidence["raw_result"])
+        self._write("changed.py", "changed = True\n")
+        git(self.repo, "add", ".")
+        git(self.repo, "commit", "-qm", "new source")
+        git(self.repo, "update-ref", "refs/remotes/upstream/0.4.0-dev", git(self.repo, "rev-parse", "HEAD"))
+        gate = self._backend(monitor.status())["gate"]
+        self.assertEqual(gate["status"], "stale")
+        self.assertEqual(gate["passed"], 0)
+
+    def test_historical_raw_json_is_checked_and_current_failure_takes_precedence(self) -> None:
+        path = self._write_audit()
+        record = json.loads(path.read_text(encoding="utf-8"))
+        for group in record["gate"]["groups"]:
+            results = self._write_run(group["model"], group["mode"])
+            (results.parent / "manifest.json").unlink()
+            group.update(raw_results_dir=str(results.relative_to(path.parent)),
+                         port=8000 if group["mode"] == "eager" else 8001)
+        path.write_text(json.dumps(record), encoding="utf-8")
+        monitor = BranchMonitor(dict(self.config, github_repo=""))
+        gate = self._backend(monitor.status())["gate"]
+        self.assertEqual(gate["status"], "recorded_pass")
+        self.assertEqual(gate["requests_passed"], 104)
+        evidence = monitor.read_evidence("0.4.0-dev", "cuda", MODELS[0], "eager", "text_single")
+        self.assertTrue(evidence["raw_result"]["summary"]["passed"])
+        results = self._write_run(MODELS[0], "eager")
+        result_path = results / "text_single.json"
+        result = json.loads(result_path.read_text(encoding="utf-8"))
+        result["summary"]["passed"] = False
+        result_path.write_text(json.dumps(result), encoding="utf-8")
+        gate = self._backend(monitor.status())["gate"]
+        self.assertEqual(gate["status"], "failed")
+
+    def test_accepted_ci_and_latest_branch_ci_are_both_preserved(self) -> None:
+        config = dict(self.config, accepted_ci_runs={"cuda": {"branch": "0.4.0-dev", "commit": self.head,
+                                                             "run_id": 2, "attempt": 2}})
+        def transport(url: str) -> dict:
+            if "/actions/runs/2/attempts/2/jobs" in url:
+                return {"jobs": [{"name": "test-cuda / unit / Unit tests (cuda)", "status": "completed", "conclusion": "success"}]}
+            if url.endswith("/actions/runs/2/attempts/2"):
+                return {"head_sha": self.head, "run_attempt": 2, "html_url": "https://example.test/run/2"}
+            return self._transport(url)
+        cuda = self._backend(BranchMonitor(config, transport=transport).status())
+        self.assertEqual(cuda["ci"]["status"], "passed")
+        self.assertEqual(cuda["ci"]["scope"], "accepted-tree")
+        self.assertEqual(cuda["current_ci"]["status"], "failed")
+
     def test_partial_ci_and_foreign_pr_do_not_count_as_pass_or_candidate(self) -> None:
         self.assertEqual(BranchMonitor._ci_status([
             {"status": "completed", "conclusion": "success"},

@@ -24,5 +24,13 @@
   },
   "merged_commits": {
     "cuda": "e88e4db75ece36e482a5fcc288929d4461d53184"
+  },
+  "accepted_ci_runs": {
+    "cuda": {
+      "branch": "0.4.0-dev",
+      "commit": "5e95688a9d81224619e06baa44e68745f49e8a22",
+      "run_id": 35199866402,
+      "attempt": 2
+    }
   }
 }
