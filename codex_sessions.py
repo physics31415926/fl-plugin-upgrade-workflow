@@ -8,11 +8,11 @@ from __future__ import annotations
 import atexit
 from collections import deque
 from concurrent.futures import Future, TimeoutError as FutureTimeout
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 import json
 import logging
 import os
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 import re
 import shlex
 import shutil
@@ -694,6 +694,7 @@ done
 
     def _refresh_progress_artifact(self, session):
         """Read bounded progress from this session's isolated worktree only."""
+        dirty = False
         try:
             worktree = Path(session["worktree"]).resolve(strict=True)
             expected = (self.root / "worktrees" / session["id"]).resolve(strict=True)
@@ -717,6 +718,9 @@ done
                 return
             if artifact.get("session_id") != session["id"] or artifact.get("backend") != session["backend"]:
                 return
+            # Identity reports use their observation time, independently of
+            # newer Codex plan notifications or a summary file's mtime.
+            dirty = self._refresh_reported_provenance(session, artifact.get("provenance"), worktree)
             plan = artifact.get("plan")
             if not isinstance(plan, list) or not 1 <= len(plan) <= 30:
                 return
@@ -753,11 +757,94 @@ done
             session.update(plan=normalized, plan_source="artifact", plan_updated_at=stamp,
                            progress_artifact=".flflow-progress.json")
             session["progress_summary"] = summary
-            self._save(session)
+            dirty = True
         except (OSError, ValueError, TypeError, KeyError, OverflowError, RuntimeError):
             # Partial writes, missing files and invalid agent output retain the
             # last valid plan. Artifact content never changes turn/Gate status.
             return
+        finally:
+            if dirty:
+                try:
+                    self._save(session)
+                except OSError:
+                    # _save exposes the persistence error and schedules retry.
+                    pass
+
+    def _refresh_reported_provenance(self, session, value, worktree):
+        """Accept bounded agent reports, without executing or verifying them."""
+        try:
+            if not isinstance(value, dict) or value.get("branch") != session["branch"]:
+                return False
+
+            def text(value, maximum):
+                if (not isinstance(value, str) or not 1 <= len(value) <= maximum
+                        or any(ord(c) < 32 or 127 <= ord(c) <= 159 for c in value)):
+                    raise ValueError("Invalid provenance text")
+                value.encode("utf-8")
+                return value
+
+            candidate = text(value.get("candidate_commit"), 40)
+            if not re.fullmatch(r"[0-9a-fA-F]{40}", candidate):
+                return False
+            remote = text(value.get("remote_task_workspace"), 2000)
+            if (not remote.startswith("/") or remote.startswith("//") or remote == "/" or "\\" in remote
+                    or ".." in remote.split("/")):
+                return False
+            observed_at = text(value.get("observed_at"), 80)
+            if not re.fullmatch(
+                    r"[0-9]{4}-(0[1-9]|1[0-2])-(0[1-9]|[12][0-9]|3[01])"
+                    r"T([01][0-9]|2[0-3]):[0-5][0-9]:[0-5][0-9]"
+                    r"(?:\.[0-9]{1,9})?(?:Z|[+-](?:[01][0-9]|2[0-3]):[0-5][0-9])", observed_at):
+                return False
+            observed = datetime.fromisoformat(observed_at.replace("Z", "+00:00"))
+            if observed.utcoffset() is None or observed > datetime.now(timezone.utc) + timedelta(minutes=5):
+                return False
+            references = value.get("evidence_paths")
+            if not isinstance(references, list) or len(references) > 20:
+                return False
+            evidence_paths = []
+            for reference in references:
+                if not isinstance(reference, dict):
+                    return False
+                relative = text(reference.get("path"), 512)
+                portable = PurePosixPath(relative)
+                if (portable.is_absolute() or "\\" in relative or ":" in relative
+                        or any(part in {"", ".", ".."} for part in relative.split("/"))):
+                    return False
+                target = (worktree / relative).resolve(strict=True)
+                if not target.is_relative_to(worktree) or not target.is_file():
+                    return False
+                record = {"path": relative}
+                if "sha256" in reference:
+                    digest = text(reference["sha256"], 64)
+                    if not re.fullmatch(r"[0-9a-fA-F]{64}", digest):
+                        return False
+                    record["sha256"] = digest.lower()
+                evidence_paths.append(record)
+            report = {"branch": session["branch"], "candidate_commit": candidate.lower(),
+                      "remote_task_workspace": remote, "observed_at": observed_at,
+                      "evidence_paths": evidence_paths, "source": "agent_report"}
+
+            def observation_key(stamp, parsed):
+                # datetime truncates fractions after six digits. Keep all nine
+                # accepted digits when ordering reports within one microsecond.
+                fraction = re.search(r"\.([0-9]{1,9})(?:Z|[+-][0-9]{2}:[0-9]{2})$", stamp)
+                nanoseconds = int(fraction.group(1).ljust(9, "0")) if fraction else parsed.microsecond * 1000
+                return parsed.replace(microsecond=0), nanoseconds
+
+            current = session.get("reported_provenance")
+            if isinstance(current, dict):
+                previous = datetime.fromisoformat(current["observed_at"].replace("Z", "+00:00"))
+                if previous.utcoffset() is not None and observation_key(current["observed_at"], previous) > observation_key(observed_at, observed):
+                    return False
+            if current == report:
+                return False
+            session["reported_provenance"] = report
+            return True
+        except (OSError, ValueError, TypeError, KeyError, OverflowError, RuntimeError):
+            # Missing, partial, invalid or older reports retain the last accepted
+            # record and its observation time; no turn/plan/Gate fields change.
+            return False
 
     @staticmethod
     def _same_machine(left, right):
@@ -873,6 +960,10 @@ done
             "每阶段有真实变化就原子写入；文件不得超过 64 KiB，不得链接到 worktree 外。"
             "只写真实阶段，不根据轮次结束或 open PR 将验收标为完成。使用以下格式：\n"
             + json.dumps(progress_example, ensure_ascii=False, indent=2) + "\n"
+            "有可复核的候选身份记录后，可在进度文件增加 provenance 对象：branch 必须等于本任务基线分支，"
+            "candidate_commit 为实际候选完整40位SHA，remote_task_workspace 为实际远端独立任务绝对目录，"
+            "observed_at 为真实 RFC3339 时间（T 分隔，显式 Z 或 ±HH:MM 时区），evidence_paths 为最多20项本 worktree 内已有文件的相对路径引用"
+            "（每项 path 最多512字符、/分隔且无空、.或..组件，可选 sha256）。摘要更新时间不能代替证据时间；引用哈希仅上报，服务不会验证其内容或据此判定Gate。\n"
             "先读取仓库 AGENTS.md 和相关 vllm-upgrade-flagos / vllm-plugin-fl-setup-flagos 技能，确认版本和 backend。"
             "先只读检查指定机器、硬件、远程目录 git 状态和模型路径；在独立工作分支/目录完成变更，保留现有修改。"
             "SSH 使用上述保存的配置和别名；不读取、复制或输出私钥内容，不在配置、命令或日志中写密码/token。"

@@ -1,4 +1,6 @@
 import json
+import os
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 import subprocess
 import tempfile
@@ -6,7 +8,7 @@ import threading
 import unittest
 from unittest.mock import patch
 
-from codex_sessions import CodexSessionManager, SessionError
+from codex_sessions import CodexSessionManager, SessionError, atomic_json
 
 
 class FakeProcess:
@@ -464,6 +466,212 @@ class SessionsTest(unittest.TestCase):
             with self.subTest(repo=repo), self.assertRaises(SessionError):
                 CodexSessionManager({**self.config, "github_repo": repo,
                                      "backend_task_policies": {"cuda": {"mode": "monitor", "pr": 17}}}, self.base, FakeClient)
+
+
+class ReportedProvenanceTest(unittest.TestCase):
+    setUp = SessionsTest.setUp
+    tearDown = SessionsTest.tearDown
+    git = SessionsTest.git
+    create = SessionsTest.create
+
+    def report(self, session, **changes):
+        return {"branch": session["branch"], "candidate_commit": "a" * 40,
+                "remote_task_workspace": "/task/backend-" + session["id"],
+                "observed_at": (datetime.now(timezone.utc) - timedelta(minutes=20)).isoformat(),
+                "evidence_paths": [{"path": "evidence/resource.json", "sha256": "f" * 64}], **changes}
+
+    def write_artifact(self, session, provenance=None, **changes):
+        worktree = Path(session["worktree"])
+        evidence = worktree / "evidence/resource.json"
+        evidence.parent.mkdir(exist_ok=True)
+        evidence.write_text("{}\n", encoding="utf-8")
+        artifact = {"schema_version": 1, "session_id": session["id"], "backend": session["backend"],
+                    "plan": [{"step": "Gate", "status": "pending"}], "summary": "Awaiting hardware evidence", **changes}
+        if provenance is not None:
+            artifact["provenance"] = provenance
+        path = worktree / ".flflow-progress.json"
+        atomic_json(path, artifact)
+        return path
+
+    def state(self):
+        return self.manager.snapshot()["sessions"][0]
+
+    def test_report_is_persisted_as_agent_report_without_verifying_hash_or_changing_execution(self):
+        session = self.create()
+        report = self.report(session, source="verified", gate_passed=True)
+        self.write_artifact(session, report, status="completed", gate_passed=True)
+        with patch.object(self.manager, "_git") as git, patch.object(self.manager, "_check_connection") as ssh:
+            state = self.state()
+            git.assert_not_called()
+            ssh.assert_not_called()
+        accepted = state["reported_provenance"]
+        self.assertEqual(accepted["source"], "agent_report")
+        self.assertEqual(accepted["evidence_paths"][0]["sha256"], "f" * 64)
+        self.assertNotIn("hash_verified", accepted)
+        self.assertNotIn("gate_passed", accepted)
+        self.assertNotIn("gate_passed", state)
+        self.assertEqual(state["status"], "prepared")
+        self.assertEqual(state["plan"][0]["status"], "pending")
+        self.assertEqual(state["remote_workspace"], session["remote_workspace"])
+        self.assertEqual(state["commit"], session["commit"])
+        self.manager.close()
+        self.manager = CodexSessionManager(self.config, self.base, FakeClient)
+        self.assertEqual(self.state()["reported_provenance"], accepted)
+        self.assertEqual(FakeClient.instances, [])
+
+    def test_newer_plan_notification_cannot_suppress_valid_provenance(self):
+        session = self.create()
+        self.manager._sessions[session["id"]]["thread_id"] = "thread-123"
+        plan = [{"step": "Version adaptation", "status": "in_progress"}]
+        self.manager._event(session["id"], {"method": "turn/plan/updated", "params": {
+            "threadId": "thread-123", "plan": plan, "explanation": "Live notification"}})
+        report = self.report(session)
+        path = self.write_artifact(session, report)
+        old = (datetime.now(timezone.utc) - timedelta(minutes=1)).timestamp()
+        os.utime(path, (old, old))
+        state = self.state()
+        self.assertEqual(state["reported_provenance"]["observed_at"], report["observed_at"])
+        self.assertEqual(state["plan"], plan)
+        self.assertEqual(state["plan_source"], "notification")
+        self.assertEqual(state["progress_summary"], "Live notification")
+        self.assertEqual(state["status"], "prepared")
+
+    def test_missing_invalid_and_older_reports_preserve_observation_time(self):
+        session = self.create()
+        report = self.report(session)
+        self.write_artifact(session, report)
+        accepted = self.state()["reported_provenance"]
+        older = (datetime.fromisoformat(report["observed_at"]) - timedelta(minutes=1)).isoformat()
+        future = (datetime.now(timezone.utc) + timedelta(days=1)).isoformat()
+        invalid = [None, {**report, "candidate_commit": "short"}, {**report, "branch": "another-baseline"},
+                   {**report, "observed_at": "2026-01-01T00:00:00"}, {**report, "observed_at": future},
+                   {**report, "observed_at": "not-a-time"}, {**report, "remote_task_workspace": "/task/../other"},
+                   {**report, "remote_task_workspace": "//task/backend"},
+                   {**report, "remote_task_workspace": "relative/task"}, {**report, "remote_task_workspace": "/task\nother"},
+                   {**report, "remote_task_workspace": "/"}, {**report, "remote_task_workspace": "/" + "x" * 2000},
+                   {**report, "candidate_commit": "b" * 40, "observed_at": older}]
+        for value in invalid:
+            with self.subTest(value=value):
+                self.write_artifact(session, value, summary="A newer summary is not newer evidence")
+                self.assertEqual(self.state()["reported_provenance"], accepted)
+
+    def test_observation_requires_rfc3339_and_real_calendar_date(self):
+        session = self.create()
+        report = self.report(session, observed_at="2024-02-29T23:59:59.123456789Z")
+        self.write_artifact(session, report)
+        accepted = self.state()["reported_provenance"]
+        self.assertEqual(accepted["observed_at"], report["observed_at"])
+        invalid = ["2024-03-01 00:00:00Z", "2024-03-01t00:00:00Z", "2024-03-01T00:00:00z",
+                   "20240301T000000Z", "2024-03-01T00:00:00", "2024-03-01T00:00:00+0800",
+                   "2024-03-01T00:00:00+08:00:30", "2024-03-01T00:00:00+24:00",
+                   "2024-03-01T00:00:00.1234567890Z", "2024-02-30T00:00:00Z",
+                   "2025-02-29T00:00:00Z", "2024-03-01T24:00:00Z", "2024-03-01T00:60:00Z",
+                   "2024-03-01T00:00:60Z", "0000-03-01T00:00:00Z"]
+        for observed in invalid:
+            with self.subTest(observed=observed):
+                self.write_artifact(session, {**report, "candidate_commit": "b" * 40, "observed_at": observed})
+                self.assertEqual(self.state()["reported_provenance"], accepted)
+        offset = "2024-03-01T08:00:00+08:00"
+        self.write_artifact(session, {**report, "candidate_commit": "b" * 40, "observed_at": offset})
+        newer = self.state()["reported_provenance"]
+        self.assertEqual(newer["candidate_commit"], "b" * 40)
+        self.assertEqual(newer["observed_at"], offset)
+        self.assertEqual(self.state()["status"], "prepared")
+        self.assertEqual(self.state()["plan"][0]["status"], "pending")
+
+    def test_newer_observation_can_update_when_file_mtime_is_older_than_plan(self):
+        session = self.create()
+        report = self.report(session)
+        self.write_artifact(session, report)
+        first = self.state()
+        newer = (datetime.fromisoformat(report["observed_at"]) + timedelta(minutes=1)).isoformat()
+        path = self.write_artifact(session, {**report, "candidate_commit": "b" * 40, "observed_at": newer})
+        old = (datetime.now(timezone.utc) - timedelta(minutes=1)).timestamp()
+        os.utime(path, (old, old))
+        state = self.state()
+        self.assertEqual(state["reported_provenance"]["candidate_commit"], "b" * 40)
+        self.assertEqual(state["reported_provenance"]["observed_at"], newer)
+        self.assertEqual(state["plan_updated_at"], first["plan_updated_at"])
+
+    def test_observation_order_preserves_nine_fraction_digits_across_timezones(self):
+        session = self.create()
+        report = self.report(session, observed_at="2024-03-01T00:00:00.123456789Z")
+        self.write_artifact(session, report)
+        accepted = self.state()["reported_provenance"]
+        self.write_artifact(session, {**report, "candidate_commit": "b" * 40,
+                                     "observed_at": "2024-03-01T08:00:00.123456788+08:00"})
+        self.assertEqual(self.state()["reported_provenance"], accepted)
+        newer = "2024-03-01T00:00:00.123456790Z"
+        self.write_artifact(session, {**report, "candidate_commit": "b" * 40, "observed_at": newer})
+        self.assertEqual(self.state()["reported_provenance"]["observed_at"], newer)
+        self.assertEqual(self.state()["reported_provenance"]["candidate_commit"], "b" * 40)
+
+    def test_report_cannot_cross_session_or_backend_ownership(self):
+        session = self.create()
+        report = self.report(session)
+        self.write_artifact(session, report)
+        accepted = self.state()["reported_provenance"]
+        for fields in ({"session_id": "0" * 32}, {"backend": "metax"}, {"schema_version": True}):
+            with self.subTest(fields=fields):
+                self.write_artifact(session, {**report, "candidate_commit": "b" * 40}, **fields)
+                self.assertEqual(self.state()["reported_provenance"], accepted)
+
+    def test_evidence_references_reject_escape_missing_files_and_invalid_hashes(self):
+        session = self.create()
+        report = self.report(session)
+        self.write_artifact(session, report)
+        accepted = self.state()["reported_provenance"]
+        invalid = [[{"path": "../outside.json"}], [{"path": "/outside.json"}],
+                   [{"path": "C:\\outside.json"}], [{"path": "evidence\\..\\outside.json"}],
+                   [{"path": "evidence//resource.json"}], [{"path": "evidence/./resource.json"}],
+                   [{"path": "evidence/resource.json/"}], [{"path": "."}],
+                   [{"path": "evidence/resource.json:stream"}], [{"path": "missing.json"}],
+                   [{"path": "evidence/resource.json", "sha256": "not-a-hash"}],
+                   [{"path": "evidence/resource.json", "sha256": True}],
+                   [{"path": "evidence/resource.json"}] * 21, "not-a-list"]
+        for references in invalid:
+            with self.subTest(references=references):
+                self.write_artifact(session, {**report, "evidence_paths": references})
+                self.assertEqual(self.state()["reported_provenance"], accepted)
+        outside = self.base / "outside.json"
+        outside.write_text("{}", encoding="utf-8")
+        original_resolve = Path.resolve
+
+        def resolve(path, *args, **kwargs):
+            return outside if path.name == "linked.json" else original_resolve(path, *args, **kwargs)
+
+        self.write_artifact(session, {**report, "evidence_paths": [{"path": "linked.json"}]})
+        with patch.object(Path, "resolve", resolve):
+            self.assertEqual(self.state()["reported_provenance"], accepted)
+
+    def test_evidence_path_length_boundary(self):
+        session = self.create()
+        relative = "/".join(["a" * 127] * 3 + ["b" * 128])
+        self.assertEqual(len(relative), 512)
+        report = self.report(session, evidence_paths=[{"path": relative}])
+        self.write_artifact(session, report)
+        worktree = Path(session["worktree"])
+        target = worktree / relative
+        original_resolve = Path.resolve
+
+        def resolve(path, *args, **kwargs):
+            # Exercise the portable API bound without depending on the OS's
+            # maximum full pathname length. All other paths resolve normally.
+            if path == target:
+                return original_resolve(worktree / "evidence/resource.json", *args, **kwargs)
+            return original_resolve(path, *args, **kwargs)
+
+        with patch.object(Path, "resolve", resolve):
+            accepted = self.state()["reported_provenance"]
+        self.assertEqual(accepted["evidence_paths"], [{"path": relative}])
+        self.write_artifact(session, {**report, "evidence_paths": [{"path": relative + "b"}]})
+        self.assertEqual(self.state()["reported_provenance"], accepted)
+
+    def test_legacy_fields_and_summary_are_not_inferred_as_provenance(self):
+        session = self.create()
+        self.write_artifact(session, candidate_commit="a" * 40, remote_workspace="/task/candidate",
+                            summary="Candidate " + "a" * 40 + " in /task/candidate")
+        self.assertNotIn("reported_provenance", self.state())
 
 
 if __name__ == "__main__":

@@ -85,6 +85,7 @@
     .detail-meta dt { color: var(--muted); font-size: 11px; }
     .detail-meta dd { margin: 5px 0 0; font-size: 12px; overflow-wrap: anywhere; }
     .detail-meta a { font-weight: 600; }
+    .provenance-evidence dd { white-space:pre-wrap;max-height:220px;overflow:auto; }
     .matrix-heading { margin: 0 0 9px; font-size: 14px; }
     .matrix-help { color: var(--muted); font-size: 11px; margin-bottom: 14px; }
     .matrix-group { margin-top: 11px; border: 1px solid var(--line); border-radius: 9px; overflow: hidden; background: #fff; }
@@ -296,6 +297,41 @@
     if (value.codexErrorInfo === "serverOverloaded" || value.code === "serverOverloaded" || /selected model is at capacity|server overloaded/i.test(message)) return "模型服务暂忙，可稍后在原任务重试；此提示不代表硬件或 Gate 验收失败。";
     const text = message.trim();
     return text ? text.slice(0,800) + (text.length > 800 ? "…" : "") : "本轮发生异常，请查看最近消息并在原任务继续处理。";
+  }
+  function reportedProvenance(session) {
+    const report=session.reported_provenance;
+    if(!report||report.source!=='agent_report'||typeof report.branch!=='string'||report.branch!==session.branch)return null;
+    if(typeof report.candidate_commit!=='string'||!/^[0-9a-f]{40}$/i.test(report.candidate_commit))return null;
+    const workspace=report.remote_task_workspace;
+    if(typeof workspace!=='string'||workspace.length<2||workspace.length>2048||!workspace.startsWith('/')||workspace.startsWith('//')||/[\\\u0000-\u001f\u007f]/.test(workspace)||workspace.split('/').includes('..'))return null;
+    const observed=report.observed_at;
+    if(typeof observed!=='string'||observed.length>80||!/^\d{4}-(0[1-9]|1[0-2])-(0[1-9]|[12]\d|3[01])T([01]\d|2[0-3]):[0-5]\d:[0-5]\d(?:\.\d{1,9})?(?:Z|[+-](?:[01]\d|2[0-3]):[0-5]\d)$/.test(observed)||!Number.isFinite(Date.parse(observed)))return null;
+    const [year,month,day]=observed.slice(0,10).split('-').map(Number);
+    if(day>new Date(Date.UTC(year,month,0)).getUTCDate())return null;
+    const paths=Array.isArray(report.evidence_paths)?report.evidence_paths:[],evidence=[];
+    for(const item of paths.slice(0,12)){
+      const path=item?.path;
+      if(typeof path!=='string'||!path||path.length>512||/^[\\/]|[:\u0000-\u001f\u007f]/.test(path)||path.split(/[\\/]/).some(part=>part==='..'||part===''))continue;
+      const sha=typeof item.sha256==='string'&&/^[0-9a-f]{64}$/i.test(item.sha256)?item.sha256.toLowerCase():null;
+      evidence.push(path+(sha?' · 上报 SHA256 '+sha:''));
+    }
+    if(paths.length>12)evidence.push('仅显示前 12 条上报条目中的有效相对路径。');
+    return {candidate_commit:report.candidate_commit.toLowerCase(),remote_task_workspace:workspace,observed_at:observed,evidence_text:evidence.join('\n')||'未上报有效的相对证据路径'};
+  }
+  function renderProvenance(card, session) {
+    const report=reportedProvenance(session);
+    card.identityMeta.replaceChildren(
+      infoBox('基线分支 · 创建时提交',(session.branch||'待核对')+' · '+(session.commit||'待核对')),
+      infoBox('任务工作分支',session.work_branch||'待核对'),
+      infoBox('上报候选 SHA',report?.candidate_commit||'待核对 · 尚无有效的结构化提交记录'),
+      infoBox('本地独立 worktree',session.worktree||'准备中'),
+      infoBox('远端源仓库目录（机器配置）',session.remote_workspace||'待配置'),
+      infoBox('上报远端独立任务目录',report?.remote_task_workspace||'待上报 · 尚无有效的结构化目录记录'),
+      infoBox('证据观察时间',report?.observed_at||'待上报'),
+      infoBox('记录性质',report?'来源：agent 上报 · 尚未作为 Gate 验收证据':'待核对 · 尚无匹配此基线的有效上报')
+    );
+    const evidence=infoBox('上报证据（相对路径）',report?.evidence_text||'待上报');
+    evidence.className='provenance-evidence';card.identityMeta.append(evidence);
   }
   const isPassed = (status) => status === "passed" || status === "recorded_pass";
   const normalized = (value) => {
@@ -842,14 +878,8 @@
     card.policyBox.replaceChildren(); card.policyBox.hidden = !monitor;
     if (monitor) card.policyBox.append(policyNotice(policy));
     card.workBranch.textContent = "任务工作分支：" + (session.work_branch || "待核对");
-    card.identityMeta.replaceChildren(
-      infoBox("基线分支 · 创建时提交", (session.branch || "待核对") + " · " + (session.commit || "待核对")),
-      infoBox("任务工作分支", session.work_branch || "待核对"),
-      infoBox("实际候选 SHA", "待核对 · 尚无结构化提交记录"),
-      infoBox("本地独立 worktree", session.worktree || "准备中"),
-      infoBox("远端源仓库目录（机器配置）", session.remote_workspace || "待配置"),
-      infoBox("远端独立任务目录", "待上报 · 尚无结构化目录记录")
-    );
+    const identityKey=JSON.stringify([session.branch,session.commit,session.work_branch,session.worktree,session.remote_workspace,session.reported_provenance]);
+    if(card.identityKey!==identityKey){card.identityKey=identityKey;renderProvenance(card,session);}
     card.title.textContent = (machineLabels[session.backend] || session.backend || "Backend") + " 适配任务";
     card.goal.hidden = !session.goal; card.goalText.textContent = session.goal || "";
     const waiting = session.status === "waiting_input" || session.status === "waiting_approval";
