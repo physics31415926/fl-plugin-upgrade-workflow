@@ -906,7 +906,8 @@
     card.goal.hidden = !session.goal; card.goalText.textContent = session.goal || "";
     const waiting = session.status === "waiting_input" || session.status === "waiting_approval";
     card.status.className = "pill " + (waiting ? "partial" : session.status === "failed" ? "failed" : activeTasks.has(session.status) ? "running" : "unknown");
-    card.status.textContent = taskLabels[session.status] || session.status;
+    const approvalEnding = session.approval_cancel_pending && activeTasks.has(session.status);
+    card.status.textContent = approvalEnding ? "本轮结束处理中" : taskLabels[session.status] || session.status;
     card.meta.textContent = "任务 " + session.id.slice(0,8) + " · " + (session.ssh_alias || "机器待配置") + " · 更新 " + dateText(session.updated_at);
     card.root.classList.toggle("focused", session.id === new URLSearchParams(window.location.search).get("session"));
     const plan = Array.isArray(session.plan) ? session.plan : [];
@@ -936,8 +937,8 @@
       }
     }
     card.text.disabled = monitor;
-    card.send.disabled = monitor || card.messageBusy || waiting || ["prepared","starting","interrupting"].includes(session.status);
-    card.send.title = monitor ? "已有 PR · 仅监控" : "";
+    card.send.disabled = monitor || approvalEnding || card.messageBusy || waiting || ["prepared","starting","interrupting"].includes(session.status);
+    card.send.title = monitor ? "已有 PR · 仅监控" : approvalEnding ? "本轮正在结束；状态更新后可发送修订要求，继续原任务。远端 tmux 不会自动停止。" : "";
   }
   async function loadTasks() {
     if (!sessionsEnabled || tasksFetching) return;

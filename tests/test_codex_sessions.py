@@ -244,6 +244,126 @@ class SessionsTest(unittest.TestCase):
         self.manager.respond(session["id"], 10, {"permissions": {"network": {"enabled": True}}, "scope": "session"})
         self.assertEqual(client.responses[-1][1]["scope"], "turn")
 
+    def test_root_approval_cancel_waits_for_matching_completion_before_same_thread_revision(self):
+        session = self.create()
+        client = self.start(session)
+        original = {key: self.manager._copy(session["id"])[key] for key in
+                    ("thread_id", "branch", "work_branch", "worktree", "remote_workspace")}
+        client.callback({"id": 9, "method": "item/commandExecution/requestApproval",
+                         "params": {"threadId": "thread-123", "availableDecisions": ["accept", "cancel"]}})
+        state = self.manager.respond(session["id"], 9, {"decision": "cancel"})
+        self.assertEqual(state["status"], "interrupting")
+        self.assertTrue(state["approval_cancel_pending"])
+        self.assertEqual(state["approval_cancel_turn_id"], "turn-1")
+        self.assertFalse(state["cancel_requested"])
+        self.assertFalse(any(method == "turn/interrupt" for method, _ in client.requests))
+        saved = json.loads((self.manager.root / session["id"] / "session.json").read_text(encoding="utf-8"))
+        self.assertTrue(saved["approval_cancel_pending"])
+        with self.assertRaisesRegex(SessionError, "本轮正在结束"):
+            self.manager.message(session["id"], "修订原命令后继续")
+        with self.assertRaisesRegex(SessionError, "active turn"):
+            self.manager.start(session["id"])
+        with self.assertRaises(SessionError):
+            self.manager.create({**self.payload, "backend": "metax"})
+        for method, params in (
+            ("serverRequest/resolved", {"threadId": "thread-123", "requestId": 9}),
+            ("turn/completed", {"threadId": "child-thread", "turn": {"id": "child-turn", "status": "completed"}}),
+            ("turn/completed", {"threadId": "thread-123", "turn": {"id": "older-root-turn", "status": "completed"}}),
+            ("turn/completed", {"threadId": "thread-123", "turn": {"status": "completed"}}),
+        ):
+            client.callback({"method": method, "params": params})
+            self.assertEqual(self.manager._copy(session["id"])["status"], "interrupting")
+        self.assertFalse(any(method == "turn/steer" for method, _ in client.requests))
+        client.callback({"method": "turn/completed", "params": {"threadId": "thread-123",
+                         "turn": {"id": "turn-1", "status": "interrupted"}}})
+        ended = self.manager._copy(session["id"])
+        self.assertFalse(ended["approval_cancel_pending"])
+        self.assertIsNone(ended["turn_id"])
+        self.assertNotIn("approval_cancel_turn_id", ended)
+        self.manager.message(session["id"], "修订原命令后继续")
+        self.manager._workers[session["id"]].join(5)
+        resumed = self.manager._copy(session["id"])
+        self.assertEqual({key: resumed[key] for key in original}, original)
+        self.assertEqual(resumed["status"], "running")
+        starts = [params for method, params in client.requests if method == "turn/start"]
+        self.assertEqual(len(starts), 2)
+        self.assertEqual(starts[-1], {"threadId": "thread-123",
+                                     "input": [{"type": "text", "text": "修订原命令后继续"}]})
+        self.assertEqual(client.responses, [(9, {"decision": "cancel"})])
+
+    def test_child_cancel_does_not_end_parent_or_clear_parent_approval(self):
+        session = self.create()
+        client = self.start(session)
+        for request_id, thread_id in ((1, "thread-123"), (2, "child-thread")):
+            client.callback({"id": request_id, "method": "item/commandExecution/requestApproval",
+                             "params": {"threadId": thread_id}})
+        self.manager.respond(session["id"], 2, {"decision": "cancel"})
+        client.callback({"method": "turn/completed", "params": {"threadId": "child-thread",
+                         "turn": {"id": "child-turn", "status": "interrupted"}}})
+        state = self.manager._copy(session["id"])
+        self.assertEqual(state["status"], "waiting_approval")
+        self.assertEqual(state["turn_id"], "turn-1")
+        self.assertFalse(state.get("approval_cancel_pending"))
+        self.assertEqual([request["id"] for request in state["pending_requests"]], [1])
+        self.manager.message(session["id"], "给原任务补充只读要求")
+        self.assertEqual(client.requests[-1][0], "turn/steer")
+        self.assertEqual(client.responses, [(2, {"decision": "cancel"})])
+
+    def test_immediate_root_completion_during_cancel_is_not_overwritten(self):
+        session = self.create()
+        client = self.start(session)
+        client.callback({"id": 9, "method": "item/fileChange/requestApproval",
+                         "params": {"threadId": "thread-123"}})
+
+        def immediate_completion(request_id, result):
+            client.responses.append((request_id, result))
+            client.callback({"method": "turn/completed", "params": {"threadId": "thread-123",
+                             "turn": {"id": "turn-1", "status": "interrupted"}}})
+
+        with patch.object(client, "respond", side_effect=immediate_completion):
+            state = self.manager.respond(session["id"], 9, {"decision": "cancel"})
+        self.assertEqual(state["status"], "interrupted")
+        self.assertFalse(state["approval_cancel_pending"])
+        self.assertIsNone(state["turn_id"])
+        self.assertEqual(state["pending_requests"], [])
+
+    def test_failed_cancel_response_preserves_pending_approval_and_decline_can_continue(self):
+        session = self.create()
+        client = self.start(session)
+        client.callback({"id": 9, "method": "item/commandExecution/requestApproval",
+                         "params": {"threadId": "thread-123"}})
+        with patch.object(client, "respond", side_effect=SessionError("Response was not sent")):
+            with self.assertRaisesRegex(SessionError, "not sent"):
+                self.manager.respond(session["id"], 9, {"decision": "cancel"})
+        state = self.manager._copy(session["id"])
+        self.assertEqual(state["status"], "waiting_approval")
+        self.assertFalse(state.get("approval_cancel_pending"))
+        self.assertEqual([request["id"] for request in state["pending_requests"]], [9])
+        self.assertEqual(client.responses, [])
+        self.manager.respond(session["id"], 9, {"decision": "decline"})
+        self.assertEqual(self.manager._copy(session["id"])["status"], "running")
+        self.manager.message(session["id"], "修改后再申请本次操作")
+        self.assertEqual(client.requests[-1][0], "turn/steer")
+
+    def test_cancel_wait_disconnect_requires_explicit_resume_and_keeps_stored_thread(self):
+        session = self.create()
+        client = self.start(session)
+        client.callback({"id": 9, "method": "item/commandExecution/requestApproval",
+                         "params": {"threadId": "thread-123"}})
+        self.manager.respond(session["id"], 9, {"decision": "cancel"})
+        client.close()
+        client.callback({"method": "connection/closed", "params": {"detail": "test disconnect"}})
+        before = len(FakeClient.instances)
+        self.assertEqual(self.manager._copy(session["id"])["status"], "disconnected")
+        self.assertEqual(len(FakeClient.instances), before)
+        self.manager.message(session["id"], "核对已有远端任务，再按修订要求继续")
+        self.manager._workers[session["id"]].join(5)
+        resumed = FakeClient.instances[-1]
+        self.assertEqual(resumed.requests[0], ("thread/resume", {"cwd": session["worktree"],
+                         "approvalPolicy": "on-request", "approvalsReviewer": "user",
+                         "sandbox": "workspace-write", "threadId": "thread-123"}))
+        self.assertFalse(self.manager._copy(session["id"])["approval_cancel_pending"])
+
     def test_user_answers_are_bound_to_pending_question_ids(self):
         session = self.create()
         client = self.start(session)

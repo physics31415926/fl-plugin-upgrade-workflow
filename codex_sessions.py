@@ -1059,7 +1059,9 @@ done
             previous_status = session["status"]
             # Reserve startup before releasing the lock for the SSH probe.
             # interrupt() keeps this lease until the probe acknowledges it.
-            session.update(status="starting", error=None, pending_requests=[], cancel_requested=False, turn_id=None)
+            session.update(status="starting", error=None, pending_requests=[], cancel_requested=False,
+                           approval_cancel_pending=False, turn_id=None)
+            session.pop("approval_cancel_turn_id", None)
             self._save(session)
             machine = dict(session) if session.get("preflight_required") else None
         if machine:
@@ -1129,6 +1131,8 @@ done
         with self._lock:
             session = self._get(session_id)
             self._require_adapt(session["backend"], session["branch"])
+            if session.get("approval_cancel_pending") and session["status"] in self.ACTIVE:
+                raise SessionError("本轮正在结束，请等待状态更新后发送修订要求，继续原任务。")
             status, turn_id, thread_id = session["status"], session.get("turn_id"), session.get("thread_id")
             client = self._clients.get(session_id)
         if status in {"running", "waiting_approval", "waiting_input"}:
@@ -1212,9 +1216,31 @@ done
                 result = {"answers": answers}
             else:
                 raise SessionError("Unsupported request type; interrupt the task to cancel")
-            client.respond(request["id"], result)
+            root_cancel = (request.get("source_scope", "root") == "root"
+                           and result.get("decision") == "cancel")
+            previous_cancel_state = {key: session[key] for key in
+                                     ("status", "approval_cancel_pending", "approval_cancel_turn_id")
+                                     if key in session}
+            if root_cancel:
+                # cancel ends this root turn; it does not interrupt a remote
+                # job or authorize a replacement turn. Mark before sending so
+                # even an immediate turn/completed cannot be overwritten.
+                session.update(status="interrupting", approval_cancel_pending=True,
+                               approval_cancel_turn_id=session.get("turn_id"))
+            try:
+                client.respond(request["id"], result)
+            except Exception:
+                if root_cancel and session.get("approval_cancel_pending") and session["status"] == "interrupting":
+                    for key in ("status", "approval_cancel_pending", "approval_cancel_turn_id"):
+                        if key in previous_cancel_state:
+                            session[key] = previous_cancel_state[key]
+                        else:
+                            session.pop(key, None)
+                raise
             session["pending_requests"] = [r for r in session["pending_requests"] if r is not request]
-            if request.get("source_scope", "root") == "root" and session["status"] in {"waiting_approval", "waiting_input"}:
+            if (not session.get("approval_cancel_pending")
+                    and request.get("source_scope", "root") == "root"
+                    and session["status"] in {"waiting_approval", "waiting_input"}):
                 if not any(r.get("source_scope", "root") == "root" for r in session["pending_requests"]):
                     session["status"] = "running"
             self._save(session)
@@ -1266,13 +1292,15 @@ done
                 # the parent session's lifecycle or progress.
                 session["pending_requests"].append({"id": message["id"], "method": method, "params": params,
                     "source_thread_id": event_thread, "source_scope": scope})
-                if is_root:
+                if is_root and not session.get("approval_cancel_pending"):
                     session["status"] = "waiting_input" if method == "item/tool/requestUserInput" else "waiting_approval"
             elif method == "serverRequest/resolved":
                 request_id = params.get("requestId")
                 session["pending_requests"] = [r for r in session["pending_requests"]
                     if not (str(r["id"]) == str(request_id) and (not event_thread or r.get("source_thread_id") == event_thread))]
-                if not any(r.get("source_scope", "root") == "root" for r in session["pending_requests"]) and session["status"] in {"waiting_approval", "waiting_input"}:
+                if (not session.get("approval_cancel_pending")
+                        and not any(r.get("source_scope", "root") == "root" for r in session["pending_requests"])
+                        and session["status"] in {"waiting_approval", "waiting_input"}):
                     session["status"] = "running"
             elif method == "connection/closed":
                 if session["status"] in self.ACTIVE:
@@ -1289,13 +1317,21 @@ done
             elif method == "turn/started":
                 session["turn_id"] = params["turn"]["id"]
                 session["initial_prompt_sent"] = True
-                session["status"] = "interrupting" if session.get("cancel_requested") else "running"
+                session["status"] = "interrupting" if session.get("cancel_requested") or session.get("approval_cancel_pending") else "running"
             elif method == "turn/completed":
                 turn = params.get("turn", {})
+                if (session.get("approval_cancel_pending") and session.get("approval_cancel_turn_id")
+                        and turn.get("id") != session["approval_cancel_turn_id"]):
+                    # A child/unrelated turn or incomplete notification cannot
+                    # release the cancellation wait for this specific root turn.
+                    self._save_event(session, method)
+                    return
                 session["status"] = {"completed": "completed", "interrupted": "interrupted", "failed": "failed"}.get(turn.get("status"), "failed")
                 session["error"] = turn.get("error")
                 session["pending_requests"] = [r for r in session["pending_requests"] if r.get("source_scope", "root") != "root"]
                 session["turn_id"] = None
+                session["approval_cancel_pending"] = False
+                session.pop("approval_cancel_turn_id", None)
             elif method == "turn/plan/updated":
                 plan = params.get("plan", [])
                 if isinstance(plan, list):
