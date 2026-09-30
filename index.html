@@ -119,6 +119,9 @@
     .task-request input[type=text], .task-request input[type=password], .task-followup textarea { width:100%; padding:9px; color:var(--ink); background:var(--panel); border:1px solid var(--line); border-radius:7px; font:inherit; }
     .task-followup { margin-top:12px; }
     .task-followup textarea { min-height:70px; margin-top:8px; }
+    .task-goal, .task-full-message { margin:10px 0; font-size:12px; }
+    .task-goal > summary, .task-full-message > summary { cursor:pointer; color:var(--muted); }
+    .task-goal p { white-space:pre-wrap; overflow-wrap:anywhere; max-height:200px; overflow:auto; }
     .machines-panel { margin:14px 0; padding:14px 16px; background:var(--panel); border:1px solid var(--line); border-radius:11px; }
     .machines-panel > summary { cursor:pointer; font-size:13px; font-weight:650; }
     .machine-group { margin-top:12px; }
@@ -628,6 +631,8 @@
   byId("branch-select").addEventListener("change", () => { branchGeneration++; loadBranch(byId("branch-select").value); loadTasks(); });
   byId("refresh-remote").addEventListener("click", refreshRemote);
   const taskLabels = {prepared:"待启动",starting:"连接并启动中",running:"执行中",waiting_input:"等待回答",waiting_approval:"等待授权",interrupting:"正在中断",interrupted:"已中断",completed:"本轮结束",failed:"执行失败",disconnected:"连接中断"};
+  function sessionProgress(session) { return typeof session.progress_summary === 'string' && session.progress_summary.trim() ? session.progress_summary.trim() : session.last_agent_message || ''; }
+  function planMeta(session) { const source={artifact:'进度记录',notification:'实时计划'}[session.plan_source];return source?'计划来源：'+source+(session.plan_updated_at?' · 更新 '+dateText(session.plan_updated_at):' · 更新时间未知'):''; }
   const activeTasks = new Set(["starting","running","waiting_input","waiting_approval","interrupting"]);
   const machineLabels = {cuda:"NVIDIA / CUDA",ascend:"Ascend / 昇腾",metax:"MetaX / 沐曦",corex:"CoreX / 天数智芯",hygon:"Hygon / 海光",musa:"MUSA / 摩尔线程",enflame:"Enflame / 燧原",kunlunxin:"Kunlunxin / 昆仑芯",thead:"T-Head / 平头哥"};
   let machineProfilesKey = null;
@@ -657,10 +662,9 @@
     const panel=byId('machines-panel'),box=byId('machine-status-list');
     if(!sessionsEnabled||readOnly){panel.hidden=true;box.replaceChildren();return;}
     panel.hidden=false;const records=Array.isArray(profiles)?profiles:[],key=JSON.stringify(records);if(key===machineProfilesKey)return;
-    const first=machineProfilesKey===null;machineProfilesKey=key;
+    machineProfilesKey=key;
     const compute=records.filter(profile=>(profile.role||'compute')==='compute'),states=compute.map(machineHealth),checked=states.filter(health=>health.ssh.status==='passed'||health.ssh.status==='failed').length,passed=states.filter(health=>health.ssh.status==='passed').length,failed=states.filter(health=>health.ssh.status==='failed').length;
     byId('machines-summary').textContent='· SSH '+passed+'/'+checked+' 已检查机器可连接'+(failed?' · '+failed+' 台连接失败':'')+(compute.length>checked?' · '+(compute.length-checked)+' 台未检查':'');
-    if(first&&failed)panel.open=true;
     const openGroups=new Map([...box.querySelectorAll('.machine-group')].map(group=>[group.getAttribute('data-backend'),group.open])),groups=new Map();
     for(const profile of records){const role=profile.role||'compute',group=role!=='compute'?role:machineLabels[profile.backend]?profile.backend:'unknown';if(!groups.has(group))groups.set(group,[]);groups.get(group).push(profile);}
     const fragment=document.createDocumentFragment();
@@ -753,13 +757,16 @@
   }
   function newTaskCard(session) {
     const root = el("article", "task-card"), header = el("div", "task-head"), title = el("h3"), status = el("span");
-    const meta = el("p", "task-meta"), plan = el("ol", "task-plan"), message = el("div", "task-message"), error = el("div", "notice");
-    const requests = el("div"), actions = el("div", "task-actions");
-    header.append(title,status); root.append(header,meta,plan,message,error,requests,actions);
+    const meta = el("p", "task-meta"), planNote = el("p", "task-note"), plan = el("ol", "task-plan"), message = el("div", "task-message"), error = el("div", "notice");
+    const requests = el("div"), actions = el("div", "task-actions"), goal = el("details", "task-goal"), goalText = el("p");
+    goal.append(el("summary", "", "任务目标与要求"),goalText);
+    const fullMessage = el("details", "task-full-message"), fullMessageText = el("div", "task-message");
+    fullMessage.append(el("summary", "", "展开完整进度消息"),fullMessageText);
+    header.append(title,status); root.append(header,meta,goal,planNote,plan,message,fullMessage,error,requests,actions);
     const followup = el("details", "task-followup"), text = el("textarea"), send = el("button", "button", "发送补充指令");
     text.placeholder = "需要调整目标或继续跟进时填写"; text.setAttribute("aria-label", "补充任务指令");
     followup.append(el("summary", "", "补充指令"),text,send); root.append(followup);
-    const card = {root,title,status,meta,plan,message,error,requests,actions,followup,send,pendingKey:null,session,messageBusy:false};
+    const card = {root,title,status,meta,goal,goalText,planNote,plan,message,fullMessage,fullMessageText,error,requests,actions,followup,send,pendingKey:null,session,messageBusy:false};
     send.type = "button";
     send.addEventListener("click", async () => {
       if (!text.value.trim()) return;
@@ -774,17 +781,21 @@
   }
   function updateTaskCard(card, session) {
     card.session = session;
-    card.title.textContent = (session.backend || "Backend") + " · " + (session.goal || "分支适配").slice(0,120);
+    card.title.textContent = (machineLabels[session.backend] || session.backend || "Backend") + " 适配任务";
+    card.goal.hidden = !session.goal; card.goalText.textContent = session.goal || "";
     const waiting = session.status === "waiting_input" || session.status === "waiting_approval";
     card.status.className = "pill " + (waiting ? "partial" : session.status === "failed" ? "failed" : activeTasks.has(session.status) ? "running" : "unknown");
     card.status.textContent = taskLabels[session.status] || session.status;
     card.meta.textContent = "任务 " + session.id.slice(0,8) + " · " + (session.ssh_alias || "机器待配置") + " · 更新 " + dateText(session.updated_at);
     card.root.classList.toggle("focused", session.id === new URLSearchParams(window.location.search).get("session"));
     const plan = Array.isArray(session.plan) ? session.plan : [];
+    card.planNote.textContent = planMeta(session); card.planNote.hidden = !card.planNote.textContent;
     card.plan.replaceChildren();
     if (!plan.length) card.plan.append(el("li", "", "等待 agent 报告执行计划。"));
     for (const step of plan) card.plan.append(el("li", step.status, ({pending:"待执行",in_progress:"进行中",completed:"已完成"}[step.status] || "待确认") + " · " + step.step));
-    card.message.textContent = session.last_agent_message || (session.status === "prepared" ? "机器配置完成后，可启动 agent。" : "等待 agent 的进展消息…");
+    const progress = sessionProgress(session) || (session.status === "prepared" ? "机器配置完成后，可启动 agent。" : "等待 agent 的进展消息…");
+    card.message.textContent = progress.length > 600 ? progress.slice(0,600) + "…" : progress;
+    card.fullMessage.hidden = progress.length <= 600; card.fullMessageText.textContent = progress;
     card.error.hidden = !session.error; card.error.textContent = session.error || "";
     renderTaskRequests(card,session);
     const controlKey = session.status + ":" + Boolean(session.thread_id);
