@@ -119,6 +119,19 @@
     .task-request input[type=text], .task-request input[type=password], .task-followup textarea { width:100%; padding:9px; color:var(--ink); background:var(--panel); border:1px solid var(--line); border-radius:7px; font:inherit; }
     .task-followup { margin-top:12px; }
     .task-followup textarea { min-height:70px; margin-top:8px; }
+    .machines-panel { margin:14px 0; padding:14px 16px; background:var(--panel); border:1px solid var(--line); border-radius:11px; }
+    .machines-panel > summary { cursor:pointer; font-size:13px; font-weight:650; }
+    .machine-group { margin-top:12px; }
+    .machine-group > summary { cursor:pointer; color:var(--muted); font-size:12px; }
+    .machine-grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(235px,1fr)); gap:9px; margin-top:9px; }
+    .machine-entry { padding:12px; border:1px solid var(--line); border-radius:8px; background:var(--soft); font-size:12px; overflow-wrap:anywhere; }
+    .machine-entry strong { display:block; }
+    .machine-entry .machine-alias { color:var(--muted); font-size:11px; margin:3px 0 8px; }
+    .machine-checks p { display:flex; gap:8px; align-items:center; flex-wrap:wrap; margin:6px 0; }
+    .machine-checks time { color:var(--muted); font-size:10px; }
+    .machine-checks details { font-size:11px; margin-top:9px; }
+    .machine-checks summary { cursor:pointer; }
+    .machine-checks .check-detail { display:block; white-space:pre-wrap; overflow-wrap:anywhere; color:var(--muted); }
     [hidden] { display: none !important; }
     @media (prefers-color-scheme: dark) {
       :root { color-scheme: dark; --bg:#101827; --panel:#1b2637; --ink:#edf2f9; --muted:#a0aec2; --line:#334257; --blue:#9bb8ff; --soft:#223048; --shadow:none; }
@@ -224,6 +237,7 @@
     <section id="tasks-panel" hidden aria-labelledby="tasks-title">
       <div class="section-heading"><div><h2 id="tasks-title">适配任务</h2><p>显示 agent 的实际计划和最新进展；需要回答或授权时可在这里处理。</p></div><a id="new-task-link" class="button" href="/sessions">配置机器 · 启动任务 ↗</a></div>
       <div id="tasks-notice" class="notice" role="alert" hidden></div>
+      <details id="machines-panel" class="machines-panel" hidden><summary>验证机器 / 最近检查 <span id="machines-summary"></span></summary><p class="task-note">SSH 连通性与完整环境预检分别显示；连接成功后还需确认项目目录、模型和验收环境。检查时间仅代表该次记录。</p><div id="machine-status-list"></div></details>
       <div id="task-list" class="task-list"><div class="empty">正在读取任务…</div></div>
     </section>
     <div class="section-heading">
@@ -615,6 +629,47 @@
   byId("refresh-remote").addEventListener("click", refreshRemote);
   const taskLabels = {prepared:"待启动",starting:"连接并启动中",running:"执行中",waiting_input:"等待回答",waiting_approval:"等待授权",interrupting:"正在中断",interrupted:"已中断",completed:"本轮结束",failed:"执行失败",disconnected:"连接中断"};
   const activeTasks = new Set(["starting","running","waiting_input","waiting_approval","interrupting"]);
+  const machineLabels = {cuda:"NVIDIA / CUDA",ascend:"Ascend / 昇腾",metax:"MetaX / 沐曦",corex:"CoreX / 天数智芯",hygon:"Hygon / 海光",musa:"MUSA / 摩尔线程",enflame:"Enflame / 燧原",kunlunxin:"Kunlunxin / 昆仑芯",thead:"T-Head / 平头哥"};
+  let machineProfilesKey = null;
+  function machineHealth(profile){
+    const full=profile.last_check,connection=profile.last_connection_check,time=record=>{const value=Date.parse(record?.checked_at);return Number.isNaN(value)?-Infinity:value;};
+    const candidates=[connection,full].filter(record=>record&&Array.isArray(record.checks)&&record.checks.some(check=>check.name==='ssh'));
+    const latest=candidates.reduce((best,record)=>!best||time(record)>time(best)?record:best,null),check=latest?.checks.find(item=>item.name==='ssh');
+    const ssh={status:'unknown',label:'SSH 未检查',at:latest?.checked_at,detail:check?.detail||latest?.error||''};
+    if(check?.status==='passed'){ssh.status=time(latest)===-Infinity?'unknown':'passed';ssh.label=ssh.status==='passed'?'SSH 可连接':'SSH 曾连接 · 时间未知';}
+    else if(check?.status==='failed'||check?.status==='blocked'){ssh.status='failed';ssh.label='SSH 连接失败';}
+    const environment={status:'unknown',label:'环境未预检',at:full?.checked_at,detail:full?.error||''};
+    if((profile.role||'compute')!=='compute'){environment.label='不用于 backend 验收';environment.at=null;}
+    else if(!machineLabels[profile.backend]||!profile.remote_workspace){environment.label='环境待配置';environment.detail=[!machineLabels[profile.backend]?'待确认 backend':'',!profile.remote_workspace?'待填写远端项目目录':''].filter(Boolean).join('；');}
+    else if(full){
+      const superseded=ssh.status==='failed'&&latest!==full&&time(latest)>=time(full),changed=full.remote?.workspace&&full.remote.workspace!==profile.remote_workspace;
+      if(superseded||changed){environment.status='stale';environment.label='环境需重检';environment.detail=superseded?'完整预检之后 SSH 检查失败，请重新确认验证环境。':'远端项目目录已改变，请重新进行完整预检。';}
+      else if(full.ok===true){environment.status=time(full)===-Infinity?'stale':'passed';environment.label=environment.status==='passed'?'环境预检通过':'预检时间未知 · 需重检';environment.detail=(full.checks||[]).filter(item=>item.status==='warning').map(item=>item.detail).join('；');}
+      else if(full.ok===false){environment.status='failed';environment.label='环境预检失败';environment.detail=full.error||(full.checks||[]).filter(item=>item.status==='failed'||item.status==='blocked').map(item=>item.detail).join('；');}
+    }
+    return {ssh,environment};
+  }
+  function appendMachineHealth(entry,health){
+    const box=el('div','machine-checks');for(const result of [health.ssh,health.environment]){const row=el('p');row.append(el('span','pill '+result.status,result.label),el('time','',result.at?dateText(result.at):'尚无检查时间'));box.append(row);}
+    const details=[health.ssh.detail,health.environment.detail].filter(Boolean);if(details.length){const disclosure=el('details');disclosure.open=health.ssh.status==='failed'||health.environment.status==='failed';disclosure.append(el('summary','','检查详情'),el('p','check-detail',details.join('\n')));box.append(disclosure);}entry.append(box);
+  }
+  function renderMachineProfiles(profiles){
+    const panel=byId('machines-panel'),box=byId('machine-status-list');
+    if(!sessionsEnabled||readOnly){panel.hidden=true;box.replaceChildren();return;}
+    panel.hidden=false;const records=Array.isArray(profiles)?profiles:[],key=JSON.stringify(records);if(key===machineProfilesKey)return;
+    const first=machineProfilesKey===null;machineProfilesKey=key;
+    const compute=records.filter(profile=>(profile.role||'compute')==='compute'),states=compute.map(machineHealth),checked=states.filter(health=>health.ssh.status==='passed'||health.ssh.status==='failed').length,passed=states.filter(health=>health.ssh.status==='passed').length,failed=states.filter(health=>health.ssh.status==='failed').length;
+    byId('machines-summary').textContent='· SSH '+passed+'/'+checked+' 已检查机器可连接'+(failed?' · '+failed+' 台连接失败':'')+(compute.length>checked?' · '+(compute.length-checked)+' 台未检查':'');
+    if(first&&failed)panel.open=true;
+    const openGroups=new Map([...box.querySelectorAll('.machine-group')].map(group=>[group.getAttribute('data-backend'),group.open])),groups=new Map();
+    for(const profile of records){const role=profile.role||'compute',group=role!=='compute'?role:machineLabels[profile.backend]?profile.backend:'unknown';if(!groups.has(group))groups.set(group,[]);groups.get(group).push(profile);}
+    const fragment=document.createDocumentFragment();
+    for(const group of [...Object.keys(machineLabels),'unknown','development','gateway']){const members=groups.get(group);if(!members?.length)continue;const title=group==='development'?'开发机 / 看板部署节点':group==='gateway'?'跳板机':group==='unknown'?'待确认 backend':machineLabels[group],failures=members.filter(profile=>machineHealth(profile).ssh.status==='failed').length;
+      const section=el('details','machine-group');section.setAttribute('data-backend',group);section.open=openGroups.has(group)?openGroups.get(group):failures>0;section.append(el('summary','',title+' · '+members.length+' 台'+(failures?' · '+failures+' 台连接失败':'')));const grid=el('div','machine-grid');
+      for(const profile of members){const entry=el('article','machine-entry'),health=machineHealth(profile);entry.append(el('strong','',profile.label||profile.ssh_alias||profile.id),el('div','machine-alias',profile.ssh_alias||'—'));appendMachineHealth(entry,health);grid.append(entry);}section.append(grid);fragment.append(section);
+    }
+    if(!records.length)fragment.append(el('p','task-note','尚无验证机器。可先配置 SSH 连接并检查环境。'));box.replaceChildren(fragment);
+  }
   const taskCards = new Map();
   let tasksFetching = false;
   const taskNotice = message => { byId("tasks-notice").hidden = !message; byId("tasks-notice").textContent = message || ""; };
@@ -752,6 +807,7 @@
       const response = await fetch(appUrl("api/codex-sessions"),{cache:"no-store"});
       const data = await response.json().catch(() => ({}));
       if (!response.ok) throw new Error(data.error || "无法读取任务");
+      renderMachineProfiles(data.machine_profiles);
       const branch = byId("branch-select").value || initialBranch;
       const sessions = (Array.isArray(data.sessions) ? data.sessions : []).filter(session => session.branch === branch);
       const box = byId("task-list"), ids = new Set(sessions.map(session => session.id));
