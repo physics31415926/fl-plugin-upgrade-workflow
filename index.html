@@ -388,6 +388,24 @@
     const policy = session?.task_policy || backendTaskPolicies[backend];
     return policy?.branch === branch && policy.mode === "monitor" ? policy : {mode:"adapt"};
   }
+  function prioritizedSessions(sessions) {
+    const adapt=[],monitor=[];
+    for(const session of sessions)(taskPolicy(session.backend,session.branch,session).mode==='monitor'?monitor:adapt).push(session);
+    return adapt.concat(monitor);
+  }
+  function reconcileTaskNodes(container,nodes) {
+    const active=container.contains(document.activeElement)?document.activeElement:null;
+    const selection=active&&typeof active.selectionStart==='number'?[active.selectionStart,active.selectionEnd,active.selectionDirection]:null;
+    let cursor=container.firstElementChild;
+    for(const node of nodes){
+      if(node===cursor)cursor=cursor.nextElementSibling;
+      else container.insertBefore(node,cursor);
+    }
+    if(active?.isConnected&&document.activeElement!==active){
+      active.focus({preventScroll:true});
+      if(selection)active.setSelectionRange(...selection);
+    }
+  }
   function approvalDecisions(params, monitor=false) {
     const available = Array.isArray(params.availableDecisions) ? params.availableDecisions : ["accept","decline","cancel"];
     return [...new Set(available.filter(value => typeof value === "string" && ["accept","decline","cancel"].includes(value) && (!monitor || value !== "accept")))];
@@ -934,16 +952,17 @@
       renderMachineProfiles(data.machine_profiles);
       const branch = byId("branch-select").value || initialBranch;
       if (policyChanged && latestBranchSnapshot?.branch === branch) render(latestBranchSnapshot);
-      const sessions = (Array.isArray(data.sessions) ? data.sessions : []).filter(session => session.branch === branch);
+      const sessions = prioritizedSessions((Array.isArray(data.sessions) ? data.sessions : []).filter(session => session.branch === branch));
       const box = byId("task-list"), ids = new Set(sessions.map(session => session.id));
       for (const [id,card] of taskCards) if (!ids.has(id)) { card.root.remove(); taskCards.delete(id); }
       box.querySelectorAll(".empty").forEach(node => node.remove());
       if (!sessions.length) box.append(el("div", "empty", "此分支尚无适配任务。配置验证机器后，可启动 agent 并在这里跟进。"));
       for (const session of sessions) {
         let card = taskCards.get(session.id);
-        if (!card) { card = newTaskCard(session); taskCards.set(session.id,card); box.append(card.root); }
+        if (!card) { card = newTaskCard(session); taskCards.set(session.id,card); }
         updateTaskCard(card,session);
       }
+      reconcileTaskNodes(box,sessions.map(session=>taskCards.get(session.id).root));
       byId("new-task-link").href = appUrl("sessions") + "?branch=" + encodeURIComponent(branch);
     } catch (error) { taskNotice("读取任务失败：" + error.message); }
     finally { tasksFetching = false; }

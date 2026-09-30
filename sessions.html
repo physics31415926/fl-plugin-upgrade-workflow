@@ -70,6 +70,7 @@
   const labels = {cuda:'NVIDIA / CUDA',ascend:'Ascend / 昇腾',metax:'MetaX / 沐曦',corex:'CoreX / 天数智芯',hygon:'Hygon / 海光',musa:'MUSA / 摩尔线程',enflame:'Enflame / 燧原',kunlunxin:'Kunlunxin / 昆仑芯',thead:'T-Head / 平头哥'};
     const statuses = {prepared:'待启动',starting:'正在启动',running:'执行中',waiting_approval:'等待授权',waiting_input:'等待回答',interrupting:'正在中断',completed:'本轮已结束',interrupted:'已中断',failed:'本轮异常',disconnected:'连接中断'};
     const state = {sessions:[],profiles:[],policies:{},selected:null,available:false,fetching:false,pendingKey:'',eventsKey:'',profileKey:'',listKey:'',actionBusy:false,creating:false,checking:false,checkedKey:''};
+  const sessionListCards = new Map();
   const params = new URLSearchParams(location.search);
   state.selected=params.get('session')||null;
   if (params.get('branch')) $('branch').value = params.get('branch');
@@ -125,6 +126,24 @@
   function taskPolicy(backend, branch, session) {
     const policy=session?.task_policy || state.policies[backend];
     return policy?.branch===branch && policy.mode==='monitor' ? policy : {mode:'adapt'};
+  }
+  function prioritizedSessions(sessions) {
+    const adapt=[],monitor=[];
+    for(const session of sessions)(taskPolicy(session.backend,session.branch,session).mode==='monitor'?monitor:adapt).push(session);
+    return adapt.concat(monitor);
+  }
+  function reconcileTaskNodes(container,nodes) {
+    const active=container.contains(document.activeElement)?document.activeElement:null;
+    const selection=active&&typeof active.selectionStart==='number'?[active.selectionStart,active.selectionEnd,active.selectionDirection]:null;
+    let cursor=container.firstElementChild;
+    for(const node of nodes){
+      if(node===cursor)cursor=cursor.nextElementSibling;
+      else container.insertBefore(node,cursor);
+    }
+    if(active?.isConnected&&document.activeElement!==active){
+      active.focus({preventScroll:true});
+      if(selection)active.setSelectionRange(...selection);
+    }
   }
   function approvalDecisions(params, monitor=false) {
     const available=Array.isArray(params.availableDecisions)?params.availableDecisions:['accept','decline','cancel'];
@@ -223,9 +242,30 @@
   function renderList() {
     $('session-count').textContent=String(state.sessions.length);$('no-sessions').hidden=state.sessions.length>0;
     const key=JSON.stringify([state.selected,state.policies,state.sessions.map(({id,backend,branch,work_branch,task_policy,reported_provenance,ssh_alias,status,updated_at,created_at,progress_summary,last_agent_message,plan_source,plan_updated_at})=>({id,backend,branch,work_branch,task_policy,reported_provenance,ssh_alias,status,updated_at,created_at,progress_summary,last_agent_message,plan_source,plan_updated_at}))]);if(key===state.listKey)return;state.listKey=key;
-    const fragment=document.createDocumentFragment();
-    for(const session of state.sessions){const button=el('button','session-card'+(String(session.id)===state.selected?' selected':''));button.type='button';button.setAttribute('aria-pressed',String(String(session.id)===state.selected));const top=el('div','session-top');top.append(el('strong','',labels[session.backend]||session.backend),el('span','pill '+(statuses[session.status]?session.status:''),statusLabel(session.status)));button.append(top,el('div','session-sub',session.branch+' · '+session.ssh_alias),el('div','session-sub','更新于 '+formatTime(session.updated_at||session.created_at)));button.append(el('div','session-sub','工作分支：'+(session.work_branch||'待核对')));if(taskPolicy(session.backend,session.branch,session).mode==='monitor')button.append(el('div','session-sub','已有 PR · 仅监控'));const provenance=reportedProvenance(session);if(provenance)button.append(el('div','session-sub','上报候选：'+provenance.candidate_commit.slice(0,12)+' · 观察于 '+provenance.observed_at));const progress=sessionProgress(session),latest=latestSessionMessage(session),planNote=planMeta(session);if(latest)button.append(el('div','session-sub','最新消息：'+latest.slice(0,160)+(latest.length>160?'…':'')));if(progress)button.append(el('div','session-sub',(latest?'阶段摘要：':'')+progress.slice(0,160)+(progress.length>160?'…':'')));if(planNote)button.append(el('div','session-sub',planNote));button.addEventListener('click',()=>{state.selected=String(session.id);state.pendingKey='';state.eventsKey='';notice('session-notice','');renderList();renderDetail();});fragment.append(button);}
-    $('session-list').replaceChildren(fragment);
+    const sessions=prioritizedSessions(state.sessions),box=$('session-list'),ids=new Set(sessions.map(session=>String(session.id)));
+    for(const [id,entry] of sessionListCards)if(!ids.has(id)){entry.button.remove();sessionListCards.delete(id);}
+    for(const session of sessions){
+      const id=String(session.id),policy=taskPolicy(session.backend,session.branch,session);
+      let entry=sessionListCards.get(id);
+      if(!entry){
+        const button=el('button','session-card');button.type='button';
+        button.addEventListener('click',()=>{state.selected=id;state.pendingKey='';state.eventsKey='';notice('session-notice','');renderList();renderDetail();});
+        entry={button,contentKey:null};sessionListCards.set(id,entry);
+      }
+      const button=entry.button;
+      button.className='session-card'+(id===state.selected?' selected':'');button.setAttribute('aria-pressed',String(id===state.selected));
+      const contentKey=JSON.stringify([session.backend,session.branch,session.ssh_alias,session.status,session.updated_at,session.created_at,session.work_branch,session.reported_provenance,policy,session.progress_summary,session.last_agent_message,session.plan_source,session.plan_updated_at]);
+      if(contentKey===entry.contentKey)continue;entry.contentKey=contentKey;button.replaceChildren();
+      const top=el('div','session-top');top.append(el('strong','',labels[session.backend]||session.backend),el('span','pill '+(statuses[session.status]?session.status:''),statusLabel(session.status)));
+      button.append(top,el('div','session-sub',session.branch+' · '+session.ssh_alias),el('div','session-sub','更新于 '+formatTime(session.updated_at||session.created_at)),el('div','session-sub','工作分支：'+(session.work_branch||'待核对')));
+      if(policy.mode==='monitor')button.append(el('div','session-sub','已有 PR · 仅监控'));
+      const provenance=reportedProvenance(session);if(provenance)button.append(el('div','session-sub','上报候选：'+provenance.candidate_commit.slice(0,12)+' · 观察于 '+provenance.observed_at));
+      const progress=sessionProgress(session),latest=latestSessionMessage(session),planNote=planMeta(session);
+      if(latest)button.append(el('div','session-sub','最新消息：'+latest.slice(0,160)+(latest.length>160?'…':'')));
+      if(progress)button.append(el('div','session-sub',(latest?'阶段摘要：':'')+progress.slice(0,160)+(progress.length>160?'…':'')));
+      if(planNote)button.append(el('div','session-sub',planNote));
+    }
+    reconcileTaskNodes(box,sessions.map(session=>sessionListCards.get(String(session.id)).button));
   }
   function summarizeEvent(event) {
     const method=event.method || event.type || 'event', p=event.params || {};
@@ -303,7 +343,7 @@
   }
   async function refresh(quiet=false) {
     if(state.fetching)return;state.fetching=true;
-    try{const data=await request(API);state.sessions=Array.isArray(data.sessions)?data.sessions:[];state.policies=data.backend_task_policies&&typeof data.backend_task_policies==='object'?data.backend_task_policies:{};state.profiles=Array.isArray(data.machine_profiles)?data.machine_profiles:[];state.available=!!data.available;if(!state.sessions.some(x=>String(x.id)===state.selected))state.selected=state.sessions.length?String(state.sessions[0].id):null;showProfiles();renderList();renderDetail();$('sync-status').textContent='已更新 '+new Date().toLocaleTimeString('zh-CN',{hour12:false});checkButtons();renderHealth(data.health);if(!quiet)notice('global-notice','');}
+    try{const data=await request(API);state.sessions=Array.isArray(data.sessions)?data.sessions:[];state.policies=data.backend_task_policies&&typeof data.backend_task_policies==='object'?data.backend_task_policies:{};state.profiles=Array.isArray(data.machine_profiles)?data.machine_profiles:[];state.available=!!data.available;if(!state.sessions.some(x=>String(x.id)===state.selected))state.selected=state.sessions.length?String(prioritizedSessions(state.sessions)[0].id):null;showProfiles();renderList();renderDetail();$('sync-status').textContent='已更新 '+new Date().toLocaleTimeString('zh-CN',{hour12:false});checkButtons();renderHealth(data.health);if(!quiet)notice('global-notice','');}
     catch(error){$('sync-status').textContent='连接失败，将自动重试';notice('global-notice',error.message,true);}finally{state.fetching=false;}
   }
   async function act(session, action, body={}) {
