@@ -10,6 +10,7 @@ from collections import deque
 from concurrent.futures import Future, TimeoutError as FutureTimeout
 from datetime import datetime, timezone
 import json
+import logging
 import os
 from pathlib import Path
 import re
@@ -19,6 +20,9 @@ import subprocess
 import threading
 import time
 import uuid
+
+
+logger = logging.getLogger(__name__)
 
 
 class SessionError(ValueError):
@@ -34,7 +38,16 @@ def atomic_json(path, value):
     tmp = path.with_suffix("." + uuid.uuid4().hex + ".tmp")
     try:
         tmp.write_text(json.dumps(value, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
-        os.replace(tmp, path)
+        # Windows readers (including antivirus/indexing) can briefly prevent
+        # replacement. Other failures, and a lock that persists, still raise.
+        for attempt in range(4):
+            try:
+                os.replace(tmp, path)
+                break
+            except OSError as exc:
+                if getattr(exc, "winerror", None) not in {5, 32, 33} or attempt == 3:
+                    raise
+                time.sleep(0.025 * (2 ** attempt))
     finally:
         tmp.unlink(missing_ok=True)
 
@@ -60,6 +73,8 @@ class AppServerClient:
         self._pending = {}
         self._next_id = 0
         self._closed = False
+        self._reader_stopped = False
+        self.last_callback_error = None
         self.stderr = deque(maxlen=20)
         flags = subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0
         self.process = subprocess.Popen(
@@ -82,7 +97,7 @@ class AppServerClient:
 
     def _write(self, value):
         with self._lock:
-            if self._closed or self.process.poll() is not None:
+            if self._closed or self._reader_stopped or self.process.poll() is not None:
                 raise SessionError("Codex app-server connection is closed")
             try:
                 self.process.stdin.write(json.dumps(value, ensure_ascii=False) + "\n")
@@ -115,7 +130,30 @@ class AppServerClient:
         for line in self.process.stderr:
             self.stderr.append(line.rstrip()[:2000])
 
+    def _dispatch(self, message):
+        """A notification consumer must not terminate the protocol reader."""
+        try:
+            self.callback(message)
+        except Exception as exc:
+            diagnostic = {"at": now(), "method": str(message.get("method", ""))[:200],
+                          "exception_type": type(exc).__name__,
+                          "detail": "Notification callback failed; protocol reader continued."}
+            for field in ("errno", "winerror"):
+                value = getattr(exc, field, None)
+                if isinstance(value, int):
+                    diagnostic[field] = value
+            # Exception text may include a private path or command. Keep only
+            # safe error metadata, including when the diagnostic callback fails.
+            self.last_callback_error = diagnostic
+            self.stderr.append(diagnostic["detail"] + " " + diagnostic["exception_type"])
+            logger.warning("App-server callback failed (%s); reader continued", diagnostic["exception_type"])
+            try:
+                self.callback({"method": "connection/callbackError", "params": diagnostic})
+            except Exception as report_exc:
+                logger.warning("App-server callback diagnostic could not be recorded (%s)", type(report_exc).__name__)
+
     def _read(self):
+        failure = None
         try:
             for line in self.process.stdout:
                 try:
@@ -131,15 +169,28 @@ class AppServerClient:
                         else:
                             future.set_result(message.get("result", {}))
                 elif "method" in message:
-                    self.callback(message)
+                    self._dispatch(message)
+        except Exception as exc:
+            failure = {"reason": "reader_error", "exception_type": type(exc).__name__,
+                       "detail": "Codex app-server reader failed (" + type(exc).__name__ + ")"}
         finally:
             with self._lock:
+                self._reader_stopped = True
                 pending = list(self._pending.values())
+            if failure is None:
+                exit_code = self.process.poll()
+                if self._closed:
+                    failure = {"reason": "closed", "detail": "Codex app-server connection was closed"}
+                elif exit_code is not None:
+                    failure = {"reason": "process_exit", "exit_code": exit_code,
+                               "detail": "Codex app-server exited (code " + str(exit_code) + ")"}
+                else:
+                    failure = {"reason": "stdout_closed", "detail": "Codex app-server stdout closed while its process was still running"}
             for future in pending:
                 if not future.done():
-                    future.set_exception(SessionError("Codex app-server exited"))
+                    future.set_exception(SessionError(failure["detail"]))
             if not self._closed:
-                self.callback({"method": "connection/closed", "params": {"detail": "Codex app-server exited"}})
+                self._dispatch({"method": "connection/closed", "params": failure})
 
     def close(self):
         self._closed = True
@@ -176,6 +227,11 @@ class CodexSessionManager:
         self._sessions = {}
         self._profiles = {}
         self._saved_at = {}
+        self._dirty_sessions = set()
+        self._save_timers = {}
+        self._event_backlogs = {}
+        self._event_log_retry_at = {}
+        self._closed = False
         self._health = None
         self.root.mkdir(parents=True, exist_ok=True)
         profile_file = self.root / "machines.json"
@@ -476,9 +532,97 @@ done
         return result.stdout.strip()
 
     def _save(self, session):
+        session_id = session["id"]
+        self._dirty_sessions.add(session_id)
         session["updated_at"] = now()
-        atomic_json(self.root / session["id"] / "session.json", session)
-        self._saved_at[session["id"]] = time.monotonic()
+        previous_error = session.pop("persistence_error", None)
+        try:
+            atomic_json(self.root / session_id / "session.json", session)
+        except OSError as exc:
+            diagnostic = {"at": now(), "exception_type": type(exc).__name__,
+                          "attempts": (previous_error or {}).get("attempts", 0) + 1,
+                          "detail": "Session state could not be saved; retrying."}
+            for field in ("errno", "winerror"):
+                value = getattr(exc, field, None)
+                if isinstance(value, int):
+                    diagnostic[field] = value
+            session["persistence_error"] = diagnostic
+            if previous_error is None:
+                logger.warning("Session state persistence failed (%s); save will be retried", type(exc).__name__)
+            self._schedule_save(session_id, 1)
+            raise
+        self._saved_at[session_id] = time.monotonic()
+        self._dirty_sessions.discard(session_id)
+        timer = self._save_timers.pop(session_id, None)
+        if timer:
+            timer.cancel()
+        if previous_error:
+            logger.info("Session state persistence recovered")
+        if self._event_backlogs.get(session_id):
+            self._dirty_sessions.add(session_id)
+            self._schedule_save(session_id, 1)
+
+    def _schedule_save(self, session_id, delay):
+        if self._closed or session_id in self._save_timers:
+            return
+        timer = threading.Timer(max(0.01, delay), lambda: self._flush_session(session_id, timer))
+        timer.daemon = True
+        self._save_timers[session_id] = timer
+        timer.start()
+
+    def _flush_session(self, session_id, expected_timer=None):
+        with self._lock:
+            if expected_timer is not None and self._save_timers.get(session_id) is not expected_timer:
+                return
+            timer = self._save_timers.pop(session_id, None)
+            if timer:
+                timer.cancel()
+            if self._closed or session_id not in self._dirty_sessions:
+                return
+            session = self._sessions.get(session_id)
+            if session:
+                self._flush_event_log(session, force=True)
+                try:
+                    self._save(session)
+                except OSError:
+                    # _save records the failure and schedules another attempt.
+                    pass
+
+    def _flush_event_log(self, session, force=False):
+        backlog = self._event_backlogs.get(session["id"])
+        if not backlog:
+            return
+        if not force and time.monotonic() < self._event_log_retry_at.get(session["id"], 0):
+            return
+        try:
+            path = self.root / session["id"] / "events.jsonl"
+            path.parent.mkdir(parents=True, exist_ok=True)
+            with path.open("a", encoding="utf-8") as file:
+                file.write("".join(json.dumps(record, ensure_ascii=False) + "\n" for record in backlog))
+        except OSError as exc:
+            if not session.get("event_log_error"):
+                logger.warning("Session event log persistence failed (%s); save will be retried", type(exc).__name__)
+            session["event_log_error"] = {"at": now(), "exception_type": type(exc).__name__,
+                                          "detail": "Event log could not be saved; retrying retained records."}
+            self._event_log_retry_at[session["id"]] = time.monotonic() + 1
+        else:
+            backlog.clear()
+            session.pop("event_log_error", None)
+            self._event_log_retry_at.pop(session["id"], None)
+
+    def _save_event(self, session, method):
+        session_id = session["id"]
+        self._dirty_sessions.add(session_id)
+        elapsed = time.monotonic() - self._saved_at.get(session_id, 0)
+        if method.endswith(("/delta", "/outputDelta")) and elapsed < 1:
+            self._schedule_save(session_id, 1 - elapsed)
+            return
+        try:
+            self._save(session)
+        except OSError:
+            # Keep lifecycle/approval state in memory and expose the failure;
+            # retrying persistence must not close an active protocol connection.
+            pass
 
     def _get(self, session_id):
         if session_id not in self._sessions:
@@ -951,10 +1095,14 @@ done
                       "source_thread_id": event_thread, "source_scope": scope}
             session["events"].append(record)
             session["events"] = session["events"][-80:]
-            event_path = self.root / session_id / "events.jsonl"
-            event_path.parent.mkdir(parents=True, exist_ok=True)
-            with event_path.open("a", encoding="utf-8") as file:
-                file.write(json.dumps(record, ensure_ascii=False) + "\n")
+            backlog = self._event_backlogs.setdefault(session_id, deque(maxlen=80))
+            if len(backlog) == backlog.maxlen:
+                # Bound memory during a persistent filesystem outage and make
+                # any lost historical log records explicit. Pending approvals
+                # and lifecycle state are retained separately in session.json.
+                session["event_log_dropped_records"] = session.get("event_log_dropped_records", 0) + 1
+            backlog.append(record)
+            self._flush_event_log(session)
             if "id" in message:
                 # Child approvals still need a human response on this same
                 # app-server connection, even though child turns do not own
@@ -971,13 +1119,15 @@ done
                     session["status"] = "running"
             elif method == "connection/closed":
                 if session["status"] in self.ACTIVE:
-                    session.update(status="disconnected", error="Codex connection lost. Resume the stored thread.", pending_requests=[])
+                    detail = params.get("detail", "Codex connection lost.")
+                    session.update(status="disconnected", error=str(detail)[:2000] + " Resume the stored thread.", pending_requests=[])
+            elif method == "connection/callbackError":
+                session["last_callback_error"] = bounded(params)
             elif not is_root:
                 # App-server forwards descendant-thread notifications. They
                 # remain visible in logs, but cannot finish or overwrite this
                 # session's parent turn, plan, message or outstanding requests.
-                if not method.endswith("/delta") or time.monotonic() - self._saved_at.get(session_id, 0) > 1:
-                    self._save(session)
+                self._save_event(session, method)
                 return
             elif method == "turn/started":
                 session["turn_id"] = params["turn"]["id"]
@@ -1011,10 +1161,21 @@ done
                 item = params.get("item", {})
                 if isinstance(item, dict) and item.get("type") == "agentMessage" and isinstance(item.get("text"), str):
                     session["last_agent_message"] = bounded(item["text"])
-            if not method.endswith("/delta") or time.monotonic() - self._saved_at.get(session_id, 0) > 1:
-                self._save(session)
+            self._save_event(session, method)
 
     def close(self):
+        with self._lock:
+            self._closed = True
+            for timer in self._save_timers.values():
+                timer.cancel()
+            self._save_timers.clear()
         for client in list(self._clients.values()):
             client.close()
         self._clients.clear()
+        with self._lock:
+            for session_id in list(self._dirty_sessions):
+                self._flush_event_log(self._sessions[session_id], force=True)
+                try:
+                    self._save(self._sessions[session_id])
+                except OSError:
+                    logger.warning("Session state still could not be saved during close")

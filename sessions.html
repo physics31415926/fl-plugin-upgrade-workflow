@@ -214,13 +214,21 @@
       actions.append(responseButton('中断当前执行','danger',()=>act(session,'interrupt')));box.append(actions);container.append(box);
     }
   }
+  function renderPersistenceNotice(session) {
+    let box=$('session-persistence-error');if(!box){box=el('div','notice error');box.id='session-persistence-error';box.setAttribute('role','status');$('session-error').after(box);}
+    const messages=[];
+    if(session.persistence_error)messages.push('任务状态暂未保存到磁盘，正在重试。agent 保持当前执行状态。');
+    if(session.event_log_error)messages.push('事件日志暂未保存，正在重试保留的记录。');
+    if(Number.isSafeInteger(session.event_log_dropped_records)&&session.event_log_dropped_records>0)messages.push('文件保存故障期间有 '+session.event_log_dropped_records+' 条历史事件日志未能保留。');
+    box.textContent=messages.join('\n');box.hidden=!messages.length;
+  }
   function renderDetail() {
     const session=current();$('session-detail').hidden=!session;if(!session)return;
     $('detail-title').textContent=(labels[session.backend]||session.backend)+' 升级任务';$('detail-status').textContent=statusLabel(session.status);$('detail-status').className='pill '+(statuses[session.status]?session.status:'');$('detail-subtitle').textContent=session.goal||'跟进分支适配，并收集实际验收证据。';$('detail-machine').textContent=session.ssh_alias+' · '+session.remote_workspace;$('detail-branch').textContent=session.branch+' · '+(session.commit?session.commit.slice(0,12):'待解析');$('detail-worktree').textContent=session.worktree||'准备中';$('detail-thread').textContent=session.thread_id||'启动后创建';
     $('start-session').textContent=session.thread_id?'继续任务':'启动任务';$('start-session').disabled=working(session)||state.actionBusy||!state.available;$('interrupt-session').textContent=session.status==='prepared'?'取消待启动任务':'中断当前执行';$('interrupt-session').disabled=(!working(session)&&session.status!=='prepared')||session.status==='interrupting'||state.actionBusy;$('send-message').disabled=state.actionBusy||['prepared','starting','interrupting','waiting_input','waiting_approval'].includes(session.status)||!state.available;$('message-hint').textContent=session.status==='waiting_input'||session.status==='waiting_approval'?'请先处理上方的授权或提问。':session.status==='prepared'?'启动任务后可以发送补充指令。':'执行中可补充指令；本轮结束后可继续任务。';
     $('prompt-preview').hidden=!session.prompt;$('detail-prompt').textContent=session.prompt||'';
     const progress=sessionProgress(session),plan=Array.isArray(session.plan)?session.plan:[],planNote=planMeta(session);$('detail-progress').hidden=!progress&&!plan.length&&!planNote;$('detail-progress-summary').textContent=progress;$('detail-progress-summary').hidden=!progress;$('detail-plan-meta').textContent=planNote;$('detail-plan-meta').hidden=!planNote;$('detail-plan').replaceChildren();$('detail-plan').hidden=!plan.length;for(const step of plan)$('detail-plan').append(el('li','',({pending:'待执行',in_progress:'进行中',completed:'已完成'}[step.status]||'待确认')+' · '+step.step));
-    $('session-error').hidden=!session.error;$('session-error').textContent=session.error||'';renderPending(session);renderEvents(session);
+    $('session-error').hidden=!session.error;$('session-error').textContent=session.error||'';renderPersistenceNotice(session);renderPending(session);renderEvents(session);
   }
   async function refresh(quiet=false) {
     if(state.fetching)return;state.fetching=true;
