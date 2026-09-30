@@ -343,7 +343,8 @@ class CodexSessionManager:
         # SSH passes its final argument through a remote shell. Each variable
         # is quoted once for that shell; the actual probe is constant stdin.
         arguments.append("sh -s -- " + " ".join(shlex.quote(path) for path in paths))
-        script = """workspace=$1
+        script = """printf 'FLFLOW_PROBE_READY=1\\n'
+workspace=$1
 shift
 if [ ! -d "$workspace" ]; then printf 'WORKSPACE=missing\\n'; exit 0; fi
 printf 'WORKSPACE=present\\n'
@@ -364,8 +365,10 @@ for model in "$@"; do
 done
 """
         try:
-            probe = subprocess.run(arguments, input=script, capture_output=True, text=True,
-                                   encoding="utf-8", errors="replace", timeout=20,
+            # Windows TextIOWrapper translates LF to CRLF when communicate()
+            # writes text stdin. A POSIX shell must receive the original LF
+            # bytes, otherwise commands such as shift and if gain a trailing CR.
+            probe = subprocess.run(arguments, input=script.encode("utf-8"), capture_output=True, timeout=20,
                                    creationflags=subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0)
         except subprocess.TimeoutExpired:
             result["error"] = "SSH 连接检查超时，请检查网络、入口端口和跳板机。"
@@ -375,8 +378,16 @@ done
             result["error"] = "无法运行 SSH 客户端，请检查本机安装。"
             check("ssh", "failed", result["error"])
             return result
+        stdout = probe.stdout.decode("utf-8", errors="replace") if isinstance(probe.stdout, bytes) else probe.stdout
+        stderr = probe.stderr.decode("utf-8", errors="replace") if isinstance(probe.stderr, bytes) else probe.stderr
+        remote_started = "FLFLOW_PROBE_READY=1" in stdout.splitlines()
+        if probe.returncode and remote_started:
+            check("ssh", "passed", "已通过 SSH 连接并执行远端只读预检。")
+            result["error"] = "SSH 已连通，但远端只读预检执行失败（退出码 " + str(probe.returncode) + "）；请检查远端 shell 和命令执行策略。"
+            check("environment_probe", "failed", result["error"])
+            return result
         if probe.returncode:
-            error = probe.stderr.lower()
+            error = stderr.lower()
             if "host key verification failed" in error or "authenticity of host" in error or "no host key is known" in error:
                 detail = "主机尚未信任或主机密钥已变更。请在本机终端确认主机指纹并完成一次 SSH 登录，然后重试。"
             elif any(value in error for value in ("permission denied", "authentication failed", "no more authentication methods")):
@@ -390,8 +401,12 @@ done
             result["error"] = detail
             check("ssh", "failed", detail)
             return result
+        if not remote_started:
+            result["error"] = "未收到远端预检启动标记。请确认 SSH 入口支持非交互命令，且没有 RemoteCommand 替换预检命令；仅支持交互终端的入口需配置可执行命令的连接。"
+            check("environment_probe", "failed", result["error"])
+            return result
         values = {}
-        for line in probe.stdout[:12000].splitlines():
+        for line in stdout[:12000].splitlines():
             key, separator, value = line.partition("=")
             if separator and re.fullmatch(r"WORKSPACE|REPOSITORY|COMMIT|BRANCH|DIRTY|GATE|TMUX|MODEL_[0-9]+", key):
                 values[key] = value[:200]

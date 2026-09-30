@@ -1,6 +1,7 @@
 import json
 from pathlib import Path
 import subprocess
+import sys
 import threading
 from unittest import TestCase, mock
 
@@ -21,13 +22,14 @@ class SSHDispatchTest(TestCase):
             "ssh_connection": {"host": "gpu.example.test", "user": "compute", "port": 2222, **values}})
 
     def success_output(self, dirty=False):
-        return "\n".join(["WORKSPACE=present", "REPOSITORY=present", "COMMIT=" + self.sha,
+        return "\n".join(["FLFLOW_PROBE_READY=1", "WORKSPACE=present", "REPOSITORY=present", "COMMIT=" + self.sha,
             "BRANCH=feature/adaptation", "DIRTY=" + ("yes" if dirty else "no"),
             "GATE=present", "TMUX=present", "MODEL_0=present", ""])
 
     def probe(self, profile, output=None, error="", returncode=0):
         with mock.patch("codex_sessions.shutil.which", return_value="ssh"), mock.patch("codex_sessions.subprocess.run") as run:
-            run.return_value = subprocess.CompletedProcess([], returncode, output if output is not None else self.success_output(), error)
+            output = output if output is not None else (self.success_output() if returncode == 0 else "")
+            run.return_value = subprocess.CompletedProcess([], returncode, output.encode("utf-8"), error.encode("utf-8"))
             result = self.manager.check_machine({"profile_id": profile["id"]})
             return result, run.call_args
 
@@ -61,7 +63,7 @@ class SSHDispatchTest(TestCase):
         profile = self.direct_profile()
         workspace = "/work/plugin' ; touch /tmp/should-never-run ; '"
         with mock.patch("codex_sessions.shutil.which", return_value="ssh"), mock.patch("codex_sessions.subprocess.run") as run:
-            run.return_value = subprocess.CompletedProcess([], 0, self.success_output(dirty=True), "")
+            run.return_value = subprocess.CompletedProcess([], 0, self.success_output(dirty=True).encode("utf-8"), b"")
             result = self.manager.check_machine({"profile_id": profile["id"], "remote_workspace": workspace})
         self.assertTrue(result["ok"])
         self.assertTrue(result["remote"]["git_dirty"])
@@ -71,9 +73,46 @@ class SSHDispatchTest(TestCase):
         self.assertIn("-F", arguments)
         self.assertEqual(arguments[-2], profile["ssh_alias"])
         self.assertIn("'\"'\"'", arguments[-1])
-        self.assertNotIn(workspace, run.call_args.kwargs["input"])
+        self.assertNotIn(workspace.encode("utf-8"), run.call_args.kwargs["input"])
         self.assertNotIn("shell", run.call_args.kwargs)
         self.assertLessEqual(run.call_args.kwargs["timeout"], 20)
+
+    def test_actual_pipe_receives_lf_script_bytes_without_windows_text_translation(self):
+        profile = self.direct_profile()
+        real_run = subprocess.run
+        received = []
+        child = ("import sys,json; script=sys.stdin.buffer.read(); "
+                 "print(json.dumps({'cr':script.count(bytes([13])), 'lf':script.count(bytes([10])), "
+                 "'ready':b'FLFLOW_PROBE_READY=1' in script}))")
+
+        def receive_pipe(arguments, **options):
+            child_result = real_run([sys.executable, "-c", child], **options)
+            self.assertEqual(child_result.returncode, 0)
+            received.append(json.loads(child_result.stdout.decode("utf-8")))
+            return subprocess.CompletedProcess(arguments, 0, self.success_output().encode("utf-8"), b"")
+
+        with mock.patch("codex_sessions.shutil.which", return_value="ssh"), mock.patch("codex_sessions.subprocess.run", side_effect=receive_pipe):
+            result = self.manager.check_machine({"profile_id": profile["id"]})
+        self.assertTrue(result["ok"])
+        self.assertEqual(received[0]["cr"], 0)
+        self.assertGreater(received[0]["lf"], 10)
+        self.assertTrue(received[0]["ready"])
+
+    def test_remote_probe_failure_is_reported_separately_after_ready_marker(self):
+        profile = self.direct_profile()
+        result, _ = self.probe(profile, output="FLFLOW_PROBE_READY=1\n", error="shell syntax error raw-secret-token", returncode=2)
+        self.assertFalse(result["ok"])
+        self.assertEqual(result["checks"][0]["status"], "passed")
+        self.assertEqual(result["checks"][1]["name"], "environment_probe")
+        self.assertIn("退出码 2", result["error"])
+        self.assertNotIn("raw-secret-token", json.dumps(result))
+
+    def test_missing_ready_marker_never_claims_authenticated_remote_probe(self):
+        profile = self.direct_profile()
+        for code in (0, 2):
+            result, _ = self.probe(profile, output="gateway welcome only\n", returncode=code)
+            self.assertFalse(result["ok"])
+            self.assertFalse(any(item["name"] == "ssh" and item["status"] == "passed" for item in result["checks"]))
 
     def test_first_trust_and_password_failures_are_actionable_without_raw_stderr(self):
         profile = self.direct_profile()
@@ -88,7 +127,7 @@ class SSHDispatchTest(TestCase):
 
     def test_missing_workspace_or_tmux_prevents_dispatch(self):
         profile = self.direct_profile()
-        for output in ("WORKSPACE=missing\n", self.success_output().replace("TMUX=present", "TMUX=missing")):
+        for output in ("FLFLOW_PROBE_READY=1\nWORKSPACE=missing\n", self.success_output().replace("TMUX=present", "TMUX=missing")):
             result, _ = self.probe(profile, output=output)
             self.assertFalse(result["ok"])
             with mock.patch.object(self.manager, "_check_connection", return_value=result), self.assertRaisesRegex(SessionError, "预检"):
