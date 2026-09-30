@@ -1,10 +1,11 @@
 #!/usr/bin/env python3
 """Read-only branch, CI, and adaptation-gate monitor.
 
-Gate evidence is intentionally separate from GitHub CI. A case passes only when
-the exact branch HEAD is bound to a manifest and every request in its JSON
-result passes. Neither an integrated PR nor a successful CI job implies that
-the manual adaptation gate ran.
+Gate evidence is intentionally separate from GitHub CI. Fresh results bind the
+exact branch HEAD to a manifest and validate every request. Audited historical
+acceptance is labeled separately, requires an identical Git tree and case set,
+and retains the original raw execution provenance. Neither an integrated PR
+nor a successful CI job implies that the manual adaptation gate ran.
 
 Manifest schema (one per backend/model/mode run):
   {"schema_version": 1, "run_id": "unique-id", "backend": "cuda",
@@ -37,9 +38,11 @@ from urllib.request import Request, urlopen
 SHA = re.compile(r"^[0-9a-f]{40}$")
 REF = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._/-]*$")
 REPO = re.compile(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")
+PLATFORM = re.compile(r"^[a-z][a-z0-9_-]{0,63}$")
 CASE_DIR = "tools/adaptation-gate-cases"
 LABELS = {"cuda": "NVIDIA", "ascend": "Ascend", "metax": "MetaX", "corex": "CoreX",
-          "hygon": "Hygon", "musa": "MUSA", "enflame": "Enflame", "kunlunxin": "Kunlunxin"}
+          "hygon": "Hygon", "musa": "MUSA", "thead": "THead",
+          "enflame": "Enflame", "kunlunxin": "Kunlunxin"}
 
 
 class MonitorError(RuntimeError):
@@ -69,7 +72,7 @@ class BranchMonitor:
     """Inspect a configured local remote-tracking branch and optional GitHub data."""
 
     def __init__(self, config: Path | str | dict[str, Any],
-                 transport: Callable[[str], dict[str, Any]] | None = None):
+                 transport: Callable[[str], dict[str, Any] | list[Any]] | None = None):
         if isinstance(config, (str, Path)):
             config_path = Path(config).expanduser().resolve()
             raw = json.loads(config_path.read_text(encoding="utf-8"))
@@ -109,12 +112,39 @@ class BranchMonitor:
         self.backend_prs = self.config.get("backend_prs", {})
         self.merged_commits = self.config.get("merged_commits", {})
         self.backend_labels = self.config.get("backend_labels", {})
+        # Dashboard backend IDs may differ from the workflow platform names.
+        # CoreX is registered as iluvatar in the plugin's CI workflow.
+        self.backend_ci_platforms = self.config.get("backend_ci_platforms", {"corex": "iluvatar"})
+        self.accepted_ci_runs = self.config.get("accepted_ci_runs", {})
+        self.backend_pr_discovery = self.config.get("backend_pr_discovery", {})
         if not isinstance(self.backend_prs, dict) or not isinstance(self.merged_commits, dict):
             raise MonitorError("backend_prs and merged_commits must be objects")
         if not isinstance(self.backend_labels, dict):
             raise MonitorError("backend_labels must be an object")
+        if (not isinstance(self.backend_ci_platforms, dict) or
+                not all(isinstance(backend, str) and PLATFORM.fullmatch(backend) and
+                        isinstance(platform, str) and PLATFORM.fullmatch(platform)
+                        for backend, platform in self.backend_ci_platforms.items())):
+            raise MonitorError("backend_ci_platforms must map backend IDs to workflow platform names")
+        if len(set(self.backend_ci_platforms.values())) != len(self.backend_ci_platforms):
+            raise MonitorError("backend_ci_platforms must use distinct workflow platform names")
+        self._ci_backend_ids = {platform: backend for backend, platform in self.backend_ci_platforms.items()}
+        if not isinstance(self.accepted_ci_runs, dict):
+            raise MonitorError("accepted_ci_runs must be an object")
+        if not isinstance(self.backend_pr_discovery, dict):
+            raise MonitorError("backend_pr_discovery must be an object")
+        for selector in self.backend_pr_discovery.values():
+            if not isinstance(selector, dict):
+                raise MonitorError("PR discovery selectors must be objects")
+            prefixes = selector.get("head_prefixes")
+            terms = selector.get("title_terms", [])
+            for values, required in ((prefixes, True), (terms, False)):
+                if (not isinstance(values, list) or len(values) > 10 or (required and not values) or
+                        not all(isinstance(value, str) and value.strip() and len(value) <= 200 and
+                                not any(ord(char) < 32 for char in value) for value in values)):
+                    raise MonitorError("PR discovery requires explicit head_prefixes and optional title_terms")
         self.transport = transport or self._http_json
-        self._api_cache: dict[str, tuple[float, dict[str, Any]]] = {}
+        self._api_cache: dict[str, tuple[float, dict[str, Any] | list[Any]]] = {}
         self._cache_lock = threading.RLock()
 
     @staticmethod
@@ -165,6 +195,14 @@ class BranchMonitor:
             raise MonitorError("No backends found in platforms.yml")
         return result
 
+    def _ci_platform(self, backend: str) -> str:
+        return self.backend_ci_platforms.get(backend, backend)
+
+    def _ci_test_jobs(self, backend: str, jobs: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        prefix = f"test-{self._ci_platform(backend)} / "
+        return [job for job in jobs if job.get("name", "").startswith(prefix) and
+                not any(part in job.get("name", "") for part in (" / notify / ", " / Setup ("))]
+
     def _version(self, sha: str) -> str | None:
         try:
             data = tomllib.loads(self._show(sha, "pyproject.toml"))
@@ -209,7 +247,7 @@ class BranchMonitor:
                                        "file": path, "test": test.name}
         return list(cases.values())
 
-    def _http_json(self, url: str) -> dict[str, Any]:
+    def _http_json(self, url: str) -> dict[str, Any] | list[Any]:
         gh = shutil.which("gh")
         if gh:
             try:
@@ -217,7 +255,7 @@ class BranchMonitor:
                                       encoding="utf-8", errors="replace", timeout=10)
                 if done.returncode == 0:
                     data = json.loads(done.stdout)
-                    if isinstance(data, dict):
+                    if isinstance(data, (dict, list)):
                         return data
             except (OSError, subprocess.TimeoutExpired, ValueError):
                 pass
@@ -227,22 +265,42 @@ class BranchMonitor:
             headers["Authorization"] = f"Bearer {token}"
         with urlopen(Request(url, headers=headers), timeout=6) as response:
             data = json.load(response)
-        if not isinstance(data, dict):
-            raise MonitorError("GitHub API response must be an object")
+        if not isinstance(data, (dict, list)):
+            raise MonitorError("GitHub API response must be an object or array")
         return data
 
-    def _api(self, path: str, force: bool) -> dict[str, Any]:
+    def _api_json(self, path: str, force: bool) -> dict[str, Any] | list[Any]:
         url = f"https://api.github.com/repos/{self.github_repo}/{path}"
         with self._cache_lock:
             cached = self._api_cache.get(url)
             if cached and not force and time.monotonic() - cached[0] < 300:
                 return cached[1]
         value = self.transport(url)
-        if not isinstance(value, dict):
-            raise MonitorError("GitHub transport must return an object")
+        if not isinstance(value, (dict, list)):
+            raise MonitorError("GitHub transport must return an object or array")
         with self._cache_lock:
             self._api_cache[url] = (time.monotonic(), value)
         return value
+
+    def _api(self, path: str, force: bool) -> dict[str, Any]:
+        value = self._api_json(path, force)
+        if not isinstance(value, dict):
+            raise MonitorError("GitHub API response must be an object")
+        return value
+
+    def _open_prs(self, branch: str, force: bool) -> list[dict[str, Any]]:
+        pulls = []
+        for page in range(1, 4):
+            query = urlencode({"state": "open", "base": branch, "sort": "updated",
+                               "direction": "desc", "per_page": 100, "page": page})
+            values = self._api_json(f"pulls?{query}", force)
+            if not isinstance(values, list):
+                raise MonitorError("GitHub PR list must be an array")
+            pulls.extend(value for value in values if isinstance(value, dict) and
+                         value.get("state") == "open" and value.get("base", {}).get("ref") == branch)
+            if len(values) < 100:
+                return pulls
+        raise MonitorError("Too many open PRs; configure an explicit backend PR")
 
     @staticmethod
     def _ci_status(checks: list[dict[str, Any]]) -> str:
@@ -260,6 +318,23 @@ class BranchMonitor:
         if any(x == "skipped" for x in conclusions) and all(x in ("success", "skipped") for x in conclusions):
             return "partial"
         return "passed" if all(x == "success" for x in conclusions) else "unknown"
+
+    @staticmethod
+    def _ci_check_url(checks: list[dict[str, Any]], status: str) -> str | None:
+        if status == "failed":
+            relevant = [check for check in checks if check.get("conclusion") in
+                        ("failure", "timed_out", "action_required", "startup_failure")]
+        elif status == "running":
+            # Prefer a job actually executing over an earlier queued check.
+            relevant = [check for check in checks if check.get("status") == "in_progress"]
+            relevant += [check for check in checks if check.get("status") not in ("completed", "in_progress")]
+        elif status in ("cancelled", "skipped", "partial", "passed"):
+            conclusion = {"cancelled": "cancelled", "skipped": "skipped",
+                          "partial": "skipped", "passed": "success"}[status]
+            relevant = [check for check in checks if check.get("conclusion") == conclusion]
+        else:
+            relevant = checks
+        return next((check["details_url"] for check in relevant if check.get("details_url")), None)
 
     def _branch_ci(self, branch: str, sha: str, force: bool, errors: list[str]) -> tuple[dict[str, Any], list[dict[str, Any]]]:
         result = {"status": "unknown", "scope": "branch", "detail": "No CI run for current branch HEAD",
@@ -289,27 +364,87 @@ class BranchMonitor:
             errors.append(f"GitHub branch CI unavailable: {exc}")
             return result, []
 
-    def _pr(self, backend: str, force: bool, errors: list[str]) -> tuple[dict[str, Any] | None, dict[str, Any] | None]:
+    def _pr(self, backend: str, branch: str, force: bool, errors: list[str],
+            open_prs: list[dict[str, Any]] | None = None, head: str | None = None) -> tuple[dict[str, Any] | None, dict[str, Any] | None]:
         value = self.backend_prs.get(backend)
         number = value.get("number") if isinstance(value, dict) else value
-        if not isinstance(number, int) or number <= 0:
+        number = number if type(number) is int and number > 0 else None
+        data = None
+        selected_by = "configured"
+        if number and self.github_repo:
+            try:
+                data = self._api(f"pulls/{number}", force)
+            except (OSError, ValueError, MonitorError) as exc:
+                errors.append(f"GitHub PR #{number} unavailable: {exc}")
+        selector = self.backend_pr_discovery.get(backend)
+        accepted = (data and data.get("merged") and data.get("base", {}).get("ref") == branch and
+                    head and self._ancestor(data.get("merge_commit_sha"), head))
+        if selector and open_prs is not None and not accepted:
+            candidates = [pr for pr in open_prs if
+                          any(str(pr.get("head", {}).get("ref", "")).startswith(prefix)
+                              for prefix in selector["head_prefixes"]) and
+                          (not selector.get("title_terms") or
+                           any(term.casefold() in str(pr.get("title", "")).casefold()
+                               for term in selector["title_terms"]))]
+            configured = next((pr for pr in candidates if pr.get("number") == number), None)
+            candidate = configured or (candidates[0] if len(candidates) == 1 else None)
+            if candidate and candidate.get("number") != number:
+                try:
+                    replacement = self._api(f"pulls/{candidate['number']}", force)
+                    if replacement.get("base", {}).get("ref") == branch:
+                        number, data, selected_by = candidate["number"], replacement, "discovered"
+                except (KeyError, OSError, ValueError, MonitorError) as exc:
+                    errors.append(f"Discovered {backend} PR unavailable: {exc}")
+            elif not configured and len(candidates) > 1:
+                errors.append(f"Multiple open {backend} adaptation PRs target this branch; configure the intended PR number")
+        if number is None:
             return None, None
         public = {"number": number, "url": f"https://github.com/{self.github_repo}/pull/{number}" if self.github_repo else None,
-                  "title": None, "draft": None}
-        if not self.github_repo:
-            return public, None
-        try:
-            data = self._api(f"pulls/{number}", force)
-            public.update(url=data.get("html_url", public["url"]), title=data.get("title"), draft=data.get("draft"))
-            return public, data
-        except (OSError, ValueError, MonitorError) as exc:
-            errors.append(f"GitHub PR #{number} unavailable: {exc}")
-            return public, None
+                  "title": None, "draft": None, "state": None, "merged": None, "selected_by": selected_by}
+        if data:
+            public.update(url=data.get("html_url", public["url"]), title=data.get("title"), draft=data.get("draft"),
+                          state=data.get("state"), merged=data.get("merged"))
+        return public, data
 
     def _ancestor(self, ancestor: str, head: str) -> bool:
         if not isinstance(ancestor, str) or not SHA.fullmatch(ancestor.lower()):
             return False
         return self._git("merge-base", "--is-ancestor", ancestor, head, check=False).returncode == 0
+
+    def _tree(self, commit: str) -> str | None:
+        if not isinstance(commit, str) or not SHA.fullmatch(commit):
+            return None
+        done = self._git("rev-parse", "--verify", f"{commit}^{{tree}}", check=False)
+        value = done.stdout.strip()
+        return value if done.returncode == 0 and SHA.fullmatch(value) else None
+
+    def _accepted_ci(self, backend: str, branch: str, sha: str, force: bool,
+                     errors: list[str]) -> dict[str, Any] | None:
+        record = self.accepted_ci_runs.get(backend)
+        if not isinstance(record, dict) or record.get("branch") != branch or not self.github_repo:
+            return None
+        commit = record.get("commit")
+        tree = self._tree(commit)
+        if not tree or tree != self._tree(sha):
+            return None
+        run_id, attempt = record.get("run_id"), record.get("attempt")
+        if type(run_id) is not int or type(attempt) is not int or run_id < 1 or attempt < 1:
+            errors.append(f"Invalid accepted CI run for {backend}")
+            return None
+        try:
+            endpoint = f"actions/runs/{run_id}/attempts/{attempt}"
+            run = self._api(endpoint, force)
+            if run.get("head_sha") != commit or run.get("run_attempt") != attempt:
+                raise MonitorError("Accepted CI run commit or attempt does not match its record")
+            data = self._api(endpoint + "/jobs?per_page=100", force)
+            jobs = self._ci_test_jobs(backend, data.get("jobs", []))
+            return {"status": self._ci_status(jobs), "scope": "accepted-tree", "commit": commit,
+                    "target_commit": sha, "tree": tree, "tree_matches_head": True,
+                    "url": run.get("html_url"), "run_id": run_id, "attempt": attempt,
+                    "detail": f"适配 CI 第 {attempt} 次运行，{len(jobs)} 个 backend 测试；验收代码树与当前分支相同"}
+        except (OSError, ValueError, MonitorError) as exc:
+            errors.append(f"Accepted {backend} CI unavailable: {exc}")
+            return None
 
     def _integration(self, backend: str, branch: str, sha: str, pr_data: dict[str, Any] | None) -> dict[str, Any]:
         fallback = self.merged_commits.get(backend)
@@ -334,10 +469,9 @@ class BranchMonitor:
                     branch_ci: dict[str, Any], pr_data: dict[str, Any] | None, force: bool,
                     errors: list[str]) -> dict[str, Any]:
         if integration["status"] == "merged":
-            jobs = [job for job in branch_jobs if job.get("name", "").startswith(f"test-{backend} / ") and
-                    not any(part in job.get("name", "") for part in (" / notify / ", " / Setup ("))]
+            jobs = self._ci_test_jobs(backend, branch_jobs)
             if not jobs:
-                jobs = [job for job in branch_jobs if job.get("name") == f"test-{backend}"]
+                jobs = [job for job in branch_jobs if job.get("name") == f"test-{self._ci_platform(backend)}"]
             return {"status": self._ci_status(jobs), "scope": "branch", "detail": f"{len(jobs)} backend test jobs at branch HEAD",
                     "url": branch_ci.get("url"), "commit": branch_ci.get("commit")}
         head_sha = (pr_data or {}).get("head", {}).get("sha")
@@ -348,11 +482,10 @@ class BranchMonitor:
             return {"status": "unknown", "scope": "pr", "detail": "No candidate branch CI data", "url": None, "commit": head_sha}
         try:
             data = self._api(f"commits/{head_sha}/check-runs?per_page=100", force)
-            checks = [check for check in data.get("check_runs", []) if
-                      check.get("name", "").startswith(f"test-{backend} / ") and
-                      not any(part in check.get("name", "") for part in (" / notify / ", " / Setup ("))]
-            return {"status": self._ci_status(checks), "scope": "pr", "detail": f"{len(checks)} backend test checks at PR head",
-                    "url": checks[0].get("details_url") if checks else None, "commit": head_sha}
+            checks = self._ci_test_jobs(backend, data.get("check_runs", []))
+            status = self._ci_status(checks)
+            return {"status": status, "scope": "pr", "detail": f"{len(checks)} backend test checks at PR head",
+                    "url": self._ci_check_url(checks, status), "commit": head_sha}
         except (OSError, ValueError, MonitorError) as exc:
             errors.append(f"GitHub {backend} checks unavailable: {exc}")
             return {"status": "unknown", "scope": "pr", "detail": "Candidate branch CI unavailable", "url": None, "commit": head_sha}
@@ -371,6 +504,57 @@ class BranchMonitor:
             except (OSError, ValueError):
                 continue
         return found
+
+    def _audit_record(self, backend: str, branch: str) -> dict[str, Any] | None:
+        path = self.evidence_dir / backend / "acceptance.json"
+        if not _inside(path, self.evidence_dir) or not path.is_file():
+            return None
+        try:
+            record = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            return None
+        if (not isinstance(record, dict) or record.get("schema_version") != 1 or
+                record.get("evidence_type") != "audited_record" or record.get("backend") != backend or
+                record.get("branch") != branch or not record.get("sources")):
+            return None
+        return record
+
+    def _audit_matches(self, record: dict[str, Any], sha: str, cases: list[dict[str, Any]]) -> bool:
+        tree = self._tree(record.get("tested_commit"))
+        if not tree or tree != record.get("tree") or tree != self._tree(sha) or not cases:
+            return False
+        gate = record.get("gate", {})
+        if not isinstance(gate, dict) or gate.get("status") != "passed":
+            return False
+        definitions = gate.get("scenario_definitions", [])
+        if not isinstance(definitions, list) or len(definitions) != len(cases):
+            return False
+        expected = {(case["scenario"], case["requests"]) for case in cases}
+        if any(not isinstance(row, dict) for row in definitions):
+            return False
+        if {(row.get("scenario"), row.get("requests")) for row in definitions} != expected:
+            return False
+        groups = gate.get("groups", [])
+        matrix = {(model, mode) for model in self.models for mode in self.modes}
+        if not isinstance(groups, list) or len(groups) != len(matrix) or any(not isinstance(row, dict) for row in groups):
+            return False
+        if {(row.get("model"), row.get("mode")) for row in groups} != matrix:
+            return False
+        requests = sum(case["requests"] for case in cases)
+        return (all(row.get("scenarios_passed") == len(cases) and row.get("scenarios_total") == len(cases) and
+                    row.get("requests_total") == requests for row in groups) and
+                gate.get("scenarios_passed") == len(cases) * len(matrix) and
+                gate.get("scenarios_total") == len(cases) * len(matrix) and
+                gate.get("requests_total") == requests * len(matrix))
+
+    def _audit_case(self, record: dict[str, Any], model: str, mode: str, scenario: str,
+                    requests: int) -> tuple[str, str, Path | None, int]:
+        group = next((row for row in record["gate"]["groups"] if row["model"] == model and row["mode"] == mode), {})
+        if not group.get("raw_results_dir"):
+            return "missing", "原始请求 JSON 未归档", None, 0
+        manifest = {"schema_version": 1, "run_id": "historical-acceptance", "model": model,
+                    "port": group.get("port"), "results_dir": group["raw_results_dir"]}
+        return self._result(self.evidence_dir / record["backend"] / "acceptance.json", manifest, scenario, requests)
 
     def _result(self, manifest_path: Path, manifest: dict[str, Any], scenario: str, requests: int) -> tuple[str, str, Path | None, int]:
         if manifest.get("schema_version") != 1 or not isinstance(manifest.get("run_id"), str) or not manifest["run_id"]:
@@ -426,6 +610,8 @@ class BranchMonitor:
               manifests: list[tuple[Path, dict[str, Any]]]) -> tuple[dict[str, Any], list[dict[str, Any]]]:
         rows: list[dict[str, Any]] = []
         used: list[tuple[Path, dict[str, Any]]] = []
+        audit = self._audit_record(backend, branch)
+        audit_matches = bool(audit and self._audit_matches(audit, sha, cases))
         for model in self.models:
             for mode in self.modes:
                 options = [(path, data) for path, data in manifests if
@@ -450,8 +636,21 @@ class BranchMonitor:
                                             "model": model, "mode": mode, "scenario": scenario})) if evidence_path else None
                             row.update(status=status, reason=reason, evidence_url=evidence_url,
                                        requests_passed=passed_count)
+                    if row["status"] in ("missing", "stale") and audit_matches:
+                        row.update(status="recorded_pass", evidence_type="audited_record",
+                                   reason=f"该模型和模式的 {len(cases)}/{len(cases)} 验收记录；原始请求 JSON 未归档",
+                                   evidence_url="/api/branch-evidence?" + urlencode({"branch": branch, "backend": backend,
+                                       "model": model, "mode": mode, "scenario": scenario}), requests_passed=None)
+                        raw_status, raw_reason, raw_path, raw_passed = self._audit_case(audit, model, mode, scenario, requests)
+                        if raw_status == "passed":
+                            row.update(reason="历史验收记录；原始请求 JSON 已核验，运行来源见证据", requests_passed=raw_passed,
+                                       raw_results_available=True)
+                        elif raw_status == "failed":
+                            row.update(status="failed", reason="验收记录与原始结果冲突：" + raw_reason, requests_passed=raw_passed)
+                    elif row["status"] == "missing" and audit and not audit_matches:
+                        row.update(status="stale", reason="历史验收记录与当前代码树或用例清单不一致")
                     rows.append(row)
-        totals = {status: sum(row["status"] == status for row in rows) for status in ("passed", "failed", "missing", "stale")}
+        totals = {status: sum(row["status"] == status for row in rows) for status in ("passed", "recorded_pass", "failed", "missing", "stale")}
         if not rows:
             gate_status = "missing"
         elif totals["failed"]:
@@ -460,15 +659,28 @@ class BranchMonitor:
             gate_status = "stale"
         elif totals["missing"]:
             gate_status = "missing" if not totals["passed"] else "partial"
+        elif totals["recorded_pass"]:
+            gate_status = "recorded_pass"
         else:
             gate_status = "passed"
         latest = max(used, key=lambda item: (str(item[1].get("created_at", "")), item[0].stat().st_mtime_ns))[1] if used else None
-        gate = {"status": gate_status, "passed": totals["passed"], "total": len(rows),
+        gate = {"status": gate_status, "passed": totals["passed"] + totals["recorded_pass"], "total": len(rows),
                 "failed": totals["failed"], "missing": totals["missing"] + totals["stale"],
-                "requests_passed": sum(row.get("requests_passed", 0) for row in rows),
+                "requests_passed": None if any(row.get("requests_passed") is None and row["status"] == "recorded_pass" for row in rows)
+                    else sum(row.get("requests_passed", 0) or 0 for row in rows),
                 "requests_total": sum(row["requests"] for row in rows),
                 "latest_commit": latest.get("commit") if latest else None,
                 "run_id": latest.get("run_id") if latest else None}
+        if audit:
+            gate.update(audit_sources=audit.get("sources"), source_thread=audit.get("source_thread"),
+                        evidence_type="audited_record" if totals["recorded_pass"] else "raw_json",
+                        tree_matches_head=audit_matches, recorded_cases=totals["recorded_pass"])
+            if totals["recorded_pass"]:
+                raw_available = all(row.get("raw_results_available") for row in rows if row["status"] == "recorded_pass")
+                gate.update(latest_commit=audit.get("tested_commit"), run_id="historical-acceptance",
+                            raw_results_available=raw_available,
+                            detail=f"历史验收 {gate['passed']}/{len(rows)}；已核对验收代码树相同。" +
+                                ("原始请求 JSON 已归档，原始运行时间与提交见证据。" if raw_available else "原始请求 JSON 未归档。"))
         return gate, rows
 
     def status(self, branch: str | None = None, force: bool = False) -> dict[str, Any]:
@@ -480,15 +692,27 @@ class BranchMonitor:
         registry = self._registry(sha)
         branch_ci, jobs = self._branch_ci(branch, sha, force, errors)
         manifests = self._manifests()
+        open_prs = None
+        if self.backend_pr_discovery and self.github_repo:
+            try:
+                open_prs = self._open_prs(branch, force)
+            except (OSError, ValueError, MonitorError) as exc:
+                errors.append(f"Backend PR discovery unavailable: {exc}")
         backends = []
-        for backend in dict.fromkeys([*registry, *self.backend_prs, *self.merged_commits]):
-            pr, pr_data = self._pr(backend, force, errors)
+        registry_backends = [self._ci_backend_ids.get(platform, platform) for platform in registry]
+        for backend in dict.fromkeys([*registry_backends, *self.backend_labels, *self.backend_prs,
+                                     *self.merged_commits, *self.backend_pr_discovery]):
+            pr, pr_data = self._pr(backend, branch, force, errors, open_prs, sha)
             integration = self._integration(backend, branch, sha, pr_data)
             ci = self._backend_ci(backend, integration, jobs, branch_ci, pr_data, force, errors)
+            current_ci = ci
+            accepted_ci = self._accepted_ci(backend, branch, sha, force, errors)
+            if accepted_ci:
+                ci = accepted_ci
             gate, results = self._gate(backend, branch, sha, cases, manifests)
             backends.append({"id": backend, "label": self.backend_labels.get(backend, LABELS.get(backend, backend)),
-                             "ci_enabled": registry.get(backend, False), "integration": integration,
-                             "ci": ci, "pr": pr, "gate": gate, "results": results})
+                             "ci_enabled": registry.get(self._ci_platform(backend), False), "integration": integration,
+                             "ci": ci, "current_ci": current_ci, "pr": pr, "gate": gate, "results": results})
         return {"branch": branch, "branch_ref": ref, "head": sha,
                 "head_url": f"https://github.com/{self.github_repo}/commit/{sha}" if self.github_repo else None,
                 "observed_at": _utc_now(), "vllm_version": self._version(sha),
@@ -517,20 +741,31 @@ class BranchMonitor:
             raise MonitorError("Unknown gate model or mode")
         _, sha = self._head(branch)
         registry = self._registry(sha)
-        if backend not in registry and backend not in self.backend_prs and backend not in self.merged_commits:
+        if (self._ci_platform(backend) not in registry and backend not in self.backend_labels and
+                backend not in self.backend_prs and backend not in self.merged_commits and
+                backend not in self.backend_pr_discovery):
             raise MonitorError("Unknown backend")
         cases = {case["scenario"]: case for case in self._cases(sha)}
         if scenario not in cases:
             raise MonitorError("Unknown gate scenario")
+        def historical_evidence() -> dict[str, Any]:
+            audit = self._audit_record(backend, branch)
+            if not audit or not self._audit_matches(audit, sha, list(cases.values())):
+                raise MonitorError("No current-HEAD evidence manifest or matching acceptance record")
+            status, reason, path, _ = self._audit_case(audit, model, mode, scenario, cases[scenario]["requests"])
+            raw = json.loads(path.read_text(encoding="utf-8")) if path and _inside(path, self.evidence_dir) else None
+            return {"evidence_type": "audited_record", "record": audit, "raw_result": raw,
+                    "raw_validation": status, "note": reason,
+                    "provenance": next(row for row in audit["gate"]["groups"] if row["model"] == model and row["mode"] == mode)}
         candidates = [(path, data) for path, data in self._manifests() if
                       data.get("backend") == backend and data.get("branch") == branch and
                       data.get("commit") == sha and data.get("model") == model and data.get("mode") == mode]
         if not candidates:
-            raise MonitorError("No current-HEAD evidence manifest")
+            return historical_evidence()
         path, manifest = max(candidates, key=lambda item: (str(item[1].get("created_at", "")), item[0].stat().st_mtime_ns))
         _, _, result_path, _ = self._result(path, manifest, scenario, cases[scenario]["requests"])
         if result_path is None or not _inside(result_path, self.evidence_dir):
-            raise MonitorError("No case result in selected manifest")
+            return historical_evidence()
         try:
             result = json.loads(result_path.read_text(encoding="utf-8"))
         except (OSError, ValueError) as exc:

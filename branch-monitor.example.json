@@ -13,6 +13,7 @@
     "corex": "CoreX",
     "hygon": "Hygon",
     "musa": "Moore Threads",
+    "thead": "THead",
     "enflame": "Enflame",
     "kunlunxin": "Kunlunxin"
   },
@@ -20,9 +21,26 @@
     "cuda": 484,
     "ascend": 487,
     "metax": 554,
-    "corex": 527
+    "corex": 566
+  },
+  "backend_ci_platforms": {
+    "corex": "iluvatar"
+  },
+  "backend_pr_discovery": {
+    "corex": {
+      "head_prefixes": ["adapt/iluvatar-corex-"],
+      "title_terms": ["CoreX"]
+    }
   },
   "merged_commits": {
     "cuda": "e88e4db75ece36e482a5fcc288929d4461d53184"
+  },
+  "accepted_ci_runs": {
+    "cuda": {
+      "branch": "0.4.0-dev",
+      "commit": "5e95688a9d81224619e06baa44e68745f49e8a22",
+      "run_id": 35199866402,
+      "attempt": 2
+    }
   }
 }

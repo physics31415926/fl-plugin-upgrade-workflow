@@ -718,7 +718,8 @@ class Engine:
             self.worker.start()
 
 
-def make_server(engine: Engine, host: str, port: int, monitor: object | None = None) -> ThreadingHTTPServer:
+def make_server(engine: Engine, host: str, port: int, monitor: object | None = None,
+                sessions: object | None = None) -> ThreadingHTTPServer:
     if host not in ("127.0.0.1", "localhost", "::1"):
         raise WorkflowError("HTTP control must bind to loopback only")
 
@@ -773,6 +774,21 @@ def make_server(engine: Engine, host: str, port: int, monitor: object | None = N
             if not self._trusted_request():
                 return
             target = urlsplit(self.path)
+            if target.path == "/api/capabilities":
+                self._json(200, {"read_only": False, "sessions": sessions is not None,
+                                 "refresh": monitor is not None})
+                return
+            if target.path in ("/api/codex-sessions", "/api/codex-health"):
+                if sessions is None:
+                    self._json(HTTPStatus.SERVICE_UNAVAILABLE, {"error": "Codex sessions are not configured"})
+                    return
+                try:
+                    self._json(200, sessions.health() if target.path.endswith("health") else sessions.snapshot())
+                except ValueError as exc:
+                    self._json(HTTPStatus.BAD_REQUEST, {"error": str(exc)})
+                except Exception as exc:
+                    self._json(HTTPStatus.INTERNAL_SERVER_ERROR, {"error": f"Codex sessions unavailable: {exc}"})
+                return
             if target.path == "/api/branch-status":
                 if monitor is None:
                     self._json(HTTPStatus.SERVICE_UNAVAILABLE, {"error": "Branch monitor is not configured"})
@@ -829,8 +845,9 @@ def make_server(engine: Engine, host: str, port: int, monitor: object | None = N
                 except (KeyError, IndexError, ValueError):
                     self._json(400, {"error": "Invalid platform, attempt, or tail"})
                 return
-            if target.path in ("/", "/index.html", "/workflow", "/workflow.html"):
-                filename = "workflow.html" if target.path in ("/workflow", "/workflow.html") else "index.html"
+            if target.path in ("/", "/index.html", "/workflow", "/workflow.html", "/sessions", "/sessions.html"):
+                filename = ("sessions.html" if target.path in ("/sessions", "/sessions.html") else
+                            "workflow.html" if target.path in ("/workflow", "/workflow.html") else "index.html")
                 path = Path(__file__).with_name(filename)
                 if not path.is_file():
                     self._json(404, {"error": f"{filename} is not installed"})
@@ -858,7 +875,31 @@ def make_server(engine: Engine, host: str, port: int, monitor: object | None = N
                 body = json.loads(self.rfile.read(length) or b"{}")
                 if not isinstance(body, dict):
                     raise WorkflowError("Request body must be a JSON object")
-                if target == "/api/branch-refresh":
+                session_action = re.fullmatch(r"/api/codex-sessions/([A-Za-z0-9_-]+)/(start|message|interrupt|respond)", target)
+                if target in ("/api/codex-machines", "/api/codex-machines/check", "/api/codex-sessions") or session_action:
+                    if sessions is None:
+                        self._json(HTTPStatus.SERVICE_UNAVAILABLE, {"error": "Codex sessions are not configured"})
+                        return
+                    if target == "/api/codex-machines":
+                        result = sessions.save_profile(body)
+                    elif target == "/api/codex-machines/check":
+                        result = sessions.check_machine(body)
+                    elif target == "/api/codex-sessions":
+                        result = sessions.create(body)
+                        if body.get("start") is True:
+                            result = sessions.start(result["id"])
+                    else:
+                        session_id, action = session_action.groups()
+                        if action == "start":
+                            result = sessions.start(session_id)
+                        elif action == "message":
+                            result = sessions.message(session_id, body.get("text", ""))
+                        elif action == "interrupt":
+                            result = sessions.interrupt(session_id)
+                        else:
+                            result = sessions.respond(session_id, body.get("request_id"), body.get("response"))
+                    self._json(200, result)
+                elif target == "/api/branch-refresh":
                     if monitor is None:
                         self._json(HTTPStatus.SERVICE_UNAVAILABLE, {"error": "Branch monitor is not configured"})
                     else:
@@ -884,13 +925,16 @@ def make_server(engine: Engine, host: str, port: int, monitor: object | None = N
     return ThreadingHTTPServer((host, port), Handler)
 
 
-def serve(engine: Engine, host: str, port: int, monitor: object | None = None) -> None:
-    server = make_server(engine, host, port, monitor)
+def serve(engine: Engine, host: str, port: int, monitor: object | None = None,
+          sessions: object | None = None) -> None:
+    server = make_server(engine, host, port, monitor, sessions)
     print(f"FL workflow dashboard: http://{host}:{server.server_port}/", flush=True)
     try:
         server.serve_forever()
     finally:
         server.server_close()
+        if sessions is not None:
+            sessions.close()
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -913,10 +957,12 @@ def main(argv: list[str] | None = None) -> int:
             return 0
         if args.action == "serve":
             from branch_monitor import BranchMonitor
+            from codex_sessions import CodexSessionManager
 
             monitor_path = args.monitor_config or args.config.resolve().parent / "branch-monitor.json"
             monitor = BranchMonitor(monitor_path) if monitor_path.is_file() else None
-            serve(engine, args.host, args.port, monitor)
+            sessions = CodexSessionManager(monitor.config, monitor_path.resolve().parent) if monitor else None
+            serve(engine, args.host, args.port, monitor, sessions)
             return 0
         if args.action == "start":
             result = engine.start(args.dry_run)
