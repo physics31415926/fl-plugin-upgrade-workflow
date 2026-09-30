@@ -127,6 +127,23 @@ class BranchMonitorTests(unittest.TestCase):
         self.assertEqual(gate["passed"], 0)
         self.assertEqual(gate["missing"], 20)
 
+    def test_configured_backend_without_registry_or_pr_remains_visible_and_unverified(self) -> None:
+        config = dict(self.config, backend_labels={"cuda": "NVIDIA", "thead": "THead PPU"})
+        monitor = BranchMonitor(config, transport=self._transport)
+        status = monitor.status()
+        self.assertEqual([item["id"] for item in status["backends"]], ["cuda", "ascend", "thead"])
+        thead = self._backend(status, "thead")
+        self.assertEqual(thead["label"], "THead PPU")
+        self.assertFalse(thead["ci_enabled"])
+        self.assertIsNone(thead["pr"])
+        self.assertEqual(thead["integration"]["status"], "unknown")
+        self.assertEqual(thead["ci"]["status"], "unknown")
+        self.assertEqual(thead["gate"]["status"], "missing")
+        self.assertEqual(thead["gate"]["passed"], 0)
+        self.assertEqual(thead["gate"]["missing"], 20)
+        with self.assertRaisesRegex(MonitorError, "No current-HEAD evidence"):
+            monitor.read_evidence("0.4.0-dev", "thead", MODELS[0], "eager", "text_single")
+
     def test_complete_matrix_passes_exact_current_head(self) -> None:
         for model in MODELS:
             for mode in MODES:

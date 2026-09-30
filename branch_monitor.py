@@ -40,7 +40,8 @@ REF = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._/-]*$")
 REPO = re.compile(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")
 CASE_DIR = "tools/adaptation-gate-cases"
 LABELS = {"cuda": "NVIDIA", "ascend": "Ascend", "metax": "MetaX", "corex": "CoreX",
-          "hygon": "Hygon", "musa": "MUSA", "enflame": "Enflame", "kunlunxin": "Kunlunxin"}
+          "hygon": "Hygon", "musa": "MUSA", "thead": "THead",
+          "enflame": "Enflame", "kunlunxin": "Kunlunxin"}
 
 
 class MonitorError(RuntimeError):
@@ -664,7 +665,8 @@ class BranchMonitor:
             except (OSError, ValueError, MonitorError) as exc:
                 errors.append(f"Backend PR discovery unavailable: {exc}")
         backends = []
-        for backend in dict.fromkeys([*registry, *self.backend_prs, *self.merged_commits, *self.backend_pr_discovery]):
+        for backend in dict.fromkeys([*registry, *self.backend_labels, *self.backend_prs,
+                                     *self.merged_commits, *self.backend_pr_discovery]):
             pr, pr_data = self._pr(backend, branch, force, errors, open_prs, sha)
             integration = self._integration(backend, branch, sha, pr_data)
             ci = self._backend_ci(backend, integration, jobs, branch_ci, pr_data, force, errors)
@@ -704,7 +706,9 @@ class BranchMonitor:
             raise MonitorError("Unknown gate model or mode")
         _, sha = self._head(branch)
         registry = self._registry(sha)
-        if backend not in registry and backend not in self.backend_prs and backend not in self.merged_commits:
+        if (backend not in registry and backend not in self.backend_labels and
+                backend not in self.backend_prs and backend not in self.merged_commits and
+                backend not in self.backend_pr_discovery):
             raise MonitorError("Unknown backend")
         cases = {case["scenario"]: case for case in self._cases(sha)}
         if scenario not in cases:
