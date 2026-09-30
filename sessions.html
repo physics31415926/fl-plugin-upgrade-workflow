@@ -261,8 +261,8 @@
       if(policy.mode==='monitor')button.append(el('div','session-sub','已有 PR · 仅监控'));
       const provenance=reportedProvenance(session);if(provenance)button.append(el('div','session-sub','上报候选：'+provenance.candidate_commit.slice(0,12)+' · 观察于 '+provenance.observed_at));
       const progress=sessionProgress(session),latest=latestSessionMessage(session),planNote=planMeta(session);
-      if(latest)button.append(el('div','session-sub','最新消息：'+latest.slice(0,160)+(latest.length>160?'…':'')));
       if(progress)button.append(el('div','session-sub',(latest?'阶段摘要：':'')+progress.slice(0,160)+(progress.length>160?'…':'')));
+      if(latest)button.append(el('div','session-sub','Agent 消息：'+latest.slice(0,160)+(latest.length>160?'…':'')));
       if(planNote)button.append(el('div','session-sub',planNote));
     }
     reconcileTaskNodes(box,sessions.map(session=>sessionListCards.get(String(session.id)).button));

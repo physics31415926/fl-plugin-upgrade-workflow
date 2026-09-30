@@ -876,8 +876,8 @@
     const fullMessage = el("details", "task-full-message"), fullMessageText = el("div", "task-message");
     fullMessage.append(el("summary", "", "展开完整进度消息"),fullMessageText);
     const latestSection = el("section"), latestMessage = el("div", "task-message"), latestFull = el("details", "task-full-message"), latestFullText = el("div", "task-message");
-    latestFull.append(el("summary", "", "展开完整最新消息"),latestFullText);latestSection.append(el("p", "task-note", "最新消息"),latestMessage,latestFull);
-    header.append(title,status); root.append(header,meta,workBranch,policyBox,identity,goal,planNote,plan,latestSection,messageLabel,message,fullMessage,error,requests,actions);
+    latestFull.append(el("summary", "", "展开完整 Agent 消息"),latestFullText);latestSection.append(el("p", "task-note", "Agent 消息"),latestMessage,latestFull);
+    header.append(title,status); root.append(header,meta,workBranch,policyBox,identity,goal,planNote,plan,messageLabel,message,fullMessage,latestSection,error,requests,actions);
     const followup = el("details", "task-followup"), text = el("textarea"), send = el("button", "button", "发送补充指令");
     text.placeholder = "需要调整目标或继续跟进时填写"; text.setAttribute("aria-label", "补充任务指令");
     followup.append(el("summary", "", "补充指令"),text,send); root.append(followup);
@@ -915,7 +915,7 @@
     if (!plan.length) card.plan.append(el("li", "", monitor ? "尚无历史任务计划。" : "等待 agent 报告执行计划。"));
     for (const step of plan) card.plan.append(el("li", monitor ? 'history' : step.status, planStepText(step.status,monitor) + " · " + step.step));
     const progress = sessionProgress(session) || (monitor ? "尚无历史任务消息。" : session.status === "prepared" ? "机器配置完成后，可启动 agent。" : "等待 agent 的进展消息…");
-    card.messageLabel.textContent = monitor ? '历史阶段进度摘要' : typeof session.progress_summary === 'string' && session.progress_summary.trim() ? '阶段进度摘要' : '最新消息';
+    card.messageLabel.textContent = monitor ? '历史阶段进度摘要' : typeof session.progress_summary === 'string' && session.progress_summary.trim() ? '阶段进度摘要' : 'Agent 消息';
     card.message.textContent = progress.length > 600 ? progress.slice(0,600) + "…" : progress;
     card.fullMessage.hidden = progress.length <= 600; card.fullMessageText.textContent = progress;
     const latest = latestSessionMessage(session);card.latestSection.hidden = !latest;card.latestMessage.textContent = latest.length > 350 ? latest.slice(0,350) + '…' : latest;card.latestFull.hidden = latest.length <= 350;card.latestFullText.textContent = latest;
