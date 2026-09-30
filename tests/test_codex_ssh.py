@@ -211,10 +211,10 @@ class SSHDispatchTest(TestCase):
     def test_real_plan_and_last_message_survive_restart_without_claiming_gate_success(self):
         session = self.manager.create(self.payload)
         client = self.start(session)
-        client.callback({"method": "turn/plan/updated", "params": {"plan": [
+        client.callback({"method": "turn/plan/updated", "params": {"threadId": "thread-123", "plan": [
             {"step": "环境检查", "status": "completed"}, {"step": "Gate 验收", "status": "inProgress"}]}})
-        client.callback({"method": "item/completed", "params": {"item": {"type": "agentMessage", "text": "模型目录缺失，验收尚未执行。"}}})
-        client.callback({"method": "turn/completed", "params": {"turn": {"status": "completed"}}})
+        client.callback({"method": "item/completed", "params": {"threadId": "thread-123", "item": {"type": "agentMessage", "text": "模型目录缺失，验收尚未执行。"}}})
+        client.callback({"method": "turn/completed", "params": {"threadId": "thread-123", "turn": {"status": "completed"}}})
         other = CodexSessionManager(self.config, self.base, FakeClient)
         state = other.snapshot()["sessions"][0]
         self.assertEqual(state["plan"][1]["status"], "in_progress")

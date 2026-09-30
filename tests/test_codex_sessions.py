@@ -34,10 +34,10 @@ class FakeClient:
         if method in {"thread/start", "thread/resume"}:
             return {"thread": {"id": "thread-123"}, "model": "user-default"}
         if method == "turn/start":
-            self.callback({"method": "turn/started", "params": {"turn": {"id": "turn-1"}}})
+            self.callback({"method": "turn/started", "params": {"threadId": "thread-123", "turn": {"id": "turn-1"}}})
             return {"turn": {"id": "turn-1", "status": "inProgress"}}
         if method == "turn/interrupt":
-            self.callback({"method": "turn/completed", "params": {"turn": {"id": "turn-1", "status": "interrupted"}}})
+            self.callback({"method": "turn/completed", "params": {"threadId": "thread-123", "turn": {"id": "turn-1", "status": "interrupted"}}})
         return {}
 
     def respond(self, request_id, result):
@@ -235,7 +235,7 @@ class SessionsTest(unittest.TestCase):
     def test_permission_scope_is_limited_to_displayed_request(self):
         session = self.create()
         client = self.start(session)
-        client.callback({"id": 10, "method": "item/permissions/requestApproval", "params": {"permissions": {"network": {"enabled": True}}}})
+        client.callback({"id": 10, "method": "item/permissions/requestApproval", "params": {"threadId": "thread-123", "permissions": {"network": {"enabled": True}}}})
         with self.assertRaises(SessionError):
             self.manager.respond(session["id"], 10, {"permissions": {"fileSystem": {"write": ["/"]}}})
         self.manager.respond(session["id"], 10, {"permissions": {"network": {"enabled": True}}, "scope": "session"})
@@ -244,7 +244,7 @@ class SessionsTest(unittest.TestCase):
     def test_user_answers_are_bound_to_pending_question_ids(self):
         session = self.create()
         client = self.start(session)
-        client.callback({"id": "q", "method": "item/tool/requestUserInput", "params": {"questions": [{"id": "machine", "question": "Which GPU?"}]}})
+        client.callback({"id": "q", "method": "item/tool/requestUserInput", "params": {"threadId": "thread-123", "questions": [{"id": "machine", "question": "Which GPU?"}]}})
         with self.assertRaises(SessionError):
             self.manager.respond(session["id"], "q", {"answers": {"other": {"answers": ["a"]}}})
         self.manager.respond(session["id"], "q", {"answers": {"machine": {"answers": ["A100"]}}})
@@ -253,8 +253,8 @@ class SessionsTest(unittest.TestCase):
     def test_events_and_completed_status_survive_dashboard_restart(self):
         session = self.create()
         client = self.start(session)
-        client.callback({"method": "item/agentMessage/delta", "params": {"delta": "Gate results received"}})
-        client.callback({"method": "turn/completed", "params": {"turn": {"status": "completed"}}})
+        client.callback({"method": "item/agentMessage/delta", "params": {"threadId": "thread-123", "delta": "Gate results received"}})
+        client.callback({"method": "turn/completed", "params": {"threadId": "thread-123", "turn": {"status": "completed"}}})
         manager = CodexSessionManager(self.config, self.base, FakeClient)
         state = manager.snapshot()["sessions"][0]
         self.assertEqual(state["status"], "completed")
@@ -278,6 +278,68 @@ class SessionsTest(unittest.TestCase):
         self.assertEqual(FakeClient.instances[0].requests, [("account/read", {"refreshToken": False})])
         self.assertNotIn("email", json.dumps(health))
         self.assertTrue(FakeClient.instances[0].process.closed)
+
+    def test_child_final_does_not_complete_parent_or_clear_parent_approval(self):
+        session = self.create()
+        client = self.start(session)
+        parent_plan = [{"step": "版本适配", "status": "in_progress"}]
+        client.callback({"method": "turn/plan/updated", "params": {"threadId": "thread-123", "plan": parent_plan}})
+        client.callback({"method": "item/completed", "params": {"threadId": "thread-123", "item": {"type": "agentMessage", "text": "继续执行父任务适配。"}}})
+        client.callback({"id": 1, "method": "item/commandExecution/requestApproval", "params": {"threadId": "thread-123", "command": "ssh validation_host read-only"}})
+        for method, params in (
+            ("turn/started", {"turn": {"id": "child-turn"}}),
+            ("turn/plan/updated", {"plan": [{"step": "只读审查", "status": "completed"}]}),
+            ("item/completed", {"item": {"type": "agentMessage", "text": "子任务审查结束。"}}),
+            ("thread/status/changed", {"status": {"type": "idle"}}),
+            ("turn/completed", {"turn": {"id": "child-turn", "status": "completed"}}),
+        ):
+            client.callback({"method": method, "params": {"threadId": "child-thread", **params}})
+        state = self.manager._copy(session["id"])
+        self.assertEqual(state["status"], "waiting_approval")
+        self.assertEqual(state["turn_id"], "turn-1")
+        self.assertEqual(state["plan"], parent_plan)
+        self.assertEqual(state["last_agent_message"], "继续执行父任务适配。")
+        self.assertEqual([r["id"] for r in state["pending_requests"]], [1])
+        self.assertEqual(client.responses, [])
+        self.assertTrue(any(event["source_scope"] == "child" for event in state["events"]))
+
+    def test_child_approval_stays_visible_until_human_response_even_after_parent_completion(self):
+        session = self.create()
+        client = self.start(session)
+        client.callback({"id": 2, "method": "item/commandExecution/requestApproval", "params": {"threadId": "child-thread", "command": "ssh validation_host read-only"}})
+        state = self.manager._copy(session["id"])
+        self.assertEqual(state["status"], "running")
+        self.assertEqual(state["pending_requests"][0]["source_thread_id"], "child-thread")
+        self.assertEqual(state["pending_requests"][0]["source_scope"], "child")
+        self.assertEqual(client.responses, [])
+        client.callback({"method": "turn/completed", "params": {"threadId": "thread-123", "turn": {"id": "turn-1", "status": "completed"}}})
+        self.assertEqual(self.manager._copy(session["id"])["pending_requests"][0]["id"], 2)
+        self.manager.respond(session["id"], 2, {"decision": "accept"})
+        state = self.manager._copy(session["id"])
+        self.assertEqual(state["status"], "completed")
+        self.assertEqual(state["pending_requests"], [])
+        self.assertEqual(client.responses, [(2, {"decision": "accept"})])
+
+    def test_child_request_resolved_does_not_clear_other_parent_requests(self):
+        session = self.create()
+        client = self.start(session)
+        for request_id, thread in ((1, "thread-123"), (2, "child-thread")):
+            client.callback({"id": request_id, "method": "item/commandExecution/requestApproval", "params": {"threadId": thread, "command": "read-only"}})
+        client.callback({"method": "serverRequest/resolved", "params": {"threadId": "child-thread", "requestId": 2}})
+        state = self.manager._copy(session["id"])
+        self.assertEqual([r["id"] for r in state["pending_requests"]], [1])
+        self.assertEqual(state["status"], "waiting_approval")
+        self.assertEqual(client.responses, [])
+
+    def test_unscoped_final_is_ignored_and_nested_root_scope_is_supported(self):
+        session = self.create()
+        client = self.start(session)
+        client.callback({"method": "turn/completed", "params": {"turn": {"id": "unknown-turn", "status": "completed"}}})
+        client.callback({"method": "item/completed", "params": {"item": {"threadId": "thread-123", "type": "agentMessage", "text": "父任务仍在执行。"}}})
+        state = self.manager._copy(session["id"])
+        self.assertEqual(state["status"], "running")
+        self.assertEqual(state["turn_id"], "turn-1")
+        self.assertEqual(state["last_agent_message"], "父任务仍在执行。")
 
 
 if __name__ == "__main__":

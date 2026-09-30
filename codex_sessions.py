@@ -297,7 +297,8 @@ class CodexSessionManager:
     def save_profile(self, payload):
         profile_id = self._name(payload.get("id") or uuid.uuid4().hex, "profile id")
         with self._lock:
-            values = {**self._profiles.get(profile_id, {}), **payload}
+            previous = self._profiles.get(profile_id, {})
+            values = {**previous, **payload}
             if not values.get("ssh_alias") and values.get("ssh_connection"):
                 values["ssh_alias"] = "flflow-" + profile_id[:16]
             profile = self._machine(values, require_ready=False)
@@ -308,7 +309,12 @@ class CodexSessionManager:
                 config_path = self.root / "ssh" / (profile_id + ".conf")
                 self._write_ssh_config(config_path, profile["ssh_alias"], profile["ssh_connection"])
                 profile["ssh_config_path"] = str(config_path)
-            profile["last_check"] = None
+            same_connection = all(previous.get(field) == profile.get(field) for field in ("ssh_alias", "ssh_connection"))
+            same_readiness = same_connection and all(previous.get(field) == profile.get(field)
+                for field in ("backend", "role", "remote_workspace", "model_paths"))
+            profile["last_check"] = previous.get("last_check") if same_readiness else None
+            if "last_connection_check" in previous:
+                profile["last_connection_check"] = previous["last_connection_check"] if same_connection else None
             self._profiles[profile_id] = profile
             atomic_json(self.root / "machines.json", self._profiles)
         return dict(profile)
@@ -481,12 +487,81 @@ done
 
     def snapshot(self):
         with self._lock:
+            for session in self._sessions.values():
+                self._refresh_progress_artifact(session)
             return json.loads(json.dumps({
                 "available": bool(self.executable), "default_branch": self.default_branch,
                 "backends": sorted(self.backends), "health": self._health,
                 "machine_profiles": list(self._profiles.values()),
                 "sessions": sorted(self._sessions.values(), key=lambda s: s["created_at"], reverse=True),
             }))
+
+    def _refresh_progress_artifact(self, session):
+        """Read bounded progress from this session's isolated worktree only."""
+        try:
+            worktree = Path(session["worktree"]).resolve(strict=True)
+            expected = (self.root / "worktrees" / session["id"]).resolve(strict=True)
+            workspace_root = (self.root / "worktrees").resolve(strict=True)
+            if worktree != expected or not worktree.is_relative_to(workspace_root):
+                return
+            candidate = worktree / ".flflow-progress.json"
+            path = candidate.resolve(strict=True)
+            if not path.is_relative_to(worktree) or not path.is_file():
+                return
+            before = path.stat()
+            if before.st_size > 65536:
+                return
+            with path.open("rb") as file:
+                content = file.read(65537)
+            after = path.stat()
+            if len(content) > 65536 or (before.st_mtime_ns, before.st_size) != (after.st_mtime_ns, after.st_size):
+                return
+            artifact = json.loads(content.decode("utf-8"))
+            if not isinstance(artifact, dict) or type(artifact.get("schema_version")) is not int or artifact["schema_version"] != 1:
+                return
+            if artifact.get("session_id") != session["id"] or artifact.get("backend") != session["backend"]:
+                return
+            plan = artifact.get("plan")
+            if not isinstance(plan, list) or not 1 <= len(plan) <= 30:
+                return
+            normalized = []
+            for item in plan:
+                if not isinstance(item, dict) or not isinstance(item.get("step"), str) or not 1 <= len(item["step"].strip()) <= 1000:
+                    return
+                if "\x00" in item["step"] or item.get("status") not in {"pending", "in_progress", "completed"}:
+                    return
+                item["step"].encode("utf-8")
+                normalized.append({"step": item["step"].strip(), "status": item["status"]})
+            summary = artifact.get("summary")
+            if summary is not None and (not isinstance(summary, str) or len(summary) > 24000 or "\x00" in summary):
+                return
+            if summary is not None:
+                summary.encode("utf-8")
+            artifact_time = after.st_mtime
+            current_time = session.get("plan_updated_at")
+            if current_time:
+                try:
+                    recorded_time = datetime.fromisoformat(current_time.replace("Z", "+00:00")).timestamp()
+                except (ValueError, TypeError):
+                    recorded_time = 0
+                if session.get("plan_source") != "artifact" and artifact_time <= recorded_time:
+                    return
+                if session.get("plan_source") == "artifact" and artifact_time < recorded_time:
+                    return
+            stamp = datetime.fromtimestamp(artifact_time, timezone.utc).isoformat(timespec="microseconds")
+            changed = session.get("plan") != normalized or session.get("plan_source") != "artifact" or session.get("plan_updated_at") != stamp
+            if session.get("progress_summary") != summary:
+                changed = True
+            if not changed:
+                return
+            session.update(plan=normalized, plan_source="artifact", plan_updated_at=stamp,
+                           progress_artifact=".flflow-progress.json")
+            session["progress_summary"] = summary
+            self._save(session)
+        except (OSError, ValueError, TypeError, KeyError, OverflowError, RuntimeError):
+            # Partial writes, missing files and invalid agent output retain the
+            # last valid plan. Artifact content never changes turn/Gate status.
+            return
 
     @staticmethod
     def _same_machine(left, right):
@@ -570,6 +645,13 @@ done
             "mode": "<eager-or-graph>", "port": 8000, "results_dir": "results",
             "created_at": "<actual-run-UTC-time>",
         }
+        progress_example = {"schema_version": 1, "session_id": session["id"], "backend": session["backend"],
+                            "plan": [{"step": "环境检查", "status": "in_progress"},
+                                     {"step": "版本适配", "status": "pending"},
+                                     {"step": "服务启动", "status": "pending"},
+                                     {"step": "Gate 验收", "status": "pending"},
+                                     {"step": "结果归档", "status": "pending"}],
+                            "summary": "填写当前真实进展、阻塞和下一步。"}
         ssh_arguments = ["ssh"]
         if session.get("ssh_config_path"):
             ssh_arguments += ["-F", session["ssh_config_path"]]
@@ -586,6 +668,10 @@ done
             f"{ssh_instruction}\n"
             "先调用 update_plan 制定环境检查、版本适配、服务启动、Gate 验收、结果归档五个阶段，"
             "随实际执行更新每项 pending/in_progress/completed；遇到阻塞保留未完成项，并说明需要的用户操作。"
+            "若当前会话没有 update_plan 工具，必须在本机隔离 worktree 根目录持续维护 .flflow-progress.json，"
+            "每阶段有真实变化就原子写入；文件不得超过 64 KiB，不得链接到 worktree 外。"
+            "只写真实阶段，不根据轮次结束或 open PR 将验收标为完成。使用以下格式：\n"
+            + json.dumps(progress_example, ensure_ascii=False, indent=2) + "\n"
             "先读取仓库 AGENTS.md 和相关 vllm-upgrade-flagos / vllm-plugin-fl-setup-flagos 技能，确认版本和 backend。"
             "先只读检查指定机器、硬件、远程目录 git 状态和模型路径；在独立工作分支/目录完成变更，保留现有修改。"
             "SSH 使用上述保存的配置和别名；不读取、复制或输出私钥内容，不在配置、命令或日志中写密码/token。"
@@ -827,9 +913,29 @@ done
                 raise SessionError("Unsupported request type; interrupt the task to cancel")
             client.respond(request["id"], result)
             session["pending_requests"] = [r for r in session["pending_requests"] if r is not request]
-            session["status"] = "running" if not session["pending_requests"] else session["status"]
+            if request.get("source_scope", "root") == "root" and session["status"] in {"waiting_approval", "waiting_input"}:
+                if not any(r.get("source_scope", "root") == "root" for r in session["pending_requests"]):
+                    session["status"] = "running"
             self._save(session)
         return self._copy(session_id)
+
+    @staticmethod
+    def _event_thread_id(params):
+        if not isinstance(params, dict):
+            return None
+        for key in ("threadId", "thread_id"):
+            if isinstance(params.get(key), str) and params[key]:
+                return params[key]
+        thread = params.get("thread")
+        if isinstance(thread, dict) and isinstance(thread.get("id"), str):
+            return thread["id"]
+        for field in ("item", "turn"):
+            nested = params.get(field)
+            if isinstance(nested, dict):
+                for key in ("threadId", "thread_id"):
+                    if isinstance(nested.get(key), str) and nested[key]:
+                        return nested[key]
+        return None
 
     def _event(self, session_id, message):
         with self._lock:
@@ -837,7 +943,12 @@ done
             if not session:
                 return
             method, params = message.get("method", ""), message.get("params", {})
-            record = {"at": now(), "method": method, "params": bounded(params)}
+            event_thread = self._event_thread_id(params)
+            root_thread = session.get("thread_id")
+            is_root = bool(root_thread and event_thread == root_thread)
+            scope = "root" if is_root else ("child" if event_thread and root_thread else "unknown")
+            record = {"at": now(), "method": method, "params": bounded(params),
+                      "source_thread_id": event_thread, "source_scope": scope}
             session["events"].append(record)
             session["events"] = session["events"][-80:]
             event_path = self.root / session_id / "events.jsonl"
@@ -845,8 +956,29 @@ done
             with event_path.open("a", encoding="utf-8") as file:
                 file.write(json.dumps(record, ensure_ascii=False) + "\n")
             if "id" in message:
-                session["pending_requests"].append({"id": message["id"], "method": method, "params": params})
-                session["status"] = "waiting_input" if method == "item/tool/requestUserInput" else "waiting_approval"
+                # Child approvals still need a human response on this same
+                # app-server connection, even though child turns do not own
+                # the parent session's lifecycle or progress.
+                session["pending_requests"].append({"id": message["id"], "method": method, "params": params,
+                    "source_thread_id": event_thread, "source_scope": scope})
+                if is_root:
+                    session["status"] = "waiting_input" if method == "item/tool/requestUserInput" else "waiting_approval"
+            elif method == "serverRequest/resolved":
+                request_id = params.get("requestId")
+                session["pending_requests"] = [r for r in session["pending_requests"]
+                    if not (str(r["id"]) == str(request_id) and (not event_thread or r.get("source_thread_id") == event_thread))]
+                if not any(r.get("source_scope", "root") == "root" for r in session["pending_requests"]) and session["status"] in {"waiting_approval", "waiting_input"}:
+                    session["status"] = "running"
+            elif method == "connection/closed":
+                if session["status"] in self.ACTIVE:
+                    session.update(status="disconnected", error="Codex connection lost. Resume the stored thread.", pending_requests=[])
+            elif not is_root:
+                # App-server forwards descendant-thread notifications. They
+                # remain visible in logs, but cannot finish or overwrite this
+                # session's parent turn, plan, message or outstanding requests.
+                if not method.endswith("/delta") or time.monotonic() - self._saved_at.get(session_id, 0) > 1:
+                    self._save(session)
+                return
             elif method == "turn/started":
                 session["turn_id"] = params["turn"]["id"]
                 session["initial_prompt_sent"] = True
@@ -855,7 +987,7 @@ done
                 turn = params.get("turn", {})
                 session["status"] = {"completed": "completed", "interrupted": "interrupted", "failed": "failed"}.get(turn.get("status"), "failed")
                 session["error"] = turn.get("error")
-                session["pending_requests"] = []
+                session["pending_requests"] = [r for r in session["pending_requests"] if r.get("source_scope", "root") != "root"]
                 session["turn_id"] = None
             elif method == "turn/plan/updated":
                 plan = params.get("plan", [])
@@ -868,20 +1000,17 @@ done
                         if status in {"pending", "in_progress", "completed"}:
                             normalized.append({"step": item["step"][:1000], "status": status})
                     session["plan"] = normalized
-                    session["plan_updated_at"] = now()
+                    session["plan_updated_at"] = datetime.now(timezone.utc).isoformat(timespec="microseconds")
+                    session["plan_source"] = "notification"
+                    session["progress_summary"] = None
+                    session.pop("progress_artifact", None)
                     if isinstance(params.get("explanation"), str):
                         session["plan_explanation"] = params["explanation"][:4000]
+                        session["progress_summary"] = session["plan_explanation"]
             elif method == "item/completed":
                 item = params.get("item", {})
                 if isinstance(item, dict) and item.get("type") == "agentMessage" and isinstance(item.get("text"), str):
                     session["last_agent_message"] = bounded(item["text"])
-            elif method == "serverRequest/resolved":
-                session["pending_requests"] = [r for r in session["pending_requests"] if str(r["id"]) != str(params.get("requestId"))]
-                if not session["pending_requests"] and session["status"] in {"waiting_approval", "waiting_input"}:
-                    session["status"] = "running"
-            elif method == "connection/closed":
-                if session["status"] in self.ACTIVE:
-                    session.update(status="disconnected", error="Codex connection lost. Resume the stored thread.", pending_requests=[])
             if not method.endswith("/delta") or time.monotonic() - self._saved_at.get(session_id, 0) > 1:
                 self._save(session)
 
