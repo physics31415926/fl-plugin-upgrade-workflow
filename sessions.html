@@ -67,7 +67,7 @@
   const $ = id => document.getElementById(id);
   const API = '/api/codex-sessions';
   const labels = {cuda:'NVIDIA / CUDA',ascend:'Ascend / 昇腾',metax:'MetaX / 沐曦',corex:'CoreX / 天数智芯',hygon:'Hygon / 海光',musa:'MUSA / 摩尔线程',enflame:'Enflame / 燧原',kunlunxin:'Kunlunxin / 昆仑芯',thead:'T-Head / 平头哥'};
-    const statuses = {prepared:'待启动',starting:'正在启动',running:'执行中',waiting_approval:'等待授权',waiting_input:'等待回答',interrupting:'正在中断',completed:'本轮已结束',interrupted:'已中断',failed:'执行异常',disconnected:'连接中断'};
+    const statuses = {prepared:'待启动',starting:'正在启动',running:'执行中',waiting_approval:'等待授权',waiting_input:'等待回答',interrupting:'正在中断',completed:'本轮已结束',interrupted:'已中断',failed:'本轮异常',disconnected:'连接中断'};
     const state = {sessions:[],profiles:[],policies:{},selected:null,available:false,fetching:false,pendingKey:'',eventsKey:'',profileKey:'',listKey:'',actionBusy:false,creating:false,checking:false,checkedKey:''};
   const params = new URLSearchParams(location.search);
   state.selected=params.get('session')||null;
@@ -78,6 +78,12 @@
   function notice(id, message, error=false) { const node=$(id);node.textContent=message || '';node.classList.toggle('error',error); }
   function formatTime(value) { if (!value) return '—'; const date=new Date(value);return Number.isNaN(date.getTime()) ? String(value) : date.toLocaleString('zh-CN',{hour12:false}); }
   function statusLabel(status) { return statuses[status] || status || '未知'; }
+  function errorMessage(value) {
+    if(value==null||value==='')return '';
+    const message=typeof value==='string'?value:typeof value.message==='string'?value.message:'';
+    if(value.codexErrorInfo==='serverOverloaded'||value.code==='serverOverloaded'||/selected model is at capacity|server overloaded/i.test(message))return '模型服务暂忙，可稍后在原任务重试；此提示不代表硬件或 Gate 验收失败。';
+    const text=message.trim();return text?text.slice(0,800)+(text.length>800?'…':''):'本轮发生异常，请查看最近消息并在原任务继续处理。';
+  }
   function sessionProgress(session) { return typeof session.progress_summary === 'string' && session.progress_summary.trim() ? session.progress_summary.trim() : session.last_agent_message || ''; }
   function latestSessionMessage(session) { const latest=typeof session.last_agent_message==='string'?session.last_agent_message.trim():'';return latest&&latest!==sessionProgress(session).trim()?latest:''; }
   function planMeta(session) { const source={artifact:'进度记录',notification:'实时计划'}[session.plan_source];return source?'计划来源：'+source+(session.plan_updated_at?' · 更新 '+formatTime(session.plan_updated_at):' · 更新时间未知'):''; }
@@ -108,7 +114,7 @@
     const response = await fetch(url, {credentials:'same-origin',cache:'no-store',...options,headers:{'Content-Type':'application/json',...options.headers}});
     let result;
     try { result=await response.json(); } catch (_) { throw new Error('服务返回了无法读取的响应（HTTP '+response.status+'）。'); }
-    if (!response.ok || result.error && !result.id && !Object.prototype.hasOwnProperty.call(result,'available')) {const error=new Error(typeof result.error==='string' ? result.error : '请求失败（HTTP '+response.status+'）');error.result=result;throw error;}
+    if (!response.ok || result.error && !result.id && !Object.prototype.hasOwnProperty.call(result,'available')) {const error=new Error(errorMessage(result.error) || '请求失败（HTTP '+response.status+'）');error.result=result;throw error;}
     return result;
   }
   function post(url,body={}) { return request(url,{method:'POST',body:JSON.stringify(body)}); }
@@ -138,8 +144,8 @@
   function renderCheck(result){
     const names={ssh:'SSH 连接',workspace:'远端项目目录',repository:'Git 仓库',gate_cases:'Gate 场景',tmux:'tmux 执行环境'},statuses={passed:'通过',failed:'失败',blocked:'受阻',warning:'需跟进'},fragment=document.createDocumentFragment();
     for(const check of result.checks||[]){const row=el('div','check-item'),copy=el('div','',names[check.name]||(check.name?.startsWith('model:')?'模型路径 · '+check.name.slice(6):check.name));copy.append(el('small','',check.detail||''));row.append(el('span','pill '+(statuses[check.status]?check.status:'warning'),statuses[check.status]||'待确认'),copy);fragment.append(row);}
-    if(!fragment.childNodes.length)fragment.append(el('p','',result.error||'未收到连接检查明细。'));
-    const remote=result.remote||{};$('check-items').replaceChildren(fragment);$('check-title').textContent=result.ok?(result.checks?.some(check=>check.status==='warning')?'连接通过，有待跟进项':'验证环境已就绪'):'验证环境需要处理';$('check-note').textContent=result.ok?['分支：'+(remote.git_branch||'待核对'),remote.git_commit?'提交：'+remote.git_commit.slice(0,12):'','检查时间：'+formatTime(result.checked_at)].filter(Boolean).join(' · '):result.error||'请根据上方失败项调整连接或目录，再次检查。';const argv=result.terminal_command_argv;$('check-terminal').hidden=result.ok||!Array.isArray(argv)||!argv.length;$('check-terminal-command').textContent=Array.isArray(argv)&&argv.length?'& '+argv.map(arg=>"'"+String(arg).replace(/'/g,"''")+"'").join(' '):'';$('connection-check').hidden=false;
+    if(!fragment.childNodes.length)fragment.append(el('p','',errorMessage(result.error)||'未收到连接检查明细。'));
+    const remote=result.remote||{};$('check-items').replaceChildren(fragment);$('check-title').textContent=result.ok?(result.checks?.some(check=>check.status==='warning')?'连接通过，有待跟进项':'验证环境已就绪'):'验证环境需要处理';$('check-note').textContent=result.ok?['分支：'+(remote.git_branch||'待核对'),remote.git_commit?'提交：'+remote.git_commit.slice(0,12):'','检查时间：'+formatTime(result.checked_at)].filter(Boolean).join(' · '):errorMessage(result.error)||'请根据上方失败项调整连接或目录，再次检查。';const argv=result.terminal_command_argv;$('check-terminal').hidden=result.ok||!Array.isArray(argv)||!argv.length;$('check-terminal-command').textContent=Array.isArray(argv)&&argv.length?'& '+argv.map(arg=>"'"+String(arg).replace(/'/g,"''")+"'").join(' '):'';$('connection-check').hidden=false;
   }
   async function checkMachine(){
     if(state.checking)return false;if(!$('create-form').reportValidity())return false;
@@ -161,17 +167,17 @@
     const full=profile.last_check,connection=profile.last_connection_check,time=record=>{const value=Date.parse(record?.checked_at);return Number.isNaN(value)?-Infinity:value;};
     const candidates=[connection,full].filter(record=>record&&Array.isArray(record.checks)&&record.checks.some(check=>check.name==='ssh'));
     const latest=candidates.reduce((best,record)=>!best||time(record)>time(best)?record:best,null),check=latest?.checks.find(item=>item.name==='ssh');
-    const ssh={status:'unknown',label:'SSH 未检查',at:latest?.checked_at,detail:check?.detail||latest?.error||''};
+    const ssh={status:'unknown',label:'SSH 未检查',at:latest?.checked_at,detail:check?.detail||errorMessage(latest?.error)||''};
     if(check?.status==='passed'){ssh.status=time(latest)===-Infinity?'unknown':'passed';ssh.label=ssh.status==='passed'?'SSH 可连接':'SSH 曾连接 · 时间未知';}
     else if(check?.status==='failed'||check?.status==='blocked'){ssh.status='failed';ssh.label='SSH 连接失败';}
-    const environment={status:'unknown',label:'环境未预检',at:full?.checked_at,detail:full?.error||''};
+    const environment={status:'unknown',label:'环境未预检',at:full?.checked_at,detail:errorMessage(full?.error)||''};
     if(!isCompute(profile)){environment.label='不用于 backend 验收';environment.at=null;}
     else if(!labels[profile.backend]||!profile.remote_workspace){environment.label='环境待配置';environment.detail=[!labels[profile.backend]?'待确认 backend':'',!profile.remote_workspace?'待填写远端项目目录':''].filter(Boolean).join('；');}
     else if(full){
       const superseded=ssh.status==='failed'&&latest!==full&&time(latest)>=time(full),changed=full.remote?.workspace&&full.remote.workspace!==profile.remote_workspace;
       if(superseded||changed){environment.status='stale';environment.label='环境需重检';environment.detail=superseded?'完整预检之后 SSH 检查失败，请重新确认验证环境。':'远端项目目录已改变，请重新进行完整预检。';}
       else if(full.ok===true){environment.status=time(full)===-Infinity?'stale':'passed';environment.label=environment.status==='passed'?'环境预检通过':'预检时间未知 · 需重检';environment.detail=(full.checks||[]).filter(item=>item.status==='warning').map(item=>item.detail).join('；');}
-      else if(full.ok===false){environment.status='failed';environment.label='环境预检失败';environment.detail=full.error||(full.checks||[]).filter(item=>item.status==='failed'||item.status==='blocked').map(item=>item.detail).join('；');}
+      else if(full.ok===false){environment.status='failed';environment.label='环境预检失败';environment.detail=errorMessage(full.error)||(full.checks||[]).filter(item=>item.status==='failed'||item.status==='blocked').map(item=>item.detail).join('；');}
     }
     return {ssh,environment};
   }
@@ -199,7 +205,7 @@
     if(Array.isArray(item.content))return item.content.map(x=>x.text||x.message||'').filter(Boolean).join('\n');
     if(item.command)return typeof item.command==='string'?item.command:JSON.stringify(item.command);
     if(p.error)return typeof p.error==='string'?p.error:JSON.stringify(p.error);
-    if(p.turn?.error)return p.turn.error.message || JSON.stringify(p.turn.error);
+    if(p.turn?.error)return errorMessage(p.turn.error);
     if(method==='turn/completed')return '本轮执行已结束。可查看输出并发送下一步指令。';
     if(method==='turn/started')return 'Codex 正在处理任务。';
     if(method==='thread/started')return '已建立 Codex 会话。';
@@ -257,7 +263,7 @@
     $('start-session').textContent=monitor?'仅监控':session.thread_id?'继续任务':'启动任务';$('start-session').disabled=monitor||working(session)||state.actionBusy||!state.available;$('interrupt-session').textContent=session.status==='prepared'?'取消待启动任务':'中断当前执行';$('interrupt-session').disabled=(!working(session)&&session.status!=='prepared')||session.status==='interrupting'||state.actionBusy;$('send-message').disabled=monitor||state.actionBusy||['prepared','starting','interrupting','waiting_input','waiting_approval'].includes(session.status)||!state.available;$('message-hint').textContent=monitor?'此任务仅监控，可查看已有 PR、日志或中断执行。':session.status==='waiting_input'||session.status==='waiting_approval'?'请先处理上方的授权或提问。':session.status==='prepared'?'启动任务后可以发送补充指令。':'执行中可补充指令；本轮结束后可继续任务。';
     $('prompt-preview').hidden=!session.prompt;$('detail-prompt').textContent=session.prompt||'';
     const progress=sessionProgress(session),plan=Array.isArray(session.plan)?session.plan:[],planNote=planMeta(session);$('detail-progress').hidden=!progress&&!plan.length&&!planNote;$('detail-progress-summary').textContent=progress;$('detail-progress-summary').hidden=!progress;$('detail-plan-meta').textContent=planNote;$('detail-plan-meta').hidden=!planNote;$('detail-plan').replaceChildren();$('detail-plan').hidden=!plan.length;for(const step of plan)$('detail-plan').append(el('li','',({pending:'待执行',in_progress:'进行中',completed:'已完成'}[step.status]||'待确认')+' · '+step.step));
-    $('session-error').hidden=!session.error;$('session-error').textContent=session.error||'';renderPersistenceNotice(session);renderPending(session);renderEvents(session);
+    $('session-error').hidden=!session.error;$('session-error').textContent=errorMessage(session.error);renderPersistenceNotice(session);renderPending(session);renderEvents(session);
   }
   async function refresh(quiet=false) {
     if(state.fetching)return;state.fetching=true;
@@ -285,7 +291,7 @@
   $('message-form').addEventListener('submit',async event=>{event.preventDefault();const message=$('message').value.trim();if(message&&await act(current(),'message',{text:message}))$('message').value='';});
   function renderHealth(health) {
     $('health-status').textContent=!state.available?'未找到本机 Codex':!health?'已找到 Codex，待检查连接':health.error?'Codex 连接需要处理':health.authenticated?'Codex 已登录':'Codex 需要登录';
-    if(health)$('health-note').textContent=health.error||[health.version,health.account_type,'会话保存在本机，可在此页面继续。'].filter(Boolean).join(' · ');
+    if(health)$('health-note').textContent=errorMessage(health.error)||[health.version,health.account_type,'会话保存在本机，可在此页面继续。'].filter(Boolean).join(' · ');
   }
   $('health-check').addEventListener('click',async()=>{const button=$('health-check');button.disabled=true;$('health-note').textContent='正在检查 Codex 连接与登录状态…';try{const health=await request('/api/codex-health');state.available=!!health.available;renderHealth(health);}catch(error){$('health-status').textContent='Codex 连接检查失败';$('health-note').textContent=error.message;}finally{button.disabled=false;}});
   connectionMode();checkButtons();refresh();setInterval(()=>{if(!document.hidden)refresh(true);},3000);document.addEventListener('visibilitychange',()=>{if(!document.hidden)refresh(true);});

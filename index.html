@@ -290,6 +290,13 @@
   };
   const safe = (value) => value == null || value === "" ? "—" : String(value);
   const shortSha = (value) => value ? String(value).slice(0, 10) : "—";
+  function errorMessage(value) {
+    if (value == null || value === "") return "";
+    const message = typeof value === "string" ? value : typeof value.message === "string" ? value.message : "";
+    if (value.codexErrorInfo === "serverOverloaded" || value.code === "serverOverloaded" || /selected model is at capacity|server overloaded/i.test(message)) return "模型服务暂忙，可稍后在原任务重试；此提示不代表硬件或 Gate 验收失败。";
+    const text = message.trim();
+    return text ? text.slice(0,800) + (text.length > 800 ? "…" : "") : "本轮发生异常，请查看最近消息并在原任务继续处理。";
+  }
   const isPassed = (status) => status === "passed" || status === "recorded_pass";
   const normalized = (value) => {
     const name = String(value || "unknown").toLowerCase();
@@ -612,7 +619,7 @@
     if (!backends.length) box.append(el("div", "empty", "没有发现 backend。请检查目标分支和监控服务配置。"));
     backends.forEach((backend, index) => box.append(renderBackend(data, backend, index)));
     const errors = Array.isArray(data.errors) ? data.errors.filter(Boolean) : [];
-    showNotice(errors.join("\n"));
+    showNotice(errors.map(errorMessage).join("\n"));
   }
   let fetching = false;
   let remoteRefreshing = false;
@@ -632,7 +639,7 @@
     try {
       const response = await fetch(appUrl("api/branch-status") + "?branch=" + encodeURIComponent(branch), {cache:"no-store"});
       const data = await response.json().catch(() => ({}));
-      if (!response.ok) throw new Error(data.error || "状态接口返回 " + response.status);
+      if (!response.ok) throw new Error(errorMessage(data.error) || "状态接口返回 " + response.status);
       if (generation === branchGeneration) applySnapshot(data, branch);
     } catch (error) {
       showNotice("无法读取分支状态：" + error.message);
@@ -655,7 +662,7 @@
         body:JSON.stringify({branch})
       });
       const result = await response.json().catch(() => ({}));
-      if (!response.ok) throw new Error(result.error || "刷新接口返回 " + response.status);
+      if (!response.ok) throw new Error(errorMessage(result.error) || "刷新接口返回 " + response.status);
       applySnapshot(result, branch);
     } catch (error) {
       showNotice("读取最新状态失败：" + error.message + "。保留上次采集结果。");
@@ -668,7 +675,7 @@
   }
   byId("branch-select").addEventListener("change", () => { branchGeneration++; loadBranch(byId("branch-select").value); loadTasks(); });
   byId("refresh-remote").addEventListener("click", refreshRemote);
-  const taskLabels = {prepared:"待启动",starting:"连接并启动中",running:"执行中",waiting_input:"等待回答",waiting_approval:"等待授权",interrupting:"正在中断",interrupted:"已中断",completed:"本轮结束",failed:"执行失败",disconnected:"连接中断"};
+  const taskLabels = {prepared:"待启动",starting:"连接并启动中",running:"执行中",waiting_input:"等待回答",waiting_approval:"等待授权",interrupting:"正在中断",interrupted:"已中断",completed:"本轮结束",failed:"本轮异常",disconnected:"连接中断"};
   function sessionProgress(session) { return typeof session.progress_summary === 'string' && session.progress_summary.trim() ? session.progress_summary.trim() : session.last_agent_message || ''; }
   function latestSessionMessage(session) { const latest=typeof session.last_agent_message==='string'?session.last_agent_message.trim():'';return latest&&latest!==sessionProgress(session).trim()?latest:''; }
   function planMeta(session) { const source={artifact:'进度记录',notification:'实时计划'}[session.plan_source];return source?'计划来源：'+source+(session.plan_updated_at?' · 更新 '+dateText(session.plan_updated_at):' · 更新时间未知'):''; }
@@ -679,17 +686,17 @@
     const full=profile.last_check,connection=profile.last_connection_check,time=record=>{const value=Date.parse(record?.checked_at);return Number.isNaN(value)?-Infinity:value;};
     const candidates=[connection,full].filter(record=>record&&Array.isArray(record.checks)&&record.checks.some(check=>check.name==='ssh'));
     const latest=candidates.reduce((best,record)=>!best||time(record)>time(best)?record:best,null),check=latest?.checks.find(item=>item.name==='ssh');
-    const ssh={status:'unknown',label:'SSH 未检查',at:latest?.checked_at,detail:check?.detail||latest?.error||''};
+    const ssh={status:'unknown',label:'SSH 未检查',at:latest?.checked_at,detail:check?.detail||errorMessage(latest?.error)||''};
     if(check?.status==='passed'){ssh.status=time(latest)===-Infinity?'unknown':'passed';ssh.label=ssh.status==='passed'?'SSH 可连接':'SSH 曾连接 · 时间未知';}
     else if(check?.status==='failed'||check?.status==='blocked'){ssh.status='failed';ssh.label='SSH 连接失败';}
-    const environment={status:'unknown',label:'环境未预检',at:full?.checked_at,detail:full?.error||''};
+    const environment={status:'unknown',label:'环境未预检',at:full?.checked_at,detail:errorMessage(full?.error)||''};
     if((profile.role||'compute')!=='compute'){environment.label='不用于 backend 验收';environment.at=null;}
     else if(!machineLabels[profile.backend]||!profile.remote_workspace){environment.label='环境待配置';environment.detail=[!machineLabels[profile.backend]?'待确认 backend':'',!profile.remote_workspace?'待填写远端项目目录':''].filter(Boolean).join('；');}
     else if(full){
       const superseded=ssh.status==='failed'&&latest!==full&&time(latest)>=time(full),changed=full.remote?.workspace&&full.remote.workspace!==profile.remote_workspace;
       if(superseded||changed){environment.status='stale';environment.label='环境需重检';environment.detail=superseded?'完整预检之后 SSH 检查失败，请重新确认验证环境。':'远端项目目录已改变，请重新进行完整预检。';}
       else if(full.ok===true){environment.status=time(full)===-Infinity?'stale':'passed';environment.label=environment.status==='passed'?'环境预检通过':'预检时间未知 · 需重检';environment.detail=(full.checks||[]).filter(item=>item.status==='warning').map(item=>item.detail).join('；');}
-      else if(full.ok===false){environment.status='failed';environment.label='环境预检失败';environment.detail=full.error||(full.checks||[]).filter(item=>item.status==='failed'||item.status==='blocked').map(item=>item.detail).join('；');}
+      else if(full.ok===false){environment.status='failed';environment.label='环境预检失败';environment.detail=errorMessage(full.error)||(full.checks||[]).filter(item=>item.status==='failed'||item.status==='blocked').map(item=>item.detail).join('；');}
     }
     return {ssh,environment};
   }
@@ -724,7 +731,7 @@
       method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(body)
     });
     const data = await response.json().catch(() => ({}));
-    if (!response.ok) throw new Error(data.error || "操作失败 " + response.status);
+    if (!response.ok) throw new Error(errorMessage(data.error) || "操作失败 " + response.status);
     taskNotice("");
     await loadTasks();
     return data;
@@ -860,7 +867,7 @@
     card.message.textContent = progress.length > 600 ? progress.slice(0,600) + "…" : progress;
     card.fullMessage.hidden = progress.length <= 600; card.fullMessageText.textContent = progress;
     const latest = latestSessionMessage(session);card.latestSection.hidden = !latest;card.latestMessage.textContent = latest.length > 350 ? latest.slice(0,350) + '…' : latest;card.latestFull.hidden = latest.length <= 350;card.latestFullText.textContent = latest;
-    card.error.hidden = !session.error; card.error.textContent = session.error || "";
+    card.error.hidden = !session.error; card.error.textContent = errorMessage(session.error);
     renderTaskRequests(card,session);
     const controlKey = session.status + ":" + Boolean(session.thread_id) + ":" + policy.mode;
     if (card.controlKey !== controlKey) {
@@ -886,7 +893,7 @@
     try {
       const response = await fetch(appUrl("api/codex-sessions"),{cache:"no-store"});
       const data = await response.json().catch(() => ({}));
-      if (!response.ok) throw new Error(data.error || "无法读取任务");
+      if (!response.ok) throw new Error(errorMessage(data.error) || "无法读取任务");
       const policies = data.backend_task_policies && typeof data.backend_task_policies === "object" ? data.backend_task_policies : {};
       const policyChanged = JSON.stringify(policies) !== JSON.stringify(backendTaskPolicies);
       backendTaskPolicies = policies;
