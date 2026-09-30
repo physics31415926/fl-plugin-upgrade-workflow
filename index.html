@@ -715,6 +715,10 @@
   function sessionProgress(session) { return typeof session.progress_summary === 'string' && session.progress_summary.trim() ? session.progress_summary.trim() : session.last_agent_message || ''; }
   function latestSessionMessage(session) { const latest=typeof session.last_agent_message==='string'?session.last_agent_message.trim():'';return latest&&latest!==sessionProgress(session).trim()?latest:''; }
   function planMeta(session) { const source={artifact:'进度记录',notification:'实时计划'}[session.plan_source];return source?'计划来源：'+source+(session.plan_updated_at?' · 更新 '+dateText(session.plan_updated_at):' · 更新时间未知'):''; }
+  function planStepText(status, monitor=false) {
+    const labels = monitor ? {pending:'待执行（历史记录）',in_progress:'未完成（历史记录）',completed:'已结束（历史记录）'} : {pending:'待执行',in_progress:'进行中',completed:'已完成'};
+    return labels[status] || (monitor ? '待确认（历史记录）' : '待确认');
+  }
   const activeTasks = new Set(["starting","running","waiting_input","waiting_approval","interrupting"]);
   const machineLabels = {cuda:"NVIDIA / CUDA",ascend:"Ascend / 昇腾",metax:"MetaX / 沐曦",corex:"CoreX / 天数智芯",hygon:"Hygon / 海光",musa:"MUSA / 摩尔线程",enflame:"Enflame / 燧原",kunlunxin:"Kunlunxin / 昆仑芯",thead:"T-Head / 平头哥"};
   let machineProfilesKey = null;
@@ -876,7 +880,7 @@
     card.session = session;
     const policy = taskPolicy(session.backend, session.branch, session), monitor = policy.mode === "monitor";
     card.policyBox.replaceChildren(); card.policyBox.hidden = !monitor;
-    if (monitor) card.policyBox.append(policyNotice(policy));
+    if (monitor) card.policyBox.append(policyNotice(policy),el('p','task-note','仅监控已有 PR；下方为停止主动适配时的历史记录。历史阶段记录不代表 Gate 验收通过。'));
     card.workBranch.textContent = "任务工作分支：" + (session.work_branch || "待核对");
     const identityKey=JSON.stringify([session.branch,session.commit,session.work_branch,session.worktree,session.remote_workspace,session.reported_provenance]);
     if(card.identityKey!==identityKey){card.identityKey=identityKey;renderProvenance(card,session);}
@@ -888,12 +892,12 @@
     card.meta.textContent = "任务 " + session.id.slice(0,8) + " · " + (session.ssh_alias || "机器待配置") + " · 更新 " + dateText(session.updated_at);
     card.root.classList.toggle("focused", session.id === new URLSearchParams(window.location.search).get("session"));
     const plan = Array.isArray(session.plan) ? session.plan : [];
-    card.planNote.textContent = planMeta(session); card.planNote.hidden = !card.planNote.textContent;
+    card.planNote.textContent = monitor ? '历史任务计划 · '+(planMeta(session)||'记录时间未知') : planMeta(session); card.planNote.hidden = !card.planNote.textContent;
     card.plan.replaceChildren();
-    if (!plan.length) card.plan.append(el("li", "", "等待 agent 报告执行计划。"));
-    for (const step of plan) card.plan.append(el("li", step.status, ({pending:"待执行",in_progress:"进行中",completed:"已完成"}[step.status] || "待确认") + " · " + step.step));
-    const progress = sessionProgress(session) || (session.status === "prepared" ? "机器配置完成后，可启动 agent。" : "等待 agent 的进展消息…");
-    card.messageLabel.textContent = typeof session.progress_summary === 'string' && session.progress_summary.trim() ? '阶段进度摘要' : '最新消息';
+    if (!plan.length) card.plan.append(el("li", "", monitor ? "尚无历史任务计划。" : "等待 agent 报告执行计划。"));
+    for (const step of plan) card.plan.append(el("li", monitor ? 'history' : step.status, planStepText(step.status,monitor) + " · " + step.step));
+    const progress = sessionProgress(session) || (monitor ? "尚无历史任务消息。" : session.status === "prepared" ? "机器配置完成后，可启动 agent。" : "等待 agent 的进展消息…");
+    card.messageLabel.textContent = monitor ? '历史阶段进度摘要' : typeof session.progress_summary === 'string' && session.progress_summary.trim() ? '阶段进度摘要' : '最新消息';
     card.message.textContent = progress.length > 600 ? progress.slice(0,600) + "…" : progress;
     card.fullMessage.hidden = progress.length <= 600; card.fullMessageText.textContent = progress;
     const latest = latestSessionMessage(session);card.latestSection.hidden = !latest;card.latestMessage.textContent = latest.length > 350 ? latest.slice(0,350) + '…' : latest;card.latestFull.hidden = latest.length <= 350;card.latestFullText.textContent = latest;
