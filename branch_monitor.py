@@ -38,6 +38,7 @@ from urllib.request import Request, urlopen
 SHA = re.compile(r"^[0-9a-f]{40}$")
 REF = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._/-]*$")
 REPO = re.compile(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")
+PLATFORM = re.compile(r"^[a-z][a-z0-9_-]{0,63}$")
 CASE_DIR = "tools/adaptation-gate-cases"
 LABELS = {"cuda": "NVIDIA", "ascend": "Ascend", "metax": "MetaX", "corex": "CoreX",
           "hygon": "Hygon", "musa": "MUSA", "thead": "THead",
@@ -111,12 +112,23 @@ class BranchMonitor:
         self.backend_prs = self.config.get("backend_prs", {})
         self.merged_commits = self.config.get("merged_commits", {})
         self.backend_labels = self.config.get("backend_labels", {})
+        # Dashboard backend IDs may differ from the workflow platform names.
+        # CoreX is registered as iluvatar in the plugin's CI workflow.
+        self.backend_ci_platforms = self.config.get("backend_ci_platforms", {"corex": "iluvatar"})
         self.accepted_ci_runs = self.config.get("accepted_ci_runs", {})
         self.backend_pr_discovery = self.config.get("backend_pr_discovery", {})
         if not isinstance(self.backend_prs, dict) or not isinstance(self.merged_commits, dict):
             raise MonitorError("backend_prs and merged_commits must be objects")
         if not isinstance(self.backend_labels, dict):
             raise MonitorError("backend_labels must be an object")
+        if (not isinstance(self.backend_ci_platforms, dict) or
+                not all(isinstance(backend, str) and PLATFORM.fullmatch(backend) and
+                        isinstance(platform, str) and PLATFORM.fullmatch(platform)
+                        for backend, platform in self.backend_ci_platforms.items())):
+            raise MonitorError("backend_ci_platforms must map backend IDs to workflow platform names")
+        if len(set(self.backend_ci_platforms.values())) != len(self.backend_ci_platforms):
+            raise MonitorError("backend_ci_platforms must use distinct workflow platform names")
+        self._ci_backend_ids = {platform: backend for backend, platform in self.backend_ci_platforms.items()}
         if not isinstance(self.accepted_ci_runs, dict):
             raise MonitorError("accepted_ci_runs must be an object")
         if not isinstance(self.backend_pr_discovery, dict):
@@ -182,6 +194,14 @@ class BranchMonitor:
         if not result:
             raise MonitorError("No backends found in platforms.yml")
         return result
+
+    def _ci_platform(self, backend: str) -> str:
+        return self.backend_ci_platforms.get(backend, backend)
+
+    def _ci_test_jobs(self, backend: str, jobs: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        prefix = f"test-{self._ci_platform(backend)} / "
+        return [job for job in jobs if job.get("name", "").startswith(prefix) and
+                not any(part in job.get("name", "") for part in (" / notify / ", " / Setup ("))]
 
     def _version(self, sha: str) -> str | None:
         try:
@@ -400,8 +420,7 @@ class BranchMonitor:
             if run.get("head_sha") != commit or run.get("run_attempt") != attempt:
                 raise MonitorError("Accepted CI run commit or attempt does not match its record")
             data = self._api(endpoint + "/jobs?per_page=100", force)
-            jobs = [job for job in data.get("jobs", []) if job.get("name", "").startswith(f"test-{backend} / ") and
-                    not any(part in job.get("name", "") for part in (" / notify / ", " / Setup ("))]
+            jobs = self._ci_test_jobs(backend, data.get("jobs", []))
             return {"status": self._ci_status(jobs), "scope": "accepted-tree", "commit": commit,
                     "target_commit": sha, "tree": tree, "tree_matches_head": True,
                     "url": run.get("html_url"), "run_id": run_id, "attempt": attempt,
@@ -433,10 +452,9 @@ class BranchMonitor:
                     branch_ci: dict[str, Any], pr_data: dict[str, Any] | None, force: bool,
                     errors: list[str]) -> dict[str, Any]:
         if integration["status"] == "merged":
-            jobs = [job for job in branch_jobs if job.get("name", "").startswith(f"test-{backend} / ") and
-                    not any(part in job.get("name", "") for part in (" / notify / ", " / Setup ("))]
+            jobs = self._ci_test_jobs(backend, branch_jobs)
             if not jobs:
-                jobs = [job for job in branch_jobs if job.get("name") == f"test-{backend}"]
+                jobs = [job for job in branch_jobs if job.get("name") == f"test-{self._ci_platform(backend)}"]
             return {"status": self._ci_status(jobs), "scope": "branch", "detail": f"{len(jobs)} backend test jobs at branch HEAD",
                     "url": branch_ci.get("url"), "commit": branch_ci.get("commit")}
         head_sha = (pr_data or {}).get("head", {}).get("sha")
@@ -447,9 +465,7 @@ class BranchMonitor:
             return {"status": "unknown", "scope": "pr", "detail": "No candidate branch CI data", "url": None, "commit": head_sha}
         try:
             data = self._api(f"commits/{head_sha}/check-runs?per_page=100", force)
-            checks = [check for check in data.get("check_runs", []) if
-                      check.get("name", "").startswith(f"test-{backend} / ") and
-                      not any(part in check.get("name", "") for part in (" / notify / ", " / Setup ("))]
+            checks = self._ci_test_jobs(backend, data.get("check_runs", []))
             return {"status": self._ci_status(checks), "scope": "pr", "detail": f"{len(checks)} backend test checks at PR head",
                     "url": checks[0].get("details_url") if checks else None, "commit": head_sha}
         except (OSError, ValueError, MonitorError) as exc:
@@ -665,7 +681,8 @@ class BranchMonitor:
             except (OSError, ValueError, MonitorError) as exc:
                 errors.append(f"Backend PR discovery unavailable: {exc}")
         backends = []
-        for backend in dict.fromkeys([*registry, *self.backend_labels, *self.backend_prs,
+        registry_backends = [self._ci_backend_ids.get(platform, platform) for platform in registry]
+        for backend in dict.fromkeys([*registry_backends, *self.backend_labels, *self.backend_prs,
                                      *self.merged_commits, *self.backend_pr_discovery]):
             pr, pr_data = self._pr(backend, branch, force, errors, open_prs, sha)
             integration = self._integration(backend, branch, sha, pr_data)
@@ -676,7 +693,7 @@ class BranchMonitor:
                 ci = accepted_ci
             gate, results = self._gate(backend, branch, sha, cases, manifests)
             backends.append({"id": backend, "label": self.backend_labels.get(backend, LABELS.get(backend, backend)),
-                             "ci_enabled": registry.get(backend, False), "integration": integration,
+                             "ci_enabled": registry.get(self._ci_platform(backend), False), "integration": integration,
                              "ci": ci, "current_ci": current_ci, "pr": pr, "gate": gate, "results": results})
         return {"branch": branch, "branch_ref": ref, "head": sha,
                 "head_url": f"https://github.com/{self.github_repo}/commit/{sha}" if self.github_repo else None,
@@ -706,7 +723,7 @@ class BranchMonitor:
             raise MonitorError("Unknown gate model or mode")
         _, sha = self._head(branch)
         registry = self._registry(sha)
-        if (backend not in registry and backend not in self.backend_labels and
+        if (self._ci_platform(backend) not in registry and backend not in self.backend_labels and
                 backend not in self.backend_prs and backend not in self.merged_commits and
                 backend not in self.backend_pr_discovery):
             raise MonitorError("Unknown backend")

@@ -214,6 +214,87 @@ class BranchMonitorTests(unittest.TestCase):
         return {**self.config, "backend_prs": {"cuda": 484, "corex": 527},
                 "backend_pr_discovery": {"corex": {"head_prefixes": ["adapt/iluvatar-corex-"], "title_terms": ["CoreX"]}}}
 
+    def test_corex_pr_ci_matches_iluvatar_checks_and_excludes_cuda(self) -> None:
+        config = dict(self.config, backend_prs={"cuda": 484, "corex": 566})
+        for conclusion, expected in (("failure", "failed"), ("success", "passed")):
+            with self.subTest(conclusion=conclusion):
+                def transport(url):
+                    if "/pulls/566" in url:
+                        return self._corex_pr()
+                    if "/commits/" in url and "/check-runs" in url:
+                        return {"check_runs": [
+                            {"name": "test-iluvatar / unit / Unit tests (iluvatar)",
+                             "status": "completed", "conclusion": conclusion,
+                             "details_url": "https://example.test/iluvatar-unit"},
+                            {"name": "test-cuda / unit / Unit tests (cuda)",
+                             "status": "completed", "conclusion": "failure"},
+                            {"name": "test-iluvatar / Setup (iluvatar)",
+                             "status": "completed", "conclusion": "failure"},
+                            {"name": "test-iluvatar / notify / Notify (iluvatar)",
+                             "status": "completed", "conclusion": "failure"}]}
+                    return self._transport(url)
+                corex = self._backend(BranchMonitor(config, transport=transport).status(), "corex")
+                self.assertEqual(corex["ci"]["status"], expected)
+                self.assertEqual(corex["ci"]["scope"], "pr")
+                self.assertEqual(corex["ci"]["url"], "https://example.test/iluvatar-unit")
+                self.assertEqual(corex["gate"]["status"], "missing")
+
+    def test_corex_registry_and_merged_ci_use_the_workflow_platform(self) -> None:
+        self._write(".github/configs/platforms.yml",
+                    "platforms:\n  cuda:\n    enabled: true\n  iluvatar:\n    enabled: true\n")
+        git(self.repo, "add", ".")
+        git(self.repo, "commit", "-qm", "enable workflow platform")
+        self.head = git(self.repo, "rev-parse", "HEAD")
+        git(self.repo, "update-ref", "refs/remotes/upstream/0.4.0-dev", self.head)
+        config = dict(self.config, merged_commits={"cuda": self.head, "corex": self.head},
+                      backend_labels={"corex": "CoreX"})
+
+        def transport(url):
+            if "/actions/runs/1/jobs" in url:
+                return {"jobs": [
+                    {"name": "test-iluvatar / unit / Unit tests (iluvatar)",
+                     "status": "completed", "conclusion": "success"},
+                    {"name": "test-cuda / unit / Unit tests (cuda)",
+                     "status": "completed", "conclusion": "failure"}]}
+            return self._transport(url)
+
+        status = BranchMonitor(config, transport=transport).status()
+        self.assertEqual([item["id"] for item in status["backends"]], ["cuda", "corex"])
+        corex = self._backend(status, "corex")
+        self.assertTrue(corex["ci_enabled"])
+        self.assertEqual(corex["ci"]["status"], "passed")
+        self.assertEqual(corex["ci"]["scope"], "branch")
+        self.assertEqual(self._backend(status)["ci"]["status"], "failed")
+
+    def test_custom_ci_platform_applies_to_accepted_run(self) -> None:
+        config = dict(self.config, backend_labels={"corex": "CoreX"},
+                      backend_ci_platforms={"corex": "custom_vendor"},
+                      accepted_ci_runs={"corex": {"branch": "0.4.0-dev", "commit": self.head,
+                                                   "run_id": 2, "attempt": 1}})
+
+        def transport(url):
+            if "/actions/runs/2/attempts/1/jobs" in url:
+                return {"jobs": [
+                    {"name": "test-custom_vendor / unit / Unit tests (custom_vendor)",
+                     "status": "completed", "conclusion": "success"},
+                    {"name": "test-cuda / unit / Unit tests (cuda)",
+                     "status": "completed", "conclusion": "failure"}]}
+            if "/actions/runs/2/attempts/1" in url:
+                return {"head_sha": self.head, "run_attempt": 1, "html_url": "https://example.test/run/2"}
+            return self._transport(url)
+
+        corex = self._backend(BranchMonitor(config, transport=transport).status(), "corex")
+        self.assertEqual(corex["ci"]["status"], "passed")
+        self.assertEqual(corex["ci"]["scope"], "accepted-tree")
+        self.assertEqual(corex["current_ci"]["status"], "unknown")
+        self.assertEqual(corex["gate"]["status"], "missing")
+
+    def test_ci_platform_mapping_rejects_ambiguous_or_invalid_names(self) -> None:
+        for mapping in (["iluvatar"], {"corex": ""}, {"corex": "cuda / unit"},
+                        {"corex": "iluvatar", "other": "iluvatar"}):
+            with self.subTest(mapping=mapping), self.assertRaises(MonitorError):
+                BranchMonitor(dict(self.config, backend_ci_platforms=mapping), transport=self._transport)
+
     def test_replacement_pr_matches_backend_and_target_branch_without_passing_gate(self):
         new = self._corex_pr()
         wrong_branch = self._corex_pr(567, base={"ref": "other"})

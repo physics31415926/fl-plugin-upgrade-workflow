@@ -23,6 +23,9 @@
     "metax": 554,
     "corex": 566
   },
+  "backend_ci_platforms": {
+    "corex": "iluvatar"
+  },
   "backend_pr_discovery": {
     "corex": {
       "head_prefixes": ["adapt/iluvatar-corex-"],
