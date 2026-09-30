@@ -319,6 +319,23 @@ class BranchMonitor:
             return "partial"
         return "passed" if all(x == "success" for x in conclusions) else "unknown"
 
+    @staticmethod
+    def _ci_check_url(checks: list[dict[str, Any]], status: str) -> str | None:
+        if status == "failed":
+            relevant = [check for check in checks if check.get("conclusion") in
+                        ("failure", "timed_out", "action_required", "startup_failure")]
+        elif status == "running":
+            # Prefer a job actually executing over an earlier queued check.
+            relevant = [check for check in checks if check.get("status") == "in_progress"]
+            relevant += [check for check in checks if check.get("status") not in ("completed", "in_progress")]
+        elif status in ("cancelled", "skipped", "partial", "passed"):
+            conclusion = {"cancelled": "cancelled", "skipped": "skipped",
+                          "partial": "skipped", "passed": "success"}[status]
+            relevant = [check for check in checks if check.get("conclusion") == conclusion]
+        else:
+            relevant = checks
+        return next((check["details_url"] for check in relevant if check.get("details_url")), None)
+
     def _branch_ci(self, branch: str, sha: str, force: bool, errors: list[str]) -> tuple[dict[str, Any], list[dict[str, Any]]]:
         result = {"status": "unknown", "scope": "branch", "detail": "No CI run for current branch HEAD",
                   "url": None, "commit": sha}
@@ -466,8 +483,9 @@ class BranchMonitor:
         try:
             data = self._api(f"commits/{head_sha}/check-runs?per_page=100", force)
             checks = self._ci_test_jobs(backend, data.get("check_runs", []))
-            return {"status": self._ci_status(checks), "scope": "pr", "detail": f"{len(checks)} backend test checks at PR head",
-                    "url": checks[0].get("details_url") if checks else None, "commit": head_sha}
+            status = self._ci_status(checks)
+            return {"status": status, "scope": "pr", "detail": f"{len(checks)} backend test checks at PR head",
+                    "url": self._ci_check_url(checks, status), "commit": head_sha}
         except (OSError, ValueError, MonitorError) as exc:
             errors.append(f"GitHub {backend} checks unavailable: {exc}")
             return {"status": "unknown", "scope": "pr", "detail": "Candidate branch CI unavailable", "url": None, "commit": head_sha}

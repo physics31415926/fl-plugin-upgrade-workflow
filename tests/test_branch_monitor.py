@@ -266,6 +266,37 @@ class BranchMonitorTests(unittest.TestCase):
         self.assertEqual(corex["ci"]["scope"], "branch")
         self.assertEqual(self._backend(status)["ci"]["status"], "failed")
 
+    def test_pr_ci_url_follows_aggregate_status_with_unordered_checks(self) -> None:
+        config = dict(self.config, backend_prs={"cuda": 484, "corex": 566})
+        for job_status, conclusion, expected in (("completed", "failure", "failed"),
+                                                 ("in_progress", None, "running")):
+            with self.subTest(expected=expected):
+                def transport(url):
+                    if "/pulls/566" in url:
+                        return self._corex_pr()
+                    if "/commits/" in url and "/check-runs" in url:
+                        return {"check_runs": [
+                            {"name": "test-iluvatar / benchmark / Benchmark",
+                             "status": "completed", "conclusion": "skipped",
+                             "details_url": "https://example.test/skipped"},
+                            {"name": "test-cuda / unit / Unit tests (cuda)",
+                             "status": "completed", "conclusion": "failure",
+                             "details_url": "https://example.test/unrelated"},
+                            {"name": "test-iluvatar / functional / Functional",
+                             "status": "completed", "conclusion": "success",
+                             "details_url": "https://example.test/success"},
+                            {"name": "test-iluvatar / e2e / E2E",
+                             "status": "queued", "conclusion": None,
+                             "details_url": "https://example.test/queued"},
+                            {"name": "test-iluvatar / unit / Unit tests (iluvatar)",
+                             "status": job_status, "conclusion": conclusion,
+                             "details_url": "https://example.test/relevant"}]}
+                    return self._transport(url)
+
+                corex = self._backend(BranchMonitor(config, transport=transport).status(), "corex")
+                self.assertEqual(corex["ci"]["status"], expected)
+                self.assertEqual(corex["ci"]["url"], "https://example.test/relevant")
+
     def test_custom_ci_platform_applies_to_accepted_run(self) -> None:
         config = dict(self.config, backend_labels={"corex": "CoreX"},
                       backend_ci_platforms={"corex": "custom_vendor"},
