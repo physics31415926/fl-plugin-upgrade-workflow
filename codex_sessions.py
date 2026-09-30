@@ -220,6 +220,7 @@ class CodexSessionManager:
         self.evidence_dir = self._path(config.get("evidence_dir", "runs/gate-evidence"))
         self.executable = config.get("codex_executable") or shutil.which("codex")
         self.backends = set(config.get("session_backends", self.BACKENDS))
+        self.backend_task_policies = self._task_policies(config.get("backend_task_policies", {}))
         self.client_factory = client_factory
         self._lock = threading.RLock()
         self._clients = {}
@@ -629,6 +630,56 @@ done
             raise SessionError("Unknown session")
         return self._sessions[session_id]
 
+    def _task_policies(self, value):
+        if not isinstance(value, dict):
+            raise SessionError("backend_task_policies must map backend names to policies")
+        policies = {}
+        for backend, policy in value.items():
+            backend = "cuda" if backend == "nvidia" else backend
+            if backend not in self.backends or backend in policies or not isinstance(policy, dict):
+                raise SessionError("Each task policy must identify one configured backend")
+            if not isinstance(policy.get("mode"), str) or policy["mode"] not in {"monitor", "adapt"}:
+                raise SessionError("Task policy mode must be monitor or adapt")
+            branch = self._text(policy.get("branch", self.default_branch), "policy branch", 200, True)
+            if branch.startswith("-") or any(c.isspace() for c in branch):
+                raise SessionError("Invalid task policy branch")
+            pr = policy.get("pr")
+            if pr is not None and (type(pr) is not int or pr <= 0):
+                raise SessionError("Task policy PR must be a positive integer")
+            repository = self.config.get("github_repo")
+            if pr is not None and repository:
+                if (not isinstance(repository, str) or not re.fullmatch(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+", repository)
+                        or any(part in {".", ".."} for part in repository.split("/"))):
+                    raise SessionError("github_repo must be an owner/repo without URL or path escapes")
+            policies[backend] = {"mode": policy["mode"], "branch": branch, "pr": pr,
+                                 "pr_url": f"https://github.com/{repository}/pull/{pr}" if pr is not None and repository else None,
+                                 "reason": self._text(policy.get("reason", ""), "policy reason", 2000)}
+        return policies
+
+    def _task_policy(self, backend, branch):
+        policy = self.backend_task_policies.get(backend)
+        if policy and policy["branch"] == branch:
+            return dict(policy)
+        return {"mode": "adapt", "branch": branch, "pr": None, "pr_url": None, "reason": ""}
+
+    def _require_adapt(self, backend, branch):
+        policy = self._task_policy(backend, branch)
+        if policy["mode"] == "monitor":
+            context = (f" PR #{policy['pr']}." if policy["pr"] else "")
+            reason = (" " + policy["reason"]) if policy["reason"] else ""
+            raise SessionError("This backend is monitor-only; active adaptation is disabled." + context + reason)
+
+    def _require_new_session(self, backend, branch):
+        for existing in self._sessions.values():
+            if existing["backend"] == backend and existing["branch"] == branch:
+                # A completed model turn does not prove the adaptation or Gate
+                # finished. Keep ownership even when the machine or HEAD changes.
+                raise SessionError(f"Use existing session {existing['id']} for this backend and baseline branch")
+
+    def _session_view(self, session):
+        view = {**session, "task_policy": self._task_policy(session["backend"], session["branch"])}
+        return json.loads(json.dumps(view))
+
     def snapshot(self):
         with self._lock:
             for session in self._sessions.values():
@@ -636,8 +687,9 @@ done
             return json.loads(json.dumps({
                 "available": bool(self.executable), "default_branch": self.default_branch,
                 "backends": sorted(self.backends), "health": self._health,
+                "backend_task_policies": self.backend_task_policies,
                 "machine_profiles": list(self._profiles.values()),
-                "sessions": sorted(self._sessions.values(), key=lambda s: s["created_at"], reverse=True),
+                "sessions": [self._session_view(s) for s in sorted(self._sessions.values(), key=lambda s: s["created_at"], reverse=True)],
             }))
 
     def _refresh_progress_artifact(self, session):
@@ -728,6 +780,12 @@ done
                 raise SessionError(f"A {profile['role']} machine cannot be used as a backend validation machine")
             payload = {**profile, **payload}
         machine = self._machine(payload)
+        branch = self._text(payload.get("branch", self.default_branch), "branch", 200, True)
+        if branch.startswith("-") or any(c.isspace() for c in branch):
+            raise SessionError("Invalid branch")
+        with self._lock:
+            self._require_new_session(machine["backend"], branch)
+            self._require_adapt(machine["backend"], branch)
         if machine["ssh_connection"]:
             if not profile or machine["ssh_connection"] != profile.get("ssh_connection") or machine["ssh_alias"] != profile["ssh_alias"]:
                 raise SessionError("Save this SSH connection before creating a task")
@@ -739,9 +797,6 @@ done
         for profile in self._profiles.values():
             if profile["ssh_alias"] == machine["ssh_alias"] and profile.get("role", "compute") != "compute":
                 raise SessionError(f"A {profile['role']} machine cannot be used as a backend validation machine")
-        branch = self._text(payload.get("branch", self.default_branch), "branch", 200, True)
-        if branch.startswith("-") or any(c.isspace() for c in branch):
-            raise SessionError("Invalid branch")
         self._git("check-ref-format", "refs/heads/" + branch)
         ref = f"refs/remotes/{self.remote}/{branch}"
         try:
@@ -765,6 +820,8 @@ done
             "plan": [], "last_agent_message": None,
         }
         with self._lock:
+            self._require_new_session(machine["backend"], branch)
+            self._require_adapt(machine["backend"], branch)
             # This lease covers active/prepared Codex sessions only. Remote tmux
             # processes can outlive a completed/interrupted local Codex turn.
             for existing in self._sessions.values():
@@ -778,7 +835,7 @@ done
             session["prompt"] = self._prompt(session)
             self._sessions[session_id] = session
             self._save(session)
-            return json.loads(json.dumps(session))
+            return self._session_view(session)
 
     def _prompt(self, session):
         evidence_root = self.evidence_dir / session["backend"] / session["id"]
@@ -891,6 +948,7 @@ done
     def start(self, session_id):
         with self._lock:
             session = self._get(session_id)
+            self._require_adapt(session["backend"], session["branch"])
             if session["status"] in self.ACTIVE:
                 raise SessionError("Session already has an active turn")
             text = session["prompt"] if not session.get("initial_prompt_sent") else "继续跟进本任务，从已有进展恢复，先核对机器上仍在运行的 tmux 任务和测试。"
@@ -899,6 +957,7 @@ done
     def _launch(self, session_id, text):
         with self._lock:
             session = self._get(session_id)
+            self._require_adapt(session["backend"], session["branch"])
             if session["status"] in self.ACTIVE:
                 raise SessionError("Session already has an active turn")
             if session_id in self._workers and self._workers[session_id].is_alive():
@@ -928,7 +987,7 @@ done
                 if session.get("cancel_requested"):
                     session.update(status="interrupted", turn_id=None, pending_requests=[])
                     self._save(session)
-                    return json.loads(json.dumps(session))
+                    return self._session_view(session)
                 if not preflight["ok"]:
                     session.update(status=previous_status, error=preflight["error"])
                 self._save(session)
@@ -939,11 +998,11 @@ done
             if session.get("cancel_requested"):
                 session.update(status="interrupted", turn_id=None, pending_requests=[])
                 self._save(session)
-                return json.loads(json.dumps(session))
+                return self._session_view(session)
             worker = threading.Thread(target=self._run, args=(session_id, text), daemon=True)
             self._workers[session_id] = worker
             worker.start()
-            return json.loads(json.dumps(session))
+            return self._session_view(session)
 
     def _run(self, session_id, text):
         session = self._sessions[session_id]
@@ -978,6 +1037,7 @@ done
         text = self._text(text, "message", 12000, True)
         with self._lock:
             session = self._get(session_id)
+            self._require_adapt(session["backend"], session["branch"])
             status, turn_id, thread_id = session["status"], session.get("turn_id"), session.get("thread_id")
             client = self._clients.get(session_id)
         if status in {"running", "waiting_approval", "waiting_input"}:
@@ -992,7 +1052,7 @@ done
 
     def _copy(self, session_id):
         with self._lock:
-            return json.loads(json.dumps(self._get(session_id)))
+            return self._session_view(self._get(session_id))
 
     def interrupt(self, session_id):
         with self._lock:
@@ -1032,6 +1092,12 @@ done
             if not request or not client:
                 raise SessionError("Request expired or connection lost; refresh session")
             method, params = request["method"], request["params"]
+            if self._task_policy(session["backend"], session["branch"])["mode"] == "monitor":
+                denied_approval = (method in {"item/commandExecution/requestApproval", "item/fileChange/requestApproval"}
+                                   and response.get("decision") in ("cancel", "decline"))
+                denied_permissions = method == "item/permissions/requestApproval" and response.get("permissions") == {}
+                if not (denied_approval or denied_permissions):
+                    raise SessionError("Monitor-only tasks allow only cancel/decline or empty permissions; interrupt to stop other requests")
             if method in {"item/commandExecution/requestApproval", "item/fileChange/requestApproval"}:
                 if not isinstance(response.get("decision"), str) or response["decision"] not in {"accept", "decline", "cancel"}:
                     raise SessionError("Choose accept, decline, or cancel for this single request")

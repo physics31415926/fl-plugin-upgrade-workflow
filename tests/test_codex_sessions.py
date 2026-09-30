@@ -4,6 +4,7 @@ import subprocess
 import tempfile
 import threading
 import unittest
+from unittest.mock import patch
 
 from codex_sessions import CodexSessionManager, SessionError
 
@@ -340,6 +341,129 @@ class SessionsTest(unittest.TestCase):
         self.assertEqual(state["status"], "running")
         self.assertEqual(state["turn_id"], "turn-1")
         self.assertEqual(state["last_agent_message"], "父任务仍在执行。")
+
+    def test_monitor_policy_survives_reload_and_blocks_all_execution_entry_points(self):
+        session = self.create()
+        client = self.start(session)
+        client.callback({"method": "turn/plan/updated", "params": {"threadId": "thread-123", "plan": [
+            {"step": "Version adaptation", "status": "in_progress"},
+            {"step": "Gate", "status": "pending"}]}})
+        client.callback({"method": "turn/completed", "params": {"threadId": "thread-123", "turn": {"status": "completed"}}})
+        self.manager.close()
+        self.config.update(github_repo="example/plugin", backend_task_policies={
+            "cuda": {"mode": "monitor", "pr": 17, "reason": "Existing adaptation owner"}})
+        self.manager = CodexSessionManager(self.config, self.base, FakeClient)
+        before = len(FakeClient.instances)
+        expected = {"mode": "monitor", "branch": self.payload["branch"], "pr": 17,
+                    "pr_url": "https://github.com/example/plugin/pull/17", "reason": "Existing adaptation owner"}
+        state = self.manager.snapshot()
+        self.assertEqual(state["backend_task_policies"]["cuda"], expected)
+        self.assertEqual(state["sessions"][0]["task_policy"], expected)
+        self.assertEqual(state["sessions"][0]["status"], "completed")
+        self.assertEqual(state["sessions"][0]["plan"][-1]["status"], "pending")
+        with patch.object(self.manager, "_check_connection") as probe, patch.object(self.manager, "_git") as git:
+            for operation in (lambda: self.manager.start(session["id"]),
+                              lambda: self.manager.message(session["id"], "Continue"),
+                              lambda: self.manager._launch(session["id"], "Continue")):
+                with self.assertRaisesRegex(SessionError, "monitor-only"):
+                    operation()
+            with self.assertRaisesRegex(SessionError, session["id"]):
+                self.manager.create({**self.payload, "ssh_alias": "another_gpu", "require_preflight": True})
+            probe.assert_not_called()
+            git.assert_not_called()
+        self.assertEqual(len(FakeClient.instances), before)
+        self.assertEqual(self.manager._copy(session["id"])["status"], "completed")
+
+    def test_monitor_create_is_rejected_before_probe_or_worktree_creation(self):
+        self.manager.close()
+        self.config["backend_task_policies"] = {"cuda": {"mode": "monitor"}}
+        self.manager = CodexSessionManager(self.config, self.base, FakeClient)
+        with patch.object(self.manager, "_check_connection") as probe, patch.object(self.manager, "_git") as git:
+            with self.assertRaisesRegex(SessionError, "monitor-only"):
+                self.manager.create({**self.payload, "require_preflight": True})
+            probe.assert_not_called()
+            git.assert_not_called()
+        self.assertEqual(self.manager.snapshot()["sessions"], [])
+        self.assertFalse((self.manager.root / "worktrees").exists())
+        self.assertEqual(FakeClient.instances, [])
+
+    def test_monitor_active_task_can_only_deny_requests_or_interrupt(self):
+        session = self.create()
+        client = self.start(session)
+        self.manager.backend_task_policies = self.manager._task_policies({"cuda": {"mode": "monitor"}})
+        client.callback({"id": 1, "method": "item/commandExecution/requestApproval",
+                         "params": {"threadId": "thread-123", "availableDecisions": ["accept", "decline", "cancel"]}})
+        client.callback({"id": 2, "method": "item/fileChange/requestApproval", "params": {"threadId": "thread-123"}})
+        client.callback({"id": 3, "method": "item/permissions/requestApproval",
+                         "params": {"threadId": "thread-123", "permissions": {"network": {"enabled": True}}}})
+        client.callback({"id": 4, "method": "item/tool/requestUserInput",
+                         "params": {"threadId": "thread-123", "questions": [{"id": "q"}]}})
+        for rid, response in ((1, {"decision": "accept"}), (2, {"decision": "accept"}),
+                              (3, {"permissions": {"network": {"enabled": True}}}),
+                              (4, {"answers": {"q": {"answers": ["Continue"]}}})):
+            with self.subTest(request_id=rid), self.assertRaisesRegex(SessionError, "Monitor-only"):
+                self.manager.respond(session["id"], rid, response)
+        self.assertEqual(client.responses, [])
+        with self.assertRaisesRegex(SessionError, "monitor-only"):
+            self.manager.message(session["id"], "Continue")
+        self.manager.respond(session["id"], 1, {"decision": "decline"})
+        self.manager.respond(session["id"], 2, {"decision": "cancel"})
+        self.manager.respond(session["id"], 3, {"permissions": {}})
+        self.assertEqual(client.responses, [(1, {"decision": "decline"}), (2, {"decision": "cancel"}),
+                                            (3, {"permissions": {}, "scope": "turn"})])
+        result = self.manager.interrupt(session["id"])
+        self.assertEqual(result["status"], "interrupted")
+        self.assertEqual(result["task_policy"]["mode"], "monitor")
+        self.assertEqual(client.requests[-1][0], "turn/interrupt")
+
+    def test_task_policy_applies_only_to_its_baseline_branch(self):
+        self.git("branch", "another-baseline")
+        self.manager.close()
+        self.config["backend_task_policies"] = {"cuda": {"mode": "monitor", "branch": "another-baseline"}}
+        self.manager = CodexSessionManager(self.config, self.base, FakeClient)
+        session = self.create()
+        self.assertEqual(session["task_policy"]["mode"], "adapt")
+        self.start(session)
+        self.manager.interrupt(session["id"])
+        with self.assertRaisesRegex(SessionError, "monitor-only"):
+            self.manager.create({**self.payload, "branch": "another-baseline"})
+        other = self.manager.create({**self.payload, "backend": "metax", "branch": "another-baseline"})
+        self.assertEqual(other["task_policy"]["mode"], "adapt")
+        self.assertIsNone(other["task_policy"]["pr_url"])
+
+    def test_backend_ownership_blocks_replacement_machine_and_new_head_after_ended_turn(self):
+        session = self.create()
+        client = self.start(session)
+        client.callback({"method": "turn/completed", "params": {"threadId": "thread-123", "turn": {"status": "completed"}}})
+        (self.repo / "README.md").write_text("new baseline commit\n")
+        self.git("add", "README.md")
+        self.git("commit", "-m", "Advance baseline")
+        self.manager.close()
+        self.manager = CodexSessionManager(self.config, self.base, FakeClient)
+        for status in ("completed", "interrupted", "failed", "disconnected"):
+            self.manager._sessions[session["id"]]["status"] = status
+            with self.subTest(status=status), self.assertRaisesRegex(SessionError, session["id"]):
+                self.manager.create({**self.payload, "ssh_alias": "replacement_gpu", "remote_workspace": "/other/plugin"})
+        self.assertEqual(len(self.manager.snapshot()["sessions"]), 1)
+        resumed = self.start(session)
+        self.assertEqual(resumed.requests[0][0], "thread/resume")
+        self.assertEqual(resumed.requests[0][1]["threadId"], session["thread_id"] or "thread-123")
+        self.manager.interrupt(session["id"])
+        self.git("branch", "next-baseline")
+        next_session = self.manager.create({**self.payload, "branch": "next-baseline"})
+        self.assertNotEqual(next_session["work_branch"], session["work_branch"])
+        self.assertNotEqual(next_session["worktree"], session["worktree"])
+
+    def test_invalid_policy_cannot_silently_enable_adaptation_or_build_unsafe_pr_url(self):
+        for policies in ([], {"cuda": {"mode": "typo"}}, {"cuda": {"mode": []}},
+                         {"cuda": {"mode": "monitor", "pr": True}}, {"cuda": {"mode": "monitor", "pr": -1}},
+                         {"cuda": {"mode": "monitor", "branch": "bad branch"}}, {"unknown": {"mode": "monitor"}}):
+            with self.subTest(policies=policies), self.assertRaises(SessionError):
+                CodexSessionManager({**self.config, "backend_task_policies": policies}, self.base, FakeClient)
+        for repo in ("https://github.com/example/plugin", "example/../plugin", "../plugin", "example/plugin?token=bad"):
+            with self.subTest(repo=repo), self.assertRaises(SessionError):
+                CodexSessionManager({**self.config, "github_repo": repo,
+                                     "backend_task_policies": {"cuda": {"mode": "monitor", "pr": 17}}}, self.base, FakeClient)
 
 
 if __name__ == "__main__":

@@ -259,6 +259,8 @@
   const expanded = new Set();
   let readOnly = false;
   let sessionsEnabled = false;
+  let backendTaskPolicies = {};
+  let latestBranchSnapshot = null;
   const appUrl = path => new URL(path.replace(/^\/+/, ""), window.location.href).href;
   const labels = {
     merged:"已合入", open:"打开", draft:"草稿", closed:"已关闭", pending:"待合入", unknown:"未知",
@@ -338,6 +340,34 @@
       anchor.rel = "noopener noreferrer";
       return anchor;
     } catch (_) { return null; }
+  }
+  function taskPolicy(backend, branch, session) {
+    const policy = session?.task_policy || backendTaskPolicies[backend];
+    return policy?.branch === branch && policy.mode === "monitor" ? policy : {mode:"adapt"};
+  }
+  function approvalDecisions(params, monitor=false) {
+    const available = Array.isArray(params.availableDecisions) ? params.availableDecisions : ["accept","decline","cancel"];
+    return [...new Set(available.filter(value => typeof value === "string" && ["accept","decline","cancel"].includes(value) && (!monitor || value !== "accept")))];
+  }
+  function decisionLabel(decision) { return {accept:"允许本次操作",decline:"拒绝本次操作",cancel:"拒绝并结束本轮"}[decision]; }
+  function githubPrLink(url, label) {
+    try {
+      const parsed = new URL(url);
+      if (parsed.protocol === "https:" && parsed.hostname === "github.com" && !parsed.username && !parsed.password && /^\/[^/]+\/[^/]+\/pull\/\d+\/?$/.test(parsed.pathname)) return link(parsed.href, label);
+    } catch (_) { /* An unavailable or invalid PR URL remains plain text. */ }
+    return null;
+  }
+  function policyNotice(policy, fallbackPr) {
+    const box = el("div", "notice");
+    box.append(el("strong", "", "已有 PR · 仅监控"));
+    const pr = policy.pr || fallbackPr;
+    const url = policy.pr_url || (typeof pr === "string" ? pr : pr?.url || pr?.html_url);
+    const number = Number.isInteger(pr) ? pr : pr?.number;
+    const anchor = githubPrLink(url, number ? "查看 PR #" + number + " ↗" : "查看已有 PR ↗");
+    if (anchor) box.append(" · ", anchor);
+    else if (Number.isInteger(pr) || pr?.number) box.append(" · PR #" + (pr.number || pr));
+    box.append(el("div", "", policy.reason || "此 backend 由现有 PR 跟进，当前仅查看状态。"));
+    return box;
   }
   function showNotice(message) {
     const box = byId("notice");
@@ -548,7 +578,14 @@
         (latest.detail || "") + " · " + shortSha(latest.commit), latest.url, "查看后续运行"));
     }
     detail.append(meta);
-    if (!readOnly) {
+    const policy = taskPolicy(id, data.branch);
+    if (!readOnly && policy.mode === "monitor") {
+      detail.append(policyNotice(policy, pr));
+    } else if (!readOnly && pr.number) {
+      const existingPr = githubPrLink(pr.url, "查看已有 PR #" + pr.number + " 的进展 ↗");
+      if (existingPr) detail.append(existingPr);
+      else detail.append(el("p", "matrix-help", "已有 PR #" + pr.number + "，请先核对现有适配进展。"));
+    } else if (!readOnly) {
       const assign = el("a", "", "为 " + (backend.label || id) + " 分配验证机器并跟进升级 ↗");
       assign.href = appUrl("sessions") + "?branch=" + encodeURIComponent(data.branch) + "&backend=" + encodeURIComponent(id);
       detail.append(assign);
@@ -581,6 +618,7 @@
   let remoteRefreshing = false;
   let branchGeneration = 0;
   function applySnapshot(data, branch) {
+    latestBranchSnapshot = data;
     render(data);
     const url = new URL(window.location.href);
     url.searchParams.set("branch", data.branch || branch);
@@ -679,6 +717,9 @@
   let tasksFetching = false;
   const taskNotice = message => { byId("tasks-notice").hidden = !message; byId("tasks-notice").textContent = message || ""; };
   async function taskPost(session, action, body={}) {
+    if (["start","message"].includes(action) && taskPolicy(session.backend, session.branch, session).mode === "monitor") {
+      throw new Error("已有 PR · 仅监控，无法启动或发送适配指令。");
+    }
     const response = await fetch(appUrl("api/codex-sessions/" + encodeURIComponent(session.id) + "/" + action), {
       method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(body)
     });
@@ -701,7 +742,8 @@
   }
   function renderTaskRequests(card, session) {
     const requests = Array.isArray(session.pending_requests) ? session.pending_requests : [];
-    const signature = JSON.stringify(requests);
+    const monitor = taskPolicy(session.backend, session.branch, session).mode === "monitor";
+    const signature = JSON.stringify([requests, monitor]);
     if (card.pendingKey === signature) return; // Preserve a typed answer while polling.
     card.pendingKey = signature;
     card.requests.replaceChildren();
@@ -714,7 +756,11 @@
       details.append(el("summary", "", "请求内容"), el("pre", "", JSON.stringify(params, null, 2)));
       box.append(details);
       const respond = response => ({request_id:pending.id,response});
-      if (method === "item/tool/requestUserInput") {
+      if (monitor) {
+        box.append(el("p", "task-note", "已有 PR · 仅监控，请拒绝待执行操作或中断当前执行。"));
+        if (method === "item/permissions/requestApproval") actions.append(taskButton("拒绝权限", session, "respond", respond({permissions:{},scope:"turn"})));
+        else if (["item/commandExecution/requestApproval","item/fileChange/requestApproval"].includes(method)) for (const decision of approvalDecisions(params, true)) actions.append(taskButton(decisionLabel(decision), session, "respond", respond({decision})));
+      } else if (method === "item/tool/requestUserInput") {
         const inputs = [];
         for (const question of params.questions || []) {
           const fieldset = el("fieldset"), options = [];
@@ -750,8 +796,7 @@
           taskButton("拒绝权限", session, "respond", respond({permissions:{},scope:"turn"})));
       } else if (["item/commandExecution/requestApproval","item/fileChange/requestApproval"].includes(method)) {
         box.append(el("p", "task-note", "请核对命令、变更内容及路径。"));
-        actions.append(taskButton("允许本次操作", session, "respond", respond({decision:"accept"})),
-          taskButton("拒绝本次操作", session, "respond", respond({decision:"decline"})));
+        for (const decision of approvalDecisions(params)) actions.append(taskButton(decisionLabel(decision), session, "respond", respond({decision})));
       } else box.append(el("p", "task-note", "请打开任务详情处理此请求。"));
       box.append(actions); card.requests.append(box);
     }
@@ -760,16 +805,18 @@
     const root = el("article", "task-card"), header = el("div", "task-head"), title = el("h3"), status = el("span");
     const meta = el("p", "task-meta"), planNote = el("p", "task-note"), plan = el("ol", "task-plan"), messageLabel = el("p", "task-note"), message = el("div", "task-message"), error = el("div", "notice");
     const requests = el("div"), actions = el("div", "task-actions"), goal = el("details", "task-goal"), goalText = el("p");
+    const policyBox = el("div"), workBranch = el("p", "task-meta mono"), identity = el("details", "task-goal"), identityMeta = el("dl", "detail-meta");
+    identity.append(el("summary", "", "基线、候选与工作目录"), identityMeta);
     goal.append(el("summary", "", "任务目标与要求"),goalText);
     const fullMessage = el("details", "task-full-message"), fullMessageText = el("div", "task-message");
     fullMessage.append(el("summary", "", "展开完整进度消息"),fullMessageText);
     const latestSection = el("section"), latestMessage = el("div", "task-message"), latestFull = el("details", "task-full-message"), latestFullText = el("div", "task-message");
     latestFull.append(el("summary", "", "展开完整最新消息"),latestFullText);latestSection.append(el("p", "task-note", "最新消息"),latestMessage,latestFull);
-    header.append(title,status); root.append(header,meta,goal,planNote,plan,latestSection,messageLabel,message,fullMessage,error,requests,actions);
+    header.append(title,status); root.append(header,meta,workBranch,policyBox,identity,goal,planNote,plan,latestSection,messageLabel,message,fullMessage,error,requests,actions);
     const followup = el("details", "task-followup"), text = el("textarea"), send = el("button", "button", "发送补充指令");
     text.placeholder = "需要调整目标或继续跟进时填写"; text.setAttribute("aria-label", "补充任务指令");
     followup.append(el("summary", "", "补充指令"),text,send); root.append(followup);
-    const card = {root,title,status,meta,goal,goalText,planNote,plan,messageLabel,message,fullMessage,fullMessageText,latestSection,latestMessage,latestFull,latestFullText,error,requests,actions,followup,send,pendingKey:null,session,messageBusy:false};
+    const card = {root,title,status,meta,policyBox,workBranch,identityMeta,goal,goalText,planNote,plan,messageLabel,message,fullMessage,fullMessageText,latestSection,latestMessage,latestFull,latestFullText,error,requests,actions,followup,text,send,pendingKey:null,session,messageBusy:false};
     send.type = "button";
     send.addEventListener("click", async () => {
       if (!text.value.trim()) return;
@@ -784,6 +831,18 @@
   }
   function updateTaskCard(card, session) {
     card.session = session;
+    const policy = taskPolicy(session.backend, session.branch, session), monitor = policy.mode === "monitor";
+    card.policyBox.replaceChildren(); card.policyBox.hidden = !monitor;
+    if (monitor) card.policyBox.append(policyNotice(policy));
+    card.workBranch.textContent = "任务工作分支：" + (session.work_branch || "待核对");
+    card.identityMeta.replaceChildren(
+      infoBox("基线分支 · 创建时提交", (session.branch || "待核对") + " · " + (session.commit || "待核对")),
+      infoBox("任务工作分支", session.work_branch || "待核对"),
+      infoBox("实际候选 SHA", "待核对 · 尚无结构化提交记录"),
+      infoBox("本地独立 worktree", session.worktree || "准备中"),
+      infoBox("远端源仓库目录（机器配置）", session.remote_workspace || "待配置"),
+      infoBox("远端独立任务目录", "待上报 · 尚无结构化目录记录")
+    );
     card.title.textContent = (machineLabels[session.backend] || session.backend || "Backend") + " 适配任务";
     card.goal.hidden = !session.goal; card.goalText.textContent = session.goal || "";
     const waiting = session.status === "waiting_input" || session.status === "waiting_approval";
@@ -803,7 +862,7 @@
     const latest = latestSessionMessage(session);card.latestSection.hidden = !latest;card.latestMessage.textContent = latest.length > 350 ? latest.slice(0,350) + '…' : latest;card.latestFull.hidden = latest.length <= 350;card.latestFullText.textContent = latest;
     card.error.hidden = !session.error; card.error.textContent = session.error || "";
     renderTaskRequests(card,session);
-    const controlKey = session.status + ":" + Boolean(session.thread_id);
+    const controlKey = session.status + ":" + Boolean(session.thread_id) + ":" + policy.mode;
     if (card.controlKey !== controlKey) {
       card.controlKey = controlKey; card.actions.replaceChildren();
       const detail = el("a", "button", "任务详情 · 日志 ↗");
@@ -812,9 +871,14 @@
       if (activeTasks.has(session.status) || session.status === "prepared") {
         if (session.status !== "interrupting") card.actions.append(taskButton(session.status === "prepared" ? "取消待启动任务" : "中断执行",session,"interrupt"));
       }
-      if (!activeTasks.has(session.status)) card.actions.append(taskButton(session.thread_id ? "继续跟进" : "检查连接并启动",session,"start"));
+      if (!activeTasks.has(session.status)) {
+        const start = taskButton(monitor ? "仅监控" : session.thread_id ? "继续跟进" : "检查连接并启动",session,"start");
+        start.disabled = monitor; card.actions.append(start);
+      }
     }
-    card.send.disabled = card.messageBusy || waiting || ["prepared","starting","interrupting"].includes(session.status);
+    card.text.disabled = monitor;
+    card.send.disabled = monitor || card.messageBusy || waiting || ["prepared","starting","interrupting"].includes(session.status);
+    card.send.title = monitor ? "已有 PR · 仅监控" : "";
   }
   async function loadTasks() {
     if (!sessionsEnabled || tasksFetching) return;
@@ -823,8 +887,12 @@
       const response = await fetch(appUrl("api/codex-sessions"),{cache:"no-store"});
       const data = await response.json().catch(() => ({}));
       if (!response.ok) throw new Error(data.error || "无法读取任务");
+      const policies = data.backend_task_policies && typeof data.backend_task_policies === "object" ? data.backend_task_policies : {};
+      const policyChanged = JSON.stringify(policies) !== JSON.stringify(backendTaskPolicies);
+      backendTaskPolicies = policies;
       renderMachineProfiles(data.machine_profiles);
       const branch = byId("branch-select").value || initialBranch;
+      if (policyChanged && latestBranchSnapshot?.branch === branch) render(latestBranchSnapshot);
       const sessions = (Array.isArray(data.sessions) ? data.sessions : []).filter(session => session.branch === branch);
       const box = byId("task-list"), ids = new Set(sessions.map(session => session.id));
       for (const [id,card] of taskCards) if (!ids.has(id)) { card.root.remove(); taskCards.delete(id); }

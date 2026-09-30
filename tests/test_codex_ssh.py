@@ -174,7 +174,7 @@ class SSHDispatchTest(TestCase):
         with mock.patch.object(self.manager, "_check_connection", return_value=success):
             self.manager.create({"profile_id": first["id"]})
             with self.assertRaisesRegex(SessionError, "machine already"):
-                self.manager.create({"profile_id": second["id"]})
+                self.manager.create({"profile_id": second["id"], "backend": "metax"})
 
     def test_cancel_during_preflight_does_not_start_agent_and_holds_machine_lease(self):
         profile = self.direct_profile()
@@ -197,15 +197,17 @@ class SSHDispatchTest(TestCase):
                 self.assertEqual(self.manager._copy(session["id"])["status"], "starting")
                 self.assertEqual(self.manager.interrupt(session["id"])["status"], "interrupting")
                 self.assertEqual(FakeClient.instances, [])
-                with self.assertRaises(SessionError):
-                    self.manager.create(self.payload | {"ssh_alias": session["ssh_alias"]})
+                with self.assertRaisesRegex(SessionError, "machine already"):
+                    self.manager.create(self.payload | {"ssh_alias": session["ssh_alias"], "backend": "metax"})
             finally:
                 release.set()
                 startup.join(5)
         self.assertFalse(startup.is_alive())
         self.assertEqual(results[0]["status"], "interrupted")
         self.assertEqual(FakeClient.instances, [])
-        replacement = self.manager.create(self.payload | {"ssh_alias": session["ssh_alias"]})
+        with self.assertRaisesRegex(SessionError, session["id"]):
+            self.manager.create(self.payload | {"ssh_alias": session["ssh_alias"]})
+        replacement = self.manager.create(self.payload | {"ssh_alias": session["ssh_alias"], "backend": "metax"})
         self.assertEqual(replacement["status"], "prepared")
 
     def test_real_plan_and_last_message_survive_restart_without_claiming_gate_success(self):
