@@ -18,12 +18,13 @@ from pathlib import Path
 import re
 import secrets
 import threading
+import time
 from urllib.parse import parse_qs, urlsplit
 
 from branch_monitor import BranchMonitor
 
 
-CAPABILITIES = {"read_only": True, "sessions": False, "refresh": False, "evidence": False}
+CAPABILITIES = {"read_only": True, "sessions": False, "refresh": True, "evidence": False}
 STATUS_FIELDS = {"status", "scope", "commit", "target_commit", "tree", "tree_matches_head", "run_id", "attempt"}
 GATE_FIELDS = {"status", "passed", "total", "failed", "missing", "requests_passed", "requests_total",
                "latest_commit", "evidence_type", "tree_matches_head", "recorded_cases", "raw_results_available"}
@@ -83,7 +84,7 @@ paths, machine aliases, private IPs, source task IDs, or commands.
         for key in ("integration", "ci", "current_ci"):
             public[key] = _status(backend.get(key, {}))
         pr = backend.get("pr")
-        public["pr"] = {**_fields(pr, {"number", "title", "draft"}), "url": _public_url(pr.get("url"))} if isinstance(pr, dict) else None
+        public["pr"] = {**_fields(pr, {"number", "title", "draft", "state", "merged", "selected_by"}), "url": _public_url(pr.get("url"))} if isinstance(pr, dict) else None
         public["gate"] = _fields(backend.get("gate", {}), GATE_FIELDS)
         public["gate"]["detail"] = "共享视图；验收状态与原始证据分开记录"
         public["results"] = []
@@ -108,6 +109,8 @@ class SnapshotCache:
         self.monitor = monitor
         self.refresh_interval = refresh_interval
         self._lock = threading.Lock()
+        self._refresh_lock = threading.Lock()
+        self._last_refresh = {}
         self._stop = threading.Event()
         self._snapshots = {}
         self.default_branch = monitor.branch
@@ -138,13 +141,31 @@ class SnapshotCache:
                 if self._stop.is_set():
                     return
                 try:
-                    value = sanitize_snapshot(self.monitor.refresh_branch(branch=branch))
-                    with self._lock:
-                        self._snapshots[branch] = value
-                        self.allowed_branches.update(value.get("branches", []))
+                    self.refresh(branch)
                 except Exception:
                     with self._lock:
                         self._snapshots[branch]["errors"] = ["上游刷新暂不可用；当前显示上次记录。"]
+
+    def refresh(self, branch=None):
+        if branch is not None and not isinstance(branch, str):
+            raise ValueError("branch must be a string")
+        branch = branch or self.default_branch
+        # One Git fetch at a time; repeated clicks share the latest collection.
+        with self._refresh_lock:
+            with self._lock:
+                if branch not in self.allowed_branches:
+                    raise ValueError("Branch is not configured for this shared dashboard")
+                if branch not in self._snapshots and len(self._snapshots) >= 12:
+                    raise ValueError("Shared dashboard branch cache is full")
+                recent = self._last_refresh.get(branch)
+                if recent is not None and time.monotonic() - recent < 30:
+                    return json.loads(json.dumps(self._snapshots[branch]))
+            value = sanitize_snapshot(self.monitor.refresh_branch(branch=branch))
+            with self._lock:
+                self._snapshots[branch] = value
+                self._last_refresh[branch] = time.monotonic()
+                self.allowed_branches.update(value.get("branches", []))
+            return json.loads(json.dumps(value))
 
     def close(self):
         self._stop.set()
@@ -278,13 +299,53 @@ def make_server(cache, host="127.0.0.1", port=8765, *, username="viewer", passwo
                 self._send(404, {"error": "Not available in the read-only dashboard"})
 
         def do_POST(self):
+            if not self._authorized():
+                return
+            path = urlsplit(self.path).path
+            if prefix and path.startswith(prefix + "/"):
+                path = path[len(prefix):]
+            if path != "/api/branch-refresh":
+                self._send(405, {"error": "This shared dashboard is read-only"})
+                return
+            origin = self.headers.get("Origin")
+            if origin is not None:
+                try:
+                    parsed = urlsplit(origin)
+                    same_origin = (parsed.scheme in ("http", "https") and parsed.netloc.lower() == self.headers.get("Host", "").lower()
+                                   and not parsed.username and not parsed.password and not parsed.path and not parsed.query and not parsed.fragment)
+                except ValueError:
+                    same_origin = False
+                if not same_origin:
+                    self._send(403, {"error": "Refresh must originate from this dashboard"})
+                    return
+            if self.headers.get("Sec-Fetch-Site", "").lower() not in ("", "same-origin", "none"):
+                self._send(403, {"error": "Cross-site refresh is not allowed"})
+                return
+            if self.headers.get("Content-Type", "").partition(";")[0].strip().lower() != "application/json":
+                self._send(415, {"error": "Refresh requires a JSON body"})
+                return
+            try:
+                length = int(self.headers.get("Content-Length", "0"))
+                if length < 0 or length > 4096:
+                    self._send(413, {"error": "Refresh body is too large"})
+                    return
+                body = json.loads(self.rfile.read(length) or b"{}")
+                if not isinstance(body, dict):
+                    raise ValueError("Refresh requires a JSON object")
+                self._send(200, cache.refresh(body.get("branch")))
+            except (ValueError, TypeError):
+                self._send(400, {"error": "Invalid or unavailable branch"})
+            except Exception:
+                self._send(503, {"error": "Refresh is temporarily unavailable; the previous snapshot is retained"})
+
+        def _deny_control(self):
             if self._authorized():
                 self._send(405, {"error": "This shared dashboard is read-only"})
 
-        do_PUT = do_POST
-        do_PATCH = do_POST
-        do_DELETE = do_POST
-        do_OPTIONS = do_POST
+        do_PUT = _deny_control
+        do_PATCH = _deny_control
+        do_DELETE = _deny_control
+        do_OPTIONS = _deny_control
 
     return BoundedHTTPServer((host, port), Handler)
 

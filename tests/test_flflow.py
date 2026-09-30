@@ -335,6 +335,10 @@ class FlflowTests(unittest.TestCase):
             def snapshot(self):
                 return {"sessions": []}
 
+            def check_machine(self, payload):
+                calls.append(("check", payload))
+                return {"ok": False, "error": "SSH unavailable", "checks": [{"name": "ssh", "status": "failed"}]}
+
             def create(self, payload):
                 calls.append(("create", payload))
                 return {"id": "abc", "status": "prepared"}
@@ -365,6 +369,16 @@ class FlflowTests(unittest.TestCase):
                 connection.close()
 
         try:
+            connection = HTTPConnection("127.0.0.1", server.server_port, timeout=3)
+            connection.request("GET", "/api/capabilities")
+            response = connection.getresponse()
+            self.assertEqual(json.loads(response.read()), {"read_only": False, "sessions": True, "refresh": False})
+            connection.close()
+            code, result = request("/api/codex-machines/check", {"profile_id": "test"})
+            self.assertEqual(code, 200)
+            self.assertFalse(result["ok"])
+            self.assertEqual(result["checks"][0]["status"], "failed")
+            self.assertEqual(calls.pop(), ("check", {"profile_id": "test"}))
             self.assertEqual(request("/api/codex-sessions", {})[1]["status"], "prepared")
             self.assertEqual([c[0] for c in calls], ["create"])
             self.assertEqual(request("/api/codex-sessions", {"start": True})[1]["status"], "starting")

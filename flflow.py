@@ -775,7 +775,8 @@ def make_server(engine: Engine, host: str, port: int, monitor: object | None = N
                 return
             target = urlsplit(self.path)
             if target.path == "/api/capabilities":
-                self._json(200, {"read_only": False})
+                self._json(200, {"read_only": False, "sessions": sessions is not None,
+                                 "refresh": monitor is not None})
                 return
             if target.path in ("/api/codex-sessions", "/api/codex-health"):
                 if sessions is None:
@@ -875,12 +876,14 @@ def make_server(engine: Engine, host: str, port: int, monitor: object | None = N
                 if not isinstance(body, dict):
                     raise WorkflowError("Request body must be a JSON object")
                 session_action = re.fullmatch(r"/api/codex-sessions/([A-Za-z0-9_-]+)/(start|message|interrupt|respond)", target)
-                if target in ("/api/codex-machines", "/api/codex-sessions") or session_action:
+                if target in ("/api/codex-machines", "/api/codex-machines/check", "/api/codex-sessions") or session_action:
                     if sessions is None:
                         self._json(HTTPStatus.SERVICE_UNAVAILABLE, {"error": "Codex sessions are not configured"})
                         return
                     if target == "/api/codex-machines":
                         result = sessions.save_profile(body)
+                    elif target == "/api/codex-machines/check":
+                        result = sessions.check_machine(body)
                     elif target == "/api/codex-sessions":
                         result = sessions.create(body)
                         if body.get("start") is True:

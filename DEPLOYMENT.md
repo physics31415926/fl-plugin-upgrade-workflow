@@ -26,7 +26,7 @@ tmux new-session -d -s flflow-dashboard 'exec python3 -B share_server.py --monit
 tmux capture-pane -t flflow-dashboard -p
 ```
 
-服务默认定期采集 Git/CI 状态；`--refresh-interval` 设置采集间隔。监控状态与进程必须由一个实例管理，持久保存插件仓库和证据目录。
+服务默认定期采集 Git/CI 状态；`--refresh-interval` 设置采集间隔。页面的“读取最新状态”通过同源 JSON 请求触发一次采集并显示新快照；30 秒内重复请求合并，后台和手动采集串行执行。监控状态与进程必须由一个实例管理，持久保存插件仓库和证据目录。
 
 ## 访问入口
 
@@ -56,7 +56,7 @@ ssh -N -L 127.0.0.1:8765:127.0.0.1:8765 <development-host>
 
 - 在服务器检查 `/healthz` 和 `/api/capabilities`，确认 `read_only: true`。
 - 从实际团队入口检查首页、CI/Gate 数据以及带前缀的 API 请求。
-- 确认任务、机器、日志和原始证据接口不可访问，所有 POST 请求均被拒绝。
+- 确认任务、机器、日志和原始证据接口不可访问。仅 `/api/branch-refresh` 接受经过认证和同源检查的 JSON POST；任务控制 POST 及其他写请求仍拒绝访问。
 - 查看 `tmux capture-pane -t flflow-dashboard -p` 排查启动或采集错误。
 - 页面保留最后采集时间；采集失败不会把未知状态伪装成通过。
 

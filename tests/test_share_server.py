@@ -69,14 +69,18 @@ class ShareServerTests(unittest.TestCase):
         self.worker = threading.Thread(target=self.server.serve_forever, daemon=True)
         self.worker.start()
 
-    def request(self, path, method="GET", authorization=None, host=None):
+    def request(self, path, method="GET", authorization=None, host=None, body=None, extra_headers=None):
         connection = HTTPConnection("127.0.0.1", self.server.server_port, timeout=3)
         headers = {}
         if authorization is not None:
             headers["Authorization"] = authorization
         if host:
             headers["Host"] = host
-        connection.request(method, path, headers=headers)
+        if body is not None:
+            body = json.dumps(body).encode("utf-8")
+            headers["Content-Type"] = "application/json"
+        headers.update(extra_headers or {})
+        connection.request(method, path, body=body, headers=headers)
         response = connection.getresponse()
         result = response.status, dict(response.getheaders()), response.read()
         connection.close()
@@ -126,7 +130,7 @@ class ShareServerTests(unittest.TestCase):
         for path in ("/sessions", "/workflow", "/api/codex-sessions", "/api/codex-machines", "/api/branch-evidence?branch=0.4.0-dev", "/api/logs", "/runs/gate-evidence/cuda/acceptance.json", "/../branch-monitor.json"):
             self.assertEqual(self.request(path, authorization=self.auth())[0], 404, path)
         for method in ("POST", "PUT", "PATCH", "DELETE", "OPTIONS"):
-            status, headers, _ = self.request("/api/branch-refresh", method=method, authorization=self.auth())
+            status, headers, _ = self.request("/api/codex-sessions", method=method, authorization=self.auth())
             self.assertEqual(status, 405)
             self.assertEqual(headers["Allow"], "GET, HEAD")
         self.assertEqual(self.monitor.calls, [("status", None)])
@@ -138,9 +142,35 @@ class ShareServerTests(unittest.TestCase):
             self.assertEqual(self.request(prefix + "/")[0], 200)
             status, _, data = self.request(prefix + "/api/capabilities")
             self.assertEqual(status, 200)
-            self.assertEqual(json.loads(data), {"read_only": True, "sessions": False, "refresh": False, "evidence": False, "default_branch": "0.4.0-dev"})
+            self.assertEqual(json.loads(data), {"read_only": True, "sessions": False, "refresh": True, "evidence": False, "default_branch": "0.4.0-dev"})
             self.assertEqual(self.request(prefix + "/api/branch-status?branch=0.4.0-dev")[0], 200)
         self.assertEqual(self.request("/other/api/branch-status")[0], 404)
+
+    def test_manual_refresh_reads_once_and_returns_new_sanitized_snapshot(self):
+        self.serve(base_path="/fl/dashboard", password="test-long-password")
+        def changed(branch=None):
+            self.monitor.calls.append(("refresh", branch))
+            value = source_snapshot()
+            value["backends"][0]["pr"].update(number=566, state="open", draft=False)
+            return value
+        self.monitor.refresh_branch = changed
+        status, _, data = self.request("/fl/dashboard/api/branch-refresh", method="POST", authorization=self.auth(),
+                                       body={"branch": "0.4.0-dev"})
+        self.assertEqual(status, 200)
+        self.assertEqual(json.loads(data)["backends"][0]["pr"]["number"], 566)
+        self.assertEqual(json.loads(data)["backends"][0]["pr"]["state"], "open")
+        self.assertNotIn(b"source_thread", data)
+        self.assertEqual(self.request("/api/branch-refresh", method="POST", authorization=self.auth(), body={"branch":"0.4.0-dev"})[0], 200)
+        self.assertEqual(self.monitor.calls.count(("refresh", "0.4.0-dev")), 1)
+        self.assertEqual(json.loads(self.request("/api/branch-status", authorization=self.auth())[2])["backends"][0]["pr"]["number"], 566)
+
+    def test_manual_refresh_rejects_cross_site_and_unconfigured_branch(self):
+        self.serve()
+        self.assertEqual(self.request("/api/branch-refresh", method="POST", body={},
+                                     extra_headers={"Origin":"https://other.example"})[0], 403)
+        self.assertEqual(self.request("/api/branch-refresh", method="POST", body={"branch":"other"})[0], 400)
+        self.assertEqual(self.request("/api/branch-refresh", method="POST")[0], 415)
+        self.assertEqual(self.monitor.calls, [("status", None)])
 
     def test_cached_status_rejects_arbitrary_refs_without_git_fetch(self):
         self.serve()

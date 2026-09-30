@@ -70,10 +70,10 @@
     .cell-label { display: none; color: var(--muted); font-size: 11px; margin-bottom: 4px; }
     .pill { display: inline-flex; align-items: center; gap: 6px; max-width: 100%; padding: 4px 9px; border-radius: 100px; background: #eef2f7; color: #57677f; font-size: 11px; font-weight: 700; white-space: nowrap; }
     .pill.merged, .pill.passed, .pill.recorded_pass { color: #08724e; background: #e2f5ec; }
-    .pill.pending, .pill.running { color: #275eac; background: #e6f0ff; }
+    .pill.pending, .pill.running, .pill.open { color: #275eac; background: #e6f0ff; }
     .pill.failed { color: #b23b48; background: #fce9eb; }
     .pill.stale, .pill.partial { color: #a4660d; background: #fff2db; }
-    .pill.missing, .pill.unknown { color: #64748b; background: #edf1f6; }
+    .pill.missing, .pill.unknown, .pill.draft, .pill.closed { color: #64748b; background: #edf1f6; }
     .meter { display: flex; align-items: center; gap: 9px; font-size: 12px; color: #4d6078; white-space: nowrap; }
     .meter-track { width: 74px; height: 6px; overflow: hidden; border-radius: 99px; background: #e9edf3; }
     .meter-fill { display: block; height: 100%; border-radius: inherit; background: #4a78ec; }
@@ -98,6 +98,27 @@
     .case-evidence { white-space: nowrap; }
     .empty { padding: 24px; border: 1px dashed #cbd5e1; border-radius: 10px; background: #fff; color: var(--muted); text-align: center; }
     .footnote { margin-top: 21px; color: var(--muted); font-size: 11px; }
+    .task-list { display:grid; gap:12px; }
+    .task-card { padding:18px; background:var(--panel); border:1px solid var(--line); border-radius:12px; }
+    .task-card.focused { border-color:var(--blue); }
+    .task-head, .task-actions { display:flex; align-items:center; justify-content:space-between; gap:10px; flex-wrap:wrap; }
+    .task-head h3 { margin:0; font-size:16px; overflow-wrap:anywhere; }
+    .task-meta, .task-note { color:var(--muted); font-size:12px; margin:8px 0; }
+    .task-plan { margin:13px 0; padding-left:22px; font-size:12px; }
+    .task-plan li { padding:4px 0; }
+    .task-plan .completed { color:var(--green); }
+    .task-plan .in_progress { color:var(--blue); font-weight:650; }
+    .task-message { white-space:pre-wrap; overflow-wrap:anywhere; max-height:220px; overflow:auto; padding:12px; border-radius:8px; background:var(--soft); font-size:12px; }
+    .task-actions { justify-content:flex-start; margin-top:12px; }
+    .task-actions .button { min-height:32px; font-size:12px; }
+    .task-request { margin-top:12px; padding:14px; border:1px solid #d9ab54; border-radius:9px; }
+    .task-request h4 { margin:0 0 9px; }
+    .task-request pre { white-space:pre-wrap; overflow-wrap:anywhere; max-height:240px; overflow:auto; font-size:11px; }
+    .task-request fieldset { border:1px solid var(--line); margin:10px 0; }
+    .task-request label { display:block; margin:6px 0; }
+    .task-request input[type=text], .task-request input[type=password], .task-followup textarea { width:100%; padding:9px; color:var(--ink); background:var(--panel); border:1px solid var(--line); border-radius:7px; font:inherit; }
+    .task-followup { margin-top:12px; }
+    .task-followup textarea { min-height:70px; margin-top:8px; }
     [hidden] { display: none !important; }
     @media (prefers-color-scheme: dark) {
       :root { color-scheme: dark; --bg:#101827; --panel:#1b2637; --ink:#edf2f9; --muted:#a0aec2; --line:#334257; --blue:#9bb8ff; --soft:#223048; --shadow:none; }
@@ -111,10 +132,10 @@
       .case-row { border-color:#2e3c50; }
       .case-row:hover { background:#243349; }
       .pill.merged, .pill.passed, .pill.recorded_pass { background:#173f32; color:#8ee0b8; }
-      .pill.pending, .pill.running { background:#1d395f; color:#acc8ff; }
+      .pill.pending, .pill.running, .pill.open { background:#1d395f; color:#acc8ff; }
       .pill.failed { background:#4a2934; color:#ffadb6; }
       .pill.stale, .pill.partial { background:#493921; color:#f7cd83; }
-      .pill.missing, .pill.unknown { background:#354154; color:#c2ccdb; }
+      .pill.missing, .pill.unknown, .pill.draft, .pill.closed { background:#354154; color:#c2ccdb; }
       .meter-track { background:#354154; }
     }
     @media (max-width: 900px) {
@@ -174,7 +195,7 @@
             <label class="field-label" for="branch-select">目标分支</label>
             <select id="branch-select" aria-label="目标分支"><option value="0.4.0-dev">0.4.0-dev</option></select>
           </div>
-          <button class="button" id="refresh-remote" type="button" title="向远端重新采集分支和 CI 状态">刷新远端</button>
+          <button class="button" id="refresh-remote" type="button" title="读取一次最新 Git 分支、PR、CI 和 Gate 数据，并更新本页">读取最新状态</button>
         </div>
       </div>
       <div class="hero-meta">
@@ -200,13 +221,18 @@
       <p>此处保留最近一次工作流的实际结果。各 backend 的适配验收来源、提交与后续运行记录可在平台明细中查看。</p>
     </details>
     <div id="notice" class="notice" role="alert" hidden></div>
+    <section id="tasks-panel" hidden aria-labelledby="tasks-title">
+      <div class="section-heading"><div><h2 id="tasks-title">适配任务</h2><p>显示 agent 的实际计划和最新进展；需要回答或授权时可在这里处理。</p></div><a id="new-task-link" class="button" href="/sessions">配置机器 · 启动任务 ↗</a></div>
+      <div id="tasks-notice" class="notice" role="alert" hidden></div>
+      <div id="task-list" class="task-list"><div class="empty">正在读取任务…</div></div>
+    </section>
     <div class="section-heading">
       <div><h2>Backend 状态</h2><p>点击平台展开模型、执行模式和具体适配 Gate case。</p></div>
       <span class="stamp" id="refresh-stamp">自动更新中</span>
     </div>
     <div class="table-head columns" aria-hidden="true"><span>平台 / PR</span><span>代码合入</span><span>适配 CI</span><span>Gate 验收</span><span>场景覆盖</span><span></span></div>
     <div id="backend-list" class="backend-list" aria-live="polite"><div class="empty">正在读取 backend 状态…</div></div>
-    <p class="footnote">状态每 15 秒从本地监控服务更新一次。点击“刷新远端”会重新采集 GitHub 分支与 CI；Gate case 只有上传或采集到逐项结果后才会显示通过。</p>
+    <p class="footnote">状态每 15 秒从监控服务读取一次。点击“读取最新状态”会立即采集并更新本页。任务进展每 3 秒读取一次；本轮执行结束后，Gate 仍按实际验收证据判断。</p>
   </main>
 </div>
 <script>
@@ -215,9 +241,10 @@
   const byId = (id) => document.getElementById(id);
   const expanded = new Set();
   let readOnly = false;
+  let sessionsEnabled = false;
   const appUrl = path => new URL(path.replace(/^\/+/, ""), window.location.href).href;
   const labels = {
-    merged:"已合入", pending:"待合入", unknown:"未知",
+    merged:"已合入", open:"打开", draft:"草稿", closed:"已关闭", pending:"待合入", unknown:"未知",
     passed:"通过", recorded_pass:"通过 · 验收记录", failed:"失败", running:"运行中",
     missing:"无证据", stale:"证据过期", partial:"部分通过", cancelled:"已取消",
     skipped:"跳过"
@@ -251,10 +278,22 @@
     if (name === "failure" || name === "error") return "failed";
     if (name === "queued" || name === "in_progress") return "running";
     if (name === "not_run" || name === "no_evidence") return "missing";
-    if (name === "open" || name === "draft") return "pending";
-    if (name === "closed") return "unknown";
     return Object.prototype.hasOwnProperty.call(labels, name) ? name : "unknown";
   };
+  function prStatusText(pr, integrationStatus) {
+    const state = String(pr.state || "").toLowerCase();
+    if (pr.merged === true || state === "merged") return "已合入";
+    if (state === "closed") return "已关闭";
+    if (state === "open") return pr.draft ? "草稿" : "打开";
+    if (["merged", "closed", "draft", "open"].includes(integrationStatus)) return labels[integrationStatus];
+    return "状态未知";
+  }
+  function integrationText(status) {
+    if (status === "merged") return "已合入";
+    if (status === "closed") return "已关闭 · 未合入";
+    if (status === "open" || status === "draft" || status === "pending") return "未合入";
+    return "未知";
+  }
   const el = (tag, className, value) => {
     const node = document.createElement(tag);
     if (className) node.className = className;
@@ -445,11 +484,11 @@
     nameLine.append(el("span", "backend-dot " + mergeStatus));
     nameLine.append(el("span", "", backend.label || id));
     nameCell.append(nameLine);
-    const subtitle = pr.number ? "PR #" + pr.number + (pr.draft ? " · 草稿" : "") : (backend.ci_enabled ? "CI 已接入" : "CI 尚未接入");
+    const subtitle = pr.number ? "PR #" + pr.number + " · " + prStatusText(pr, mergeStatus) : (backend.ci_enabled ? "CI 已接入" : "CI 尚未接入");
     nameCell.append(el("div", "backend-sub", subtitle));
     toggle.append(nameCell);
     for (const [label, status, text] of [
-      ["代码合入", mergeStatus, mergeStatus === "merged" ? "已合入" : mergeStatus === "pending" ? "待合入" : "未知"],
+      ["代码合入", mergeStatus, integrationText(mergeStatus)],
       ["适配 CI", ciStatus, !backend.ci_enabled && (ciStatus === "missing" || ciStatus === "unknown") ? "未接入" : labels[ciStatus]],
       ["Gate 验收", gateStatus, gateStatus === "passed" ? "验收通过" : gateStatus === "failed" ? "验收失败" : labels[gateStatus]]
     ]) {
@@ -473,7 +512,7 @@
     detail.id = detailId;
     detail.hidden = !open;
     const meta = el("dl", "detail-meta");
-    const mergeDetail = (integration.detail || labels[mergeStatus]) +
+    const mergeDetail = integrationText(mergeStatus) + (integration.detail ? " · " + integration.detail : "") +
       (integration.commit ? " · " + shortSha(integration.commit) : "") +
       (pr.title ? " · " + pr.title : "");
     meta.append(infoBox("代码合入", mergeDetail, pr.url, pr.number ? "PR #" + pr.number : ""));
@@ -523,27 +562,37 @@
   }
   let fetching = false;
   let remoteRefreshing = false;
+  let branchGeneration = 0;
+  function applySnapshot(data, branch) {
+    render(data);
+    const url = new URL(window.location.href);
+    url.searchParams.set("branch", data.branch || branch);
+    window.history.replaceState(null, "", url);
+    if (sessionsEnabled) loadTasks();
+  }
   async function loadBranch(branch) {
     if (fetching || remoteRefreshing) return;
     fetching = true;
+    const generation = branchGeneration;
     try {
       const response = await fetch(appUrl("api/branch-status") + "?branch=" + encodeURIComponent(branch), {cache:"no-store"});
       const data = await response.json().catch(() => ({}));
       if (!response.ok) throw new Error(data.error || "状态接口返回 " + response.status);
-      render(data);
-      const url = new URL(window.location.href);
-      url.searchParams.set("branch", data.branch || branch);
-      window.history.replaceState(null, "", url);
+      if (generation === branchGeneration) applySnapshot(data, branch);
     } catch (error) {
       showNotice("无法读取分支状态：" + error.message);
-    } finally { fetching = false; }
+    } finally {
+      fetching = false;
+      if (generation !== branchGeneration) loadBranch(byId("branch-select").value);
+    }
   }
   async function refreshRemote() {
     if (remoteRefreshing || fetching) return;
     remoteRefreshing = true;
     const button = byId("refresh-remote");
     button.disabled = true;
-    button.textContent = "刷新中…";
+    button.textContent = "读取中…";
+    byId("branch-select").disabled = true;
     const branch = byId("branch-select").value || "0.4.0-dev";
     try {
       const response = await fetch(appUrl("api/branch-refresh"), {
@@ -552,20 +601,172 @@
       });
       const result = await response.json().catch(() => ({}));
       if (!response.ok) throw new Error(result.error || "刷新接口返回 " + response.status);
+      applySnapshot(result, branch);
     } catch (error) {
-      showNotice("刷新远端失败：" + error.message);
+      showNotice("读取最新状态失败：" + error.message + "。保留上次采集结果。");
+    } finally {
       remoteRefreshing = false;
       button.disabled = false;
-      button.textContent = "刷新远端";
-      return;
+      button.textContent = "读取最新状态";
+      byId("branch-select").disabled = false;
     }
-    remoteRefreshing = false;
-    button.disabled = false;
-    button.textContent = "刷新远端";
-    await loadBranch(branch);
   }
-  byId("branch-select").addEventListener("change", () => loadBranch(byId("branch-select").value));
+  byId("branch-select").addEventListener("change", () => { branchGeneration++; loadBranch(byId("branch-select").value); loadTasks(); });
   byId("refresh-remote").addEventListener("click", refreshRemote);
+  const taskLabels = {prepared:"待启动",starting:"连接并启动中",running:"执行中",waiting_input:"等待回答",waiting_approval:"等待授权",interrupting:"正在中断",interrupted:"已中断",completed:"本轮结束",failed:"执行失败",disconnected:"连接中断"};
+  const activeTasks = new Set(["starting","running","waiting_input","waiting_approval","interrupting"]);
+  const taskCards = new Map();
+  let tasksFetching = false;
+  const taskNotice = message => { byId("tasks-notice").hidden = !message; byId("tasks-notice").textContent = message || ""; };
+  async function taskPost(session, action, body={}) {
+    const response = await fetch(appUrl("api/codex-sessions/" + encodeURIComponent(session.id) + "/" + action), {
+      method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(body)
+    });
+    const data = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(data.error || "操作失败 " + response.status);
+    taskNotice("");
+    await loadTasks();
+    return data;
+  }
+  function taskButton(title, session, action, body) {
+    const button = el("button", "button", title);
+    button.type = "button";
+    button.addEventListener("click", async () => {
+      button.disabled = true;
+      try { await taskPost(session, action, typeof body === "function" ? body() : body); }
+      catch (error) { taskNotice(error.message); }
+      finally { if (button.isConnected) button.disabled = false; }
+    });
+    return button;
+  }
+  function renderTaskRequests(card, session) {
+    const requests = Array.isArray(session.pending_requests) ? session.pending_requests : [];
+    const signature = JSON.stringify(requests);
+    if (card.pendingKey === signature) return; // Preserve a typed answer while polling.
+    card.pendingKey = signature;
+    card.requests.replaceChildren();
+    for (const pending of requests) {
+      const params = pending.params || {}, method = pending.method || "";
+      const box = el("div", "task-request"), actions = el("div", "task-actions");
+      box.append(el("h4", "", method === "item/tool/requestUserInput" ? "需要你的回答" : "需要你的授权"));
+      const details = el("details");
+      details.open = method !== "item/tool/requestUserInput";
+      details.append(el("summary", "", "请求内容"), el("pre", "", JSON.stringify(params, null, 2)));
+      box.append(details);
+      const respond = response => ({request_id:pending.id,response});
+      if (method === "item/tool/requestUserInput") {
+        const inputs = [];
+        for (const question of params.questions || []) {
+          const fieldset = el("fieldset"), options = [];
+          fieldset.append(el("legend", "", question.question || question.header || question.id));
+          for (const [index, option] of (question.options || []).entries()) {
+            const label = el("label"), input = el("input");
+            input.type = question.isMultiSelect || question.is_multiple_choice ? "checkbox" : "radio";
+            input.name = "monitor-" + session.id + "-" + pending.id + "-" + question.id;
+            input.value = typeof option === "string" ? option : option.label || String(index);
+            label.append(input, document.createTextNode(" " + input.value + (option.description ? " · " + option.description : "")));
+            fieldset.append(label); options.push(input);
+          }
+          const text = el("input");
+          text.type = question.isSecret ? "password" : "text";
+          text.placeholder = "填写或补充回答";
+          text.setAttribute("aria-label", question.question || question.id || "回答");
+          fieldset.append(text); box.append(fieldset);
+          inputs.push({id:question.id,options,text});
+        }
+        actions.append(taskButton("提交回答", session, "respond", () => {
+          const answers = {};
+          for (const input of inputs) {
+            const values = input.options.filter(item => item.checked).map(item => item.value);
+            if (input.text.value.trim()) values.push(input.text.value.trim());
+            if (!values.length) throw new Error("请回答所有问题后提交。");
+            answers[input.id] = {answers:values};
+          }
+          return respond({answers});
+        }));
+      } else if (method === "item/permissions/requestApproval") {
+        box.append(el("p", "task-note", "核对请求后决定；授权仅作用于当前轮次。"));
+        actions.append(taskButton("允许本轮请求的权限", session, "respond", respond({permissions:params.permissions || {},scope:"turn"})),
+          taskButton("拒绝权限", session, "respond", respond({permissions:{},scope:"turn"})));
+      } else if (["item/commandExecution/requestApproval","item/fileChange/requestApproval"].includes(method)) {
+        box.append(el("p", "task-note", "请核对命令、变更内容及路径。"));
+        actions.append(taskButton("允许本次操作", session, "respond", respond({decision:"accept"})),
+          taskButton("拒绝本次操作", session, "respond", respond({decision:"decline"})));
+      } else box.append(el("p", "task-note", "请打开任务详情处理此请求。"));
+      box.append(actions); card.requests.append(box);
+    }
+  }
+  function newTaskCard(session) {
+    const root = el("article", "task-card"), header = el("div", "task-head"), title = el("h3"), status = el("span");
+    const meta = el("p", "task-meta"), plan = el("ol", "task-plan"), message = el("div", "task-message"), error = el("div", "notice");
+    const requests = el("div"), actions = el("div", "task-actions");
+    header.append(title,status); root.append(header,meta,plan,message,error,requests,actions);
+    const followup = el("details", "task-followup"), text = el("textarea"), send = el("button", "button", "发送补充指令");
+    text.placeholder = "需要调整目标或继续跟进时填写"; text.setAttribute("aria-label", "补充任务指令");
+    followup.append(el("summary", "", "补充指令"),text,send); root.append(followup);
+    const card = {root,title,status,meta,plan,message,error,requests,actions,followup,send,pendingKey:null,session,messageBusy:false};
+    send.type = "button";
+    send.addEventListener("click", async () => {
+      if (!text.value.trim()) return;
+      if (card.messageBusy) return;
+      card.messageBusy = true;
+      send.disabled = true;
+      try { await taskPost(card.session,"message",{text:text.value.trim()}); text.value = ""; }
+      catch (error) { taskNotice(error.message); }
+      finally { card.messageBusy = false; if (send.isConnected) updateTaskCard(card,card.session); }
+    });
+    return card;
+  }
+  function updateTaskCard(card, session) {
+    card.session = session;
+    card.title.textContent = (session.backend || "Backend") + " · " + (session.goal || "分支适配").slice(0,120);
+    const waiting = session.status === "waiting_input" || session.status === "waiting_approval";
+    card.status.className = "pill " + (waiting ? "partial" : session.status === "failed" ? "failed" : activeTasks.has(session.status) ? "running" : "unknown");
+    card.status.textContent = taskLabels[session.status] || session.status;
+    card.meta.textContent = "任务 " + session.id.slice(0,8) + " · " + (session.ssh_alias || "机器待配置") + " · 更新 " + dateText(session.updated_at);
+    card.root.classList.toggle("focused", session.id === new URLSearchParams(window.location.search).get("session"));
+    const plan = Array.isArray(session.plan) ? session.plan : [];
+    card.plan.replaceChildren();
+    if (!plan.length) card.plan.append(el("li", "", "等待 agent 报告执行计划。"));
+    for (const step of plan) card.plan.append(el("li", step.status, ({pending:"待执行",in_progress:"进行中",completed:"已完成"}[step.status] || "待确认") + " · " + step.step));
+    card.message.textContent = session.last_agent_message || (session.status === "prepared" ? "机器配置完成后，可启动 agent。" : "等待 agent 的进展消息…");
+    card.error.hidden = !session.error; card.error.textContent = session.error || "";
+    renderTaskRequests(card,session);
+    const controlKey = session.status + ":" + Boolean(session.thread_id);
+    if (card.controlKey !== controlKey) {
+      card.controlKey = controlKey; card.actions.replaceChildren();
+      const detail = el("a", "button", "任务详情 · 日志 ↗");
+      detail.href = appUrl("sessions") + "?branch=" + encodeURIComponent(session.branch) + "&session=" + encodeURIComponent(session.id);
+      card.actions.append(detail);
+      if (activeTasks.has(session.status) || session.status === "prepared") {
+        if (session.status !== "interrupting") card.actions.append(taskButton(session.status === "prepared" ? "取消待启动任务" : "中断执行",session,"interrupt"));
+      }
+      if (!activeTasks.has(session.status)) card.actions.append(taskButton(session.thread_id ? "继续跟进" : "检查连接并启动",session,"start"));
+    }
+    card.send.disabled = card.messageBusy || waiting || ["prepared","starting","interrupting"].includes(session.status);
+  }
+  async function loadTasks() {
+    if (!sessionsEnabled || tasksFetching) return;
+    tasksFetching = true;
+    try {
+      const response = await fetch(appUrl("api/codex-sessions"),{cache:"no-store"});
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(data.error || "无法读取任务");
+      const branch = byId("branch-select").value || initialBranch;
+      const sessions = (Array.isArray(data.sessions) ? data.sessions : []).filter(session => session.branch === branch);
+      const box = byId("task-list"), ids = new Set(sessions.map(session => session.id));
+      for (const [id,card] of taskCards) if (!ids.has(id)) { card.root.remove(); taskCards.delete(id); }
+      box.querySelectorAll(".empty").forEach(node => node.remove());
+      if (!sessions.length) box.append(el("div", "empty", "此分支尚无适配任务。配置验证机器后，可启动 agent 并在这里跟进。"));
+      for (const session of sessions) {
+        let card = taskCards.get(session.id);
+        if (!card) { card = newTaskCard(session); taskCards.set(session.id,card); box.append(card.root); }
+        updateTaskCard(card,session);
+      }
+      byId("new-task-link").href = appUrl("sessions") + "?branch=" + encodeURIComponent(branch);
+    } catch (error) { taskNotice("读取任务失败：" + error.message); }
+    finally { tasksFetching = false; }
+  }
   const requestedBranch = new URLSearchParams(window.location.search).get("branch");
   let initialBranch = requestedBranch || "0.4.0-dev";
   async function initialize() {
@@ -574,17 +775,20 @@
       if (response.ok) {
         const capabilities = await response.json();
         readOnly = capabilities.read_only === true;
+        sessionsEnabled = !readOnly && capabilities.sessions === true;
+        byId("refresh-remote").hidden = capabilities.refresh === false;
         if (!requestedBranch && capabilities.default_branch) initialBranch = capabilities.default_branch;
       }
     } catch (_) { /* Older local servers expose only the existing status API. */ }
     if (readOnly) {
       byId("access-mode").hidden = false;
-      byId("refresh-remote").hidden = true;
       document.querySelectorAll('.toplinks a[href="/workflow"], .toplinks a[href="/sessions"]').forEach(node => { node.hidden = true; });
-      document.querySelector(".footnote").textContent = "团队只读看板：页面定时更新采集结果。任务控制、机器连接信息及原始私有记录由维护者在本机管理。";
+      document.querySelector(".footnote").textContent = "团队看板每 15 秒读取采集结果；点击“读取最新状态”可触发一次采集（连续点击在 30 秒内合并）。任务控制、机器配置及原始私有记录由维护者在本机管理。";
     }
+    byId("tasks-panel").hidden = !sessionsEnabled;
     await loadBranch(initialBranch);
     setInterval(() => loadBranch(byId("branch-select").value || initialBranch), 15000);
+    if (sessionsEnabled) setInterval(loadTasks, 3000);
   }
   initialize();
 })();

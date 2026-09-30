@@ -4,9 +4,11 @@
 
 ## 分支适配监控
 
-将 `branch-monitor.example.json` 复制为 `branch-monitor.json`，核对插件仓库路径、remote、分支、模型和 backend PR 编号。启动 `python flflow.py serve --config workflow.json --monitor-config branch-monitor.json` 后，首页 `/` 显示分支监控；原工作流控制页在 `/workflow`。页面可切换本地 remote-tracking 分支，并用“刷新远端”更新目标分支 Git ref 与 GitHub CI。`branch-monitor.json` 是本机配置，已被 Git 忽略。
+将 `branch-monitor.example.json` 复制为 `branch-monitor.json`，核对插件仓库路径、remote、分支、模型和 backend PR 编号。启动 `python flflow.py serve --config workflow.json --monitor-config branch-monitor.json` 后，首页 `/` 显示分支监控；原工作流控制页在 `/workflow`。页面可切换本地 remote-tracking 分支，并用“读取最新状态”更新目标分支 Git ref 与 GitHub CI。`branch-monitor.json` 是本机配置，已被 Git 忽略。
 
-监控服务优先通过已登录的 `gh api` 读取 GitHub 状态；若未安装或不可用，则用 GitHub HTTP API（可通过 `GH_TOKEN` 或 `GITHUB_TOKEN` 提高配额）。远端数据缓存 5 分钟；页面每 15 秒轮询本地服务，点击“刷新远端”会立即重新获取。网络故障会明确显示为“未知”和错误信息，不会沿用旧的成功状态。
+监控服务优先通过已登录的 `gh api` 读取 GitHub 状态；若未安装或不可用，则用 GitHub HTTP API（可通过 `GH_TOKEN` 或 `GITHUB_TOKEN` 提高配额）。远端数据缓存 5 分钟；页面每 15 秒读取服务状态，点击“读取最新状态”会触发一次采集并直接显示返回结果。网络故障会明确显示错误，页面保留上次采集时间。
+
+可配置 `backend_pr_discovery`，按目标分支、候选分支前缀和标题词查找替代 PR；关闭的旧 PR 不会掩盖唯一的新候选。如果匹配多个 PR，服务报告歧义并保留明确配置的关联，需维护者指定编号。PR 打开、代码已合入、CI 和 Gate 仍分别判定。
 
 监控清单从**所选分支**的 `.github/configs/platforms.yml` 和 `tools/adaptation-gate-cases/test_*.py` 读取。当前 `0.4.0-dev` 的 gate 包含两个 Qwen3.6 模型、eager/graph 两种模式、每组 5 个 pytest 场景（合计 20 个场景、104 个请求）。代码已合入、CI 成功和 Gate 通过是三个独立状态。直接验收结果由运行清单绑定 backend、实际测试提交、模型、模式和端口，再检查每个 JSON 的逐请求结果。历史验收记录会单独标注来源和接受版本，不会伪装成当前 HEAD 的新一轮测试；本机演示结果也不会计入分支监控。
 
@@ -38,7 +40,11 @@ Ascend、MetaX 和 CoreX 等候选 PR 显示在各自 backend 行。候选工作
 
 启动服务后打开 `/sessions`。先安装并登录本机 Codex CLI；服务使用官方 [Codex app-server](https://developers.openai.com/codex/app-server/) 协议创建、继续和监控会话。需要时可在 `branch-monitor.json` 设置 `codex_executable` 的完整路径。页面中的“检查连接”会检查 CLI 和登录状态。
 
-填写 backend、目标分支、已配置的 SSH 别名、远端工作目录，以及可选的模型路径映射和本次目标。机器信息可保存为常用配置。选择“仅创建，稍后启动”会固定起始提交并创建独立 Git worktree，供检查任务指令；选择“创建并启动升级任务”会开始 Codex 工作。不同机器可以并行跟进不同 backend。
+任务页支持选择本机 SSH 别名，或填写主机、用户、端口、密钥文件路径及可选的跳板机别名。密钥只引用本机文件；页面不接收密码或私钥内容，连接配置保存在被 Git 忽略的运行目录。首次连接须在本机终端核对主机指纹，并配置可用于非交互登录的密钥或 ssh-agent。
+
+填写 backend、目标分支、已存在的远端项目目录、模型路径映射和本次目标后，点击“保存连接并检查”。预检读取 SSH、Git 仓库、tmux 与已配置模型路径；失败会显示具体检查结果并阻止启动。选择“仅创建，稍后启动”会固定起始提交并创建独立 Git worktree；点击“检查连接并启动适配 agent”会再次检查并下发任务。同一 SSH 别名或同一直接连接的主机、用户、端口只允许一个待启动或活动任务；不同机器可并行跟进不同 backend。
+
+启动后默认进入首页监控。适配任务每 3 秒读取一次，显示 agent 报告的实际计划、最新消息、异常和待处理授权/提问；可以在监控页答复、发送补充指令、中断或继续任务，并打开详情查看事件日志。agent 指令要求跟进环境检查、适配、服务启动、原仓库 `tools/adaptation-gate-cases` 验收与证据归档。浏览器关闭不会取消后台执行；服务进程仍需保持运行。
 
 任务页显示实时事件和输出，可发送补充指令、回答提问，并逐次确认命令、文件或权限请求。事件日志和 Codex thread ID 保存在本机 `sessions_dir`（默认 `runs/codex-sessions`），服务重启后可从页面继续已有会话。页面通过自己的 app-server 连接管理任务，不保证自动出现在 Codex 桌面侧栏或与侧栏状态同步。
 

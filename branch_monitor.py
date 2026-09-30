@@ -70,7 +70,7 @@ class BranchMonitor:
     """Inspect a configured local remote-tracking branch and optional GitHub data."""
 
     def __init__(self, config: Path | str | dict[str, Any],
-                 transport: Callable[[str], dict[str, Any]] | None = None):
+                 transport: Callable[[str], dict[str, Any] | list[Any]] | None = None):
         if isinstance(config, (str, Path)):
             config_path = Path(config).expanduser().resolve()
             raw = json.loads(config_path.read_text(encoding="utf-8"))
@@ -111,14 +111,27 @@ class BranchMonitor:
         self.merged_commits = self.config.get("merged_commits", {})
         self.backend_labels = self.config.get("backend_labels", {})
         self.accepted_ci_runs = self.config.get("accepted_ci_runs", {})
+        self.backend_pr_discovery = self.config.get("backend_pr_discovery", {})
         if not isinstance(self.backend_prs, dict) or not isinstance(self.merged_commits, dict):
             raise MonitorError("backend_prs and merged_commits must be objects")
         if not isinstance(self.backend_labels, dict):
             raise MonitorError("backend_labels must be an object")
         if not isinstance(self.accepted_ci_runs, dict):
             raise MonitorError("accepted_ci_runs must be an object")
+        if not isinstance(self.backend_pr_discovery, dict):
+            raise MonitorError("backend_pr_discovery must be an object")
+        for selector in self.backend_pr_discovery.values():
+            if not isinstance(selector, dict):
+                raise MonitorError("PR discovery selectors must be objects")
+            prefixes = selector.get("head_prefixes")
+            terms = selector.get("title_terms", [])
+            for values, required in ((prefixes, True), (terms, False)):
+                if (not isinstance(values, list) or len(values) > 10 or (required and not values) or
+                        not all(isinstance(value, str) and value.strip() and len(value) <= 200 and
+                                not any(ord(char) < 32 for char in value) for value in values)):
+                    raise MonitorError("PR discovery requires explicit head_prefixes and optional title_terms")
         self.transport = transport or self._http_json
-        self._api_cache: dict[str, tuple[float, dict[str, Any]]] = {}
+        self._api_cache: dict[str, tuple[float, dict[str, Any] | list[Any]]] = {}
         self._cache_lock = threading.RLock()
 
     @staticmethod
@@ -213,7 +226,7 @@ class BranchMonitor:
                                        "file": path, "test": test.name}
         return list(cases.values())
 
-    def _http_json(self, url: str) -> dict[str, Any]:
+    def _http_json(self, url: str) -> dict[str, Any] | list[Any]:
         gh = shutil.which("gh")
         if gh:
             try:
@@ -221,7 +234,7 @@ class BranchMonitor:
                                       encoding="utf-8", errors="replace", timeout=10)
                 if done.returncode == 0:
                     data = json.loads(done.stdout)
-                    if isinstance(data, dict):
+                    if isinstance(data, (dict, list)):
                         return data
             except (OSError, subprocess.TimeoutExpired, ValueError):
                 pass
@@ -231,22 +244,42 @@ class BranchMonitor:
             headers["Authorization"] = f"Bearer {token}"
         with urlopen(Request(url, headers=headers), timeout=6) as response:
             data = json.load(response)
-        if not isinstance(data, dict):
-            raise MonitorError("GitHub API response must be an object")
+        if not isinstance(data, (dict, list)):
+            raise MonitorError("GitHub API response must be an object or array")
         return data
 
-    def _api(self, path: str, force: bool) -> dict[str, Any]:
+    def _api_json(self, path: str, force: bool) -> dict[str, Any] | list[Any]:
         url = f"https://api.github.com/repos/{self.github_repo}/{path}"
         with self._cache_lock:
             cached = self._api_cache.get(url)
             if cached and not force and time.monotonic() - cached[0] < 300:
                 return cached[1]
         value = self.transport(url)
-        if not isinstance(value, dict):
-            raise MonitorError("GitHub transport must return an object")
+        if not isinstance(value, (dict, list)):
+            raise MonitorError("GitHub transport must return an object or array")
         with self._cache_lock:
             self._api_cache[url] = (time.monotonic(), value)
         return value
+
+    def _api(self, path: str, force: bool) -> dict[str, Any]:
+        value = self._api_json(path, force)
+        if not isinstance(value, dict):
+            raise MonitorError("GitHub API response must be an object")
+        return value
+
+    def _open_prs(self, branch: str, force: bool) -> list[dict[str, Any]]:
+        pulls = []
+        for page in range(1, 4):
+            query = urlencode({"state": "open", "base": branch, "sort": "updated",
+                               "direction": "desc", "per_page": 100, "page": page})
+            values = self._api_json(f"pulls?{query}", force)
+            if not isinstance(values, list):
+                raise MonitorError("GitHub PR list must be an array")
+            pulls.extend(value for value in values if isinstance(value, dict) and
+                         value.get("state") == "open" and value.get("base", {}).get("ref") == branch)
+            if len(values) < 100:
+                return pulls
+        raise MonitorError("Too many open PRs; configure an explicit backend PR")
 
     @staticmethod
     def _ci_status(checks: list[dict[str, Any]]) -> str:
@@ -293,22 +326,47 @@ class BranchMonitor:
             errors.append(f"GitHub branch CI unavailable: {exc}")
             return result, []
 
-    def _pr(self, backend: str, force: bool, errors: list[str]) -> tuple[dict[str, Any] | None, dict[str, Any] | None]:
+    def _pr(self, backend: str, branch: str, force: bool, errors: list[str],
+            open_prs: list[dict[str, Any]] | None = None, head: str | None = None) -> tuple[dict[str, Any] | None, dict[str, Any] | None]:
         value = self.backend_prs.get(backend)
         number = value.get("number") if isinstance(value, dict) else value
-        if not isinstance(number, int) or number <= 0:
+        number = number if type(number) is int and number > 0 else None
+        data = None
+        selected_by = "configured"
+        if number and self.github_repo:
+            try:
+                data = self._api(f"pulls/{number}", force)
+            except (OSError, ValueError, MonitorError) as exc:
+                errors.append(f"GitHub PR #{number} unavailable: {exc}")
+        selector = self.backend_pr_discovery.get(backend)
+        accepted = (data and data.get("merged") and data.get("base", {}).get("ref") == branch and
+                    head and self._ancestor(data.get("merge_commit_sha"), head))
+        if selector and open_prs is not None and not accepted:
+            candidates = [pr for pr in open_prs if
+                          any(str(pr.get("head", {}).get("ref", "")).startswith(prefix)
+                              for prefix in selector["head_prefixes"]) and
+                          (not selector.get("title_terms") or
+                           any(term.casefold() in str(pr.get("title", "")).casefold()
+                               for term in selector["title_terms"]))]
+            configured = next((pr for pr in candidates if pr.get("number") == number), None)
+            candidate = configured or (candidates[0] if len(candidates) == 1 else None)
+            if candidate and candidate.get("number") != number:
+                try:
+                    replacement = self._api(f"pulls/{candidate['number']}", force)
+                    if replacement.get("base", {}).get("ref") == branch:
+                        number, data, selected_by = candidate["number"], replacement, "discovered"
+                except (KeyError, OSError, ValueError, MonitorError) as exc:
+                    errors.append(f"Discovered {backend} PR unavailable: {exc}")
+            elif not configured and len(candidates) > 1:
+                errors.append(f"Multiple open {backend} adaptation PRs target this branch; configure the intended PR number")
+        if number is None:
             return None, None
         public = {"number": number, "url": f"https://github.com/{self.github_repo}/pull/{number}" if self.github_repo else None,
-                  "title": None, "draft": None}
-        if not self.github_repo:
-            return public, None
-        try:
-            data = self._api(f"pulls/{number}", force)
-            public.update(url=data.get("html_url", public["url"]), title=data.get("title"), draft=data.get("draft"))
-            return public, data
-        except (OSError, ValueError, MonitorError) as exc:
-            errors.append(f"GitHub PR #{number} unavailable: {exc}")
-            return public, None
+                  "title": None, "draft": None, "state": None, "merged": None, "selected_by": selected_by}
+        if data:
+            public.update(url=data.get("html_url", public["url"]), title=data.get("title"), draft=data.get("draft"),
+                          state=data.get("state"), merged=data.get("merged"))
+        return public, data
 
     def _ancestor(self, ancestor: str, head: str) -> bool:
         if not isinstance(ancestor, str) or not SHA.fullmatch(ancestor.lower()):
@@ -599,9 +657,15 @@ class BranchMonitor:
         registry = self._registry(sha)
         branch_ci, jobs = self._branch_ci(branch, sha, force, errors)
         manifests = self._manifests()
+        open_prs = None
+        if self.backend_pr_discovery and self.github_repo:
+            try:
+                open_prs = self._open_prs(branch, force)
+            except (OSError, ValueError, MonitorError) as exc:
+                errors.append(f"Backend PR discovery unavailable: {exc}")
         backends = []
-        for backend in dict.fromkeys([*registry, *self.backend_prs, *self.merged_commits]):
-            pr, pr_data = self._pr(backend, force, errors)
+        for backend in dict.fromkeys([*registry, *self.backend_prs, *self.merged_commits, *self.backend_pr_discovery]):
+            pr, pr_data = self._pr(backend, branch, force, errors, open_prs, sha)
             integration = self._integration(backend, branch, sha, pr_data)
             ci = self._backend_ci(backend, integration, jobs, branch_ci, pr_data, force, errors)
             current_ci = ci

@@ -186,6 +186,81 @@ class BranchMonitorTests(unittest.TestCase):
         self.assertEqual(self._backend(status)["ci"]["status"], "failed")
         self.assertFalse(status["errors"])
 
+    def _corex_pr(self, number=566, **changes):
+        value = {"number": number, "state": "open", "merged": False, "draft": False,
+                 "base": {"ref": "0.4.0-dev"}, "head": {"ref": "adapt/iluvatar-corex-vllm-next", "sha": "b" * 40},
+                 "title": "adapt(iluvatar): CoreX upgrade", "html_url": f"https://github.com/flagos-ai/vllm-plugin-FL/pull/{number}"}
+        value.update(changes)
+        return value
+
+    def _corex_config(self):
+        return {**self.config, "backend_prs": {"cuda": 484, "corex": 527},
+                "backend_pr_discovery": {"corex": {"head_prefixes": ["adapt/iluvatar-corex-"], "title_terms": ["CoreX"]}}}
+
+    def test_replacement_pr_matches_backend_and_target_branch_without_passing_gate(self):
+        new = self._corex_pr()
+        wrong_branch = self._corex_pr(567, base={"ref": "other"})
+        wrong_backend = self._corex_pr(568, head={"ref": "adapt/metax-vllm-next", "sha": "c" * 40})
+        def transport(url):
+            if "/pulls?" in url:
+                self.assertIn("base=0.4.0-dev", url)
+                return [wrong_branch, wrong_backend, new]
+            if "/pulls/527" in url:
+                return self._corex_pr(527, state="closed", draft=True)
+            if "/pulls/566" in url:
+                return new
+            if "/commits/" in url and "/check-runs" in url:
+                return {"check_runs": []}
+            return self._transport(url)
+        status = BranchMonitor(self._corex_config(), transport=transport).status()
+        corex = self._backend(status, "corex")
+        self.assertEqual(corex["pr"]["number"], 566)
+        self.assertEqual(corex["pr"]["state"], "open")
+        self.assertFalse(corex["pr"]["draft"])
+        self.assertEqual(corex["pr"]["selected_by"], "discovered")
+        self.assertEqual(corex["integration"]["status"], "open")
+        self.assertEqual(corex["gate"]["status"], "missing")
+        self.assertFalse(status["errors"])
+
+    def test_multiple_replacement_prs_do_not_select_one_arbitrarily(self):
+        def transport(url):
+            if "/pulls?" in url:
+                return [self._corex_pr(), self._corex_pr(567)]
+            if "/pulls/527" in url:
+                return self._corex_pr(527, state="closed", draft=True)
+            return self._transport(url)
+        status = BranchMonitor(self._corex_config(), transport=transport).status()
+        corex = self._backend(status, "corex")
+        self.assertEqual(corex["pr"]["number"], 527)
+        self.assertEqual(corex["integration"]["status"], "closed")
+        self.assertTrue(any("Multiple open corex" in error for error in status["errors"]))
+
+    def test_old_merged_pr_absent_from_head_does_not_suppress_replacement(self):
+        def transport(url):
+            if "/pulls?" in url:
+                return [self._corex_pr()]
+            if "/pulls/527" in url:
+                return self._corex_pr(527, state="closed", merged=True, merge_commit_sha="f" * 40)
+            if "/pulls/566" in url:
+                return self._corex_pr()
+            if "/commits/" in url and "/check-runs" in url:
+                return {"check_runs": []}
+            return self._transport(url)
+        status = BranchMonitor(self._corex_config(), transport=transport).status()
+        self.assertEqual(self._backend(status, "corex")["pr"]["number"], 566)
+        self.assertEqual(self._backend(status, "corex")["integration"]["status"], "open")
+
+    def test_discovery_failure_keeps_configured_pr_and_reports_error(self):
+        def transport(url):
+            if "/pulls?" in url:
+                raise OSError("offline")
+            if "/pulls/527" in url:
+                return self._corex_pr(527, state="closed", draft=True)
+            return self._transport(url)
+        status = BranchMonitor(self._corex_config(), transport=transport).status()
+        self.assertEqual(self._backend(status, "corex")["pr"]["number"], 527)
+        self.assertTrue(any("discovery unavailable" in error for error in status["errors"]))
+
     def _write_audit(self) -> Path:
         record = {"schema_version": 1, "evidence_type": "audited_record", "backend": "cuda",
                   "branch": "0.4.0-dev", "tested_commit": self.head,
