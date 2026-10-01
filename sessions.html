@@ -53,6 +53,7 @@
         <hr class="rule"><h3 class="step-title"><span>3</span>检查并下发任务</h3><div class="form-actions"><button class="button" id="check-machine" type="button">保存连接并检查</button></div><div id="connection-check" class="check-summary" aria-live="polite" hidden><h3 id="check-title">连接检查结果</h3><div id="check-items"></div><small id="check-note" class="hint"></small><details id="check-terminal" class="subtle-details" hidden><summary>在本机终端检查 SSH 登录</summary><pre id="check-terminal-command" class="event-text mono"></pre><small class="hint">在 PowerShell 中运行此命令，核对主机指纹并完成登录后，返回页面重新检查。</small></details></div><div class="form-actions"><button class="button primary" id="create-start" type="submit">检查连接并启动适配 agent</button><button class="button" id="create-only" type="button">仅创建，稍后启动</button></div><label class="return-option"><input id="auto-monitor" type="checkbox" checked>启动后进入监控页</label><small class="hint">agent 会跟进适配、运行 tools/adaptation-gate-cases 并归档结果。进展、授权和提问可在监控页处理；验收是否通过以真实证据为准。</small><div id="form-notice" class="notice" role="status"></div><a id="monitor-after-start" class="monitor-after-start" href="/" hidden>任务已下发，前往分支监控页 ↗</a>
       </form></section>
       <section class="workspace" aria-label="任务监控"><div class="section-title"><h2>Backend 任务 <span id="session-count">0</span></h2><span id="sync-status">准备读取…</span></div><div id="session-list" class="session-list"></div><div id="no-sessions" class="empty"><strong>创建第一个升级任务</strong>填写左侧验证环境后，即可在这里查看任务进度和 Codex 输出。</div>
+        <div id="selection-notice" class="notice" role="status" hidden></div>
         <article class="panel" id="session-detail" hidden><div class="panel-head detail-head"><div><div class="detail-title"><h2 id="detail-title">升级任务</h2><span id="detail-status" class="pill"></span></div><p id="detail-subtitle"></p></div><div class="actions"><button class="button primary small" id="start-session" type="button">启动任务</button><button class="button danger small" id="interrupt-session" type="button">中断当前执行</button></div></div>
           <dl class="detail-meta"><div><dt>验证机器</dt><dd id="detail-machine" class="mono"></dd></div><div><dt>基线分支 · 创建时提交</dt><dd id="detail-branch" class="mono"></dd></div><div><dt>任务工作分支</dt><dd id="detail-work-branch" class="mono"></dd></div><div><dt>上报候选 SHA</dt><dd id="detail-candidate">待核对 · 尚无结构化提交记录</dd></div><div><dt>本地独立 worktree</dt><dd id="detail-worktree" class="mono"></dd></div><div><dt>远端源仓库目录（机器配置）</dt><dd id="detail-seed" class="mono"></dd></div><div><dt>上报远端独立任务目录</dt><dd id="detail-remote-root">待上报 · 尚无结构化目录记录</dd></div><div><dt>Codex 会话 ID</dt><dd id="detail-thread" class="mono"></dd></div><div><dt>证据观察时间</dt><dd id="detail-observed-at" class="mono">待上报</dd></div><div><dt>记录性质</dt><dd id="detail-provenance-source">待核对 · 尚无有效上报</dd></div><div class="provenance-evidence"><dt>上报证据（相对路径）</dt><dd id="detail-provenance-evidence" class="mono">待上报</dd></div></dl>
           <div id="detail-policy" class="notice" role="status" hidden></div>
@@ -73,7 +74,8 @@
     const state = {sessions:[],profiles:[],policies:{},selected:null,available:false,fetching:false,pendingKey:'',eventsKey:'',profileKey:'',listKey:'',actionBusy:false,creating:false,checking:false,checkedKey:''};
   const sessionListCards = new Map();
   const params = new URLSearchParams(location.search);
-  state.selected=params.get('session')||null;
+  const selectionTarget={session:params.get('session')||null,branch:params.get('branch')||(params.get('backend')?$('branch').value:null),backend:params.get('backend')||null};
+  state.selected=selectionTarget.session;
   if (params.get('branch')) $('branch').value = params.get('branch');
   if (params.get('backend') && labels[params.get('backend')]) $('backend').value = params.get('backend');
   $('monitor-link').href = '/?branch=' + encodeURIComponent($('branch').value);
@@ -138,6 +140,18 @@
     const adapt=[],monitor=[];
     for(const session of sessions)(taskPolicy(session.backend,session.branch,session).mode==='monitor'?monitor:adapt).push(session);
     return adapt.concat(monitor);
+  }
+  function selectSessionId(sessions, selected, target) {
+    if(sessions.some(session=>String(session.id)===selected))return selected;
+    if(target.session)return sessions.some(session=>String(session.id)===target.session)?target.session:null;
+    const match=sessions.find(session=>(!target.branch||session.branch===target.branch)&&(!target.backend||session.backend===target.backend));
+    return match?String(match.id):null;
+  }
+  function missingSelectionMessage(target) {
+    if(target.session)return '指定任务暂无记录，请核对任务链接或从列表选择。';
+    if(target.backend)return '此分支的 '+(labels[target.backend]||target.backend)+' 暂无任务，请在左侧配置验证环境后创建。';
+    if(target.branch)return '此分支暂无任务，请在左侧配置验证环境后创建。';
+    return '';
   }
   function reconcileTaskNodes(container,nodes) {
     const active=container.contains(document.activeElement)?document.activeElement:null;
@@ -281,12 +295,16 @@
     return {scope,threadId,label:({root:'主任务',child:'子任务',unknown:'未知来源'})[scope]+(threadId?' · '+threadId.slice(0,12):' · thread 未记录')};
   }
   function summarizeEvent(event, monitor=false) {
-    const method=event.method || event.type || 'event', p=event.params || {};
+    const method=event.method || event.type || 'event', p=event.params || {}, item=p.item || {};
+    if(method==='item/completed'&&item.type==='commandExecution'){
+      const exit=Number.isInteger(item.exitCode)?String(item.exitCode):'未知';
+      const command=typeof item.command==='string'?item.command:item.command?JSON.stringify(item.command):'';
+      return '本次单命令 OS 退出码：'+exit+'（不代表测试或 Gate 结论）'+(command?'\n'+command:'');
+    }
     if(typeof p.delta==='string')return p.delta;
     if(typeof p.text==='string')return p.text;
     if(typeof p.message==='string')return p.message;
     if(p.message?.content)return Array.isArray(p.message.content)?p.message.content.map(x=>x.text||'').join('\n'):String(p.message.content);
-    const item=p.item || {};
     if(typeof item.text==='string')return item.text;
     if(Array.isArray(item.content))return item.content.map(x=>x.text||x.message||'').filter(Boolean).join('\n');
     if(item.command)return typeof item.command==='string'?item.command:JSON.stringify(item.command);
@@ -349,7 +367,9 @@
     box.textContent=messages.join('\n');box.hidden=!messages.length;
   }
   function renderDetail() {
-    const session=current();$('session-detail').hidden=!session;if(!session)return;
+    const session=current(),missing=session?'':missingSelectionMessage(selectionTarget);
+    $('selection-notice').textContent=missing;$('selection-notice').hidden=!missing;
+    $('session-detail').hidden=!session;if(!session)return;
     renderProvenance(session);
     $('detail-title').textContent=(labels[session.backend]||session.backend)+' 升级任务';$('detail-status').textContent=statusLabel(session.status,session);$('detail-status').className='pill '+(statuses[session.status]?session.status:'');$('detail-subtitle').textContent=session.goal||'跟进分支适配，并收集实际验收证据。';$('detail-machine').textContent=session.ssh_alias||'待配置';$('detail-seed').textContent=session.remote_workspace||'待配置';$('detail-work-branch').textContent=session.work_branch||'待核对';$('detail-branch').textContent=session.branch+' · '+(session.commit?session.commit.slice(0,12):'待解析');$('detail-worktree').textContent=session.worktree||'准备中';$('detail-thread').textContent=session.thread_id||'启动后创建';
     const policy=taskPolicy(session.backend,session.branch,session),monitor=policy.mode==='monitor';renderPolicy($('detail-policy'),policy);$('message').disabled=monitor;
@@ -364,7 +384,7 @@
   }
   async function refresh(quiet=false) {
     if(state.fetching)return;state.fetching=true;
-    try{const data=await request(API);state.sessions=Array.isArray(data.sessions)?data.sessions:[];state.policies=data.backend_task_policies&&typeof data.backend_task_policies==='object'?data.backend_task_policies:{};state.profiles=Array.isArray(data.machine_profiles)?data.machine_profiles:[];state.available=!!data.available;if(!state.sessions.some(x=>String(x.id)===state.selected))state.selected=state.sessions.length?String(prioritizedSessions(state.sessions)[0].id):null;showProfiles();renderList();renderDetail();$('sync-status').textContent='已更新 '+new Date().toLocaleTimeString('zh-CN',{hour12:false});checkButtons();renderHealth(data.health);if(!quiet)notice('global-notice','');}
+    try{const data=await request(API);state.sessions=Array.isArray(data.sessions)?data.sessions:[];state.policies=data.backend_task_policies&&typeof data.backend_task_policies==='object'?data.backend_task_policies:{};state.profiles=Array.isArray(data.machine_profiles)?data.machine_profiles:[];state.available=!!data.available;state.selected=selectSessionId(prioritizedSessions(state.sessions),state.selected,selectionTarget);showProfiles();renderList();renderDetail();$('sync-status').textContent='已更新 '+new Date().toLocaleTimeString('zh-CN',{hour12:false});checkButtons();renderHealth(data.health);if(!quiet)notice('global-notice','');}
     catch(error){$('sync-status').textContent='连接失败，将自动重试';notice('global-notice',error.message,true);}finally{state.fetching=false;}
   }
   async function act(session, action, body={}) {

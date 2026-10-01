@@ -261,6 +261,7 @@
   let readOnly = false;
   let sessionsEnabled = false;
   let backendTaskPolicies = {};
+  let taskSessions = [];
   let latestBranchSnapshot = null;
   const appUrl = path => new URL(path.replace(/^\/+/, ""), window.location.href).href;
   const labels = {
@@ -392,6 +393,14 @@
     const adapt=[],monitor=[];
     for(const session of sessions)(taskPolicy(session.backend,session.branch,session).mode==='monitor'?monitor:adapt).push(session);
     return adapt.concat(monitor);
+  }
+  function backendTaskEntry(branch, backend, label) {
+    const session=taskSessions.find(item=>item.branch===branch&&item.backend===backend);
+    return {
+      session,
+      text:session?'查看 '+label+' 任务 ↗':'为 '+label+' 分配验证机器并跟进升级 ↗',
+      href:appUrl('sessions')+'?branch='+encodeURIComponent(branch)+'&backend='+encodeURIComponent(backend)+(session?'&session='+encodeURIComponent(session.id):'')
+    };
   }
   function reconcileTaskNodes(container,nodes) {
     const active=container.contains(document.activeElement)?document.activeElement:null;
@@ -640,15 +649,21 @@
     }
     detail.append(meta);
     const policy = taskPolicy(id, data.branch);
+    const taskEntry = backendTaskEntry(data.branch, id, backend.label || id);
+    if (!readOnly && taskEntry.session) {
+      const view = el("a", "", taskEntry.text);
+      view.href = taskEntry.href;
+      detail.append(view);
+    }
     if (!readOnly && policy.mode === "monitor") {
       detail.append(policyNotice(policy, pr));
     } else if (!readOnly && pr.number) {
       const existingPr = githubPrLink(pr.url, "查看已有 PR #" + pr.number + " 的进展 ↗");
       if (existingPr) detail.append(existingPr);
       else detail.append(el("p", "matrix-help", "已有 PR #" + pr.number + "，请先核对现有适配进展。"));
-    } else if (!readOnly) {
-      const assign = el("a", "", "为 " + (backend.label || id) + " 分配验证机器并跟进升级 ↗");
-      assign.href = appUrl("sessions") + "?branch=" + encodeURIComponent(data.branch) + "&backend=" + encodeURIComponent(id);
+    } else if (!readOnly && !taskEntry.session) {
+      const assign = el("a", "", taskEntry.text);
+      assign.href = taskEntry.href;
       detail.append(assign);
     }
     detail.append(el("h3", "matrix-heading", "适配 Gate 明细"));
@@ -958,10 +973,14 @@
       const policies = data.backend_task_policies && typeof data.backend_task_policies === "object" ? data.backend_task_policies : {};
       const policyChanged = JSON.stringify(policies) !== JSON.stringify(backendTaskPolicies);
       backendTaskPolicies = policies;
+      const nextSessions = Array.isArray(data.sessions) ? data.sessions : [];
+      const identities = sessions => JSON.stringify(sessions.map(({id,backend,branch})=>({id,backend,branch})));
+      const taskChanged = identities(nextSessions) !== identities(taskSessions);
+      taskSessions = nextSessions;
       renderMachineProfiles(data.machine_profiles);
       const branch = byId("branch-select").value || initialBranch;
-      if (policyChanged && latestBranchSnapshot?.branch === branch) render(latestBranchSnapshot);
-      const sessions = prioritizedSessions((Array.isArray(data.sessions) ? data.sessions : []).filter(session => session.branch === branch));
+      if ((policyChanged || taskChanged) && latestBranchSnapshot?.branch === branch) render(latestBranchSnapshot);
+      const sessions = prioritizedSessions(taskSessions.filter(session => session.branch === branch));
       const box = byId("task-list"), ids = new Set(sessions.map(session => session.id));
       for (const [id,card] of taskCards) if (!ids.has(id)) { card.root.remove(); taskCards.delete(id); }
       box.querySelectorAll(".empty").forEach(node => node.remove());
