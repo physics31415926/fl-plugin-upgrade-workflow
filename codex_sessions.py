@@ -695,48 +695,73 @@ done
     def _refresh_progress_artifact(self, session):
         """Read bounded progress from this session's isolated worktree only."""
         dirty = False
+
+        def reject(code):
+            nonlocal dirty
+            # Fixed reasons only: never expose rejected content, paths or OS errors.
+            warning = {"code": code}
+            if session.get("progress_warning") != warning:
+                session["progress_warning"] = warning
+                dirty = True
+
         try:
             worktree = Path(session["worktree"]).resolve(strict=True)
             expected = (self.root / "worktrees" / session["id"]).resolve(strict=True)
             workspace_root = (self.root / "worktrees").resolve(strict=True)
             if worktree != expected or not worktree.is_relative_to(workspace_root):
+                reject("artifact_unsafe_path")
                 return
             candidate = worktree / ".flflow-progress.json"
             path = candidate.resolve(strict=True)
             if not path.is_relative_to(worktree) or not path.is_file():
+                reject("artifact_unsafe_path")
                 return
             before = path.stat()
             if before.st_size > 65536:
+                reject("artifact_too_large")
                 return
             with path.open("rb") as file:
                 content = file.read(65537)
             after = path.stat()
-            if len(content) > 65536 or (before.st_mtime_ns, before.st_size) != (after.st_mtime_ns, after.st_size):
+            if len(content) > 65536:
+                reject("artifact_too_large")
+                return
+            if (before.st_mtime_ns, before.st_size) != (after.st_mtime_ns, after.st_size):
+                reject("artifact_changed")
                 return
             artifact = json.loads(content.decode("utf-8"))
             if not isinstance(artifact, dict) or type(artifact.get("schema_version")) is not int or artifact["schema_version"] != 1:
+                reject("artifact_invalid")
                 return
             if artifact.get("session_id") != session["id"] or artifact.get("backend") != session["backend"]:
+                reject("artifact_invalid")
                 return
-            # Identity reports use their observation time, independently of
-            # newer Codex plan notifications or a summary file's mtime.
-            dirty = self._refresh_reported_provenance(session, artifact.get("provenance"), worktree)
             plan = artifact.get("plan")
             if not isinstance(plan, list) or not 1 <= len(plan) <= 30:
+                reject("artifact_invalid")
                 return
             normalized = []
             for item in plan:
                 if not isinstance(item, dict) or not isinstance(item.get("step"), str) or not 1 <= len(item["step"].strip()) <= 1000:
+                    reject("artifact_invalid")
                     return
                 if "\x00" in item["step"] or item.get("status") not in {"pending", "in_progress", "completed"}:
+                    reject("artifact_invalid")
                     return
                 item["step"].encode("utf-8")
                 normalized.append({"step": item["step"].strip(), "status": item["status"]})
             summary = artifact.get("summary")
             if summary is not None and (not isinstance(summary, str) or len(summary) > 24000 or "\x00" in summary):
+                reject("artifact_invalid")
                 return
             if summary is not None:
                 summary.encode("utf-8")
+            # Reject the entire invalid progress record before accepting its
+            # identity report. Valid reports keep their own observation clock,
+            # independently of plan notifications or the file's mtime.
+            dirty = self._refresh_reported_provenance(session, artifact.get("provenance"), worktree)
+            if session.pop("progress_warning", None) is not None:
+                dirty = True
             artifact_time = after.st_mtime
             current_time = session.get("plan_updated_at")
             if current_time:
@@ -758,10 +783,14 @@ done
                            progress_artifact=".flflow-progress.json")
             session["progress_summary"] = summary
             dirty = True
-        except (OSError, ValueError, TypeError, KeyError, OverflowError, RuntimeError):
-            # Partial writes, missing files and invalid agent output retain the
-            # last valid plan. Artifact content never changes turn/Gate status.
-            return
+        except FileNotFoundError:
+            # A progress file is optional before the first artifact arrives.
+            if session.get("progress_artifact") or session.get("progress_warning"):
+                reject("artifact_unavailable")
+        except OSError:
+            reject("artifact_unavailable")
+        except (ValueError, TypeError, KeyError, OverflowError, RuntimeError):
+            reject("artifact_invalid")
         finally:
             if dirty:
                 try:

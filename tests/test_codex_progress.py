@@ -59,12 +59,92 @@ class ProgressArtifactTest(TestCase):
         file.write_text(json.dumps(self.artifact(session, plan=[{"step": "\ud800", "status": "pending"}])), encoding="utf-8")
         self.assertEqual(self.manager.snapshot()["sessions"][0]["plan"], original)
 
+    def test_oversized_artifact_warns_and_valid_progress_recovers(self):
+        session = self.manager.create(self.payload)
+        self.start(session)
+        self.manager._sessions[session["id"]]["error"] = "Existing execution diagnostic"
+        provenance = {"branch": session["branch"], "candidate_commit": session["commit"],
+                      "remote_task_workspace": "/work/task", "observed_at": "2000-01-01T00:00:00Z",
+                      "evidence_paths": [{"path": "README.md"}]}
+        file = self.write_progress(session, summary="Last valid progress", provenance=provenance)
+        original = self.manager.snapshot()["sessions"][0]
+        self.write_progress(session, summary="Unloaded recent progress", history="x" * 70000,
+                            provenance={**provenance, "candidate_commit": "b" * 40,
+                                        "observed_at": "2000-01-02T00:00:00Z"})
+        self.assertGreater(file.stat().st_size, 65536)
+        rejected = self.manager.snapshot()["sessions"][0]
+        self.assertEqual(rejected["progress_warning"], {"code": "artifact_too_large"})
+        for key in ("plan", "progress_summary", "plan_source", "plan_updated_at",
+                    "reported_provenance", "status", "error", "turn_id", "thread_id"):
+            self.assertEqual(rejected[key], original[key], key)
+        self.assertNotIn("gate_passed", rejected)
+        stored_file = self.manager.root / session["id"] / "session.json"
+        stored = json.loads(stored_file.read_text(encoding="utf-8"))
+        self.assertEqual(stored["progress_warning"], rejected["progress_warning"])
+        repeated = self.manager.snapshot()["sessions"][0]
+        self.assertEqual(repeated["progress_warning"], rejected["progress_warning"])
+        self.assertEqual(repeated["updated_at"], rejected["updated_at"])
+        self.write_progress(session, summary="Updated valid progress", provenance=provenance)
+        next_time = time.time() + 2
+        os.utime(file, (next_time, next_time))
+        recovered = self.manager.snapshot()["sessions"][0]
+        self.assertNotIn("progress_warning", recovered)
+        self.assertEqual(recovered["progress_summary"], "Updated valid progress")
+        self.assertNotEqual(recovered["plan_updated_at"], original["plan_updated_at"])
+        for key in ("reported_provenance", "status", "error", "turn_id", "thread_id"):
+            self.assertEqual(recovered[key], original[key], key)
+        self.assertNotIn("progress_warning", json.loads(stored_file.read_text(encoding="utf-8")))
+
+    def test_optional_missing_progress_is_quiet_but_loaded_missing_progress_warns(self):
+        session = self.manager.create(self.payload)
+        self.assertNotIn("progress_warning", self.manager.snapshot()["sessions"][0])
+        file = self.write_progress(session)
+        original = self.manager.snapshot()["sessions"][0]
+        file.unlink()
+        missing = self.manager.snapshot()["sessions"][0]
+        self.assertEqual(missing["progress_warning"], {"code": "artifact_unavailable"})
+        for key in ("plan", "progress_summary", "plan_source", "plan_updated_at", "status", "error"):
+            self.assertEqual(missing[key], original[key], key)
+        self.write_progress(session)
+        self.assertNotIn("progress_warning", self.manager.snapshot()["sessions"][0])
+
+    def test_malformed_plan_cannot_refresh_provenance_before_valid_recovery(self):
+        session = self.manager.create(self.payload)
+        self.start(session)
+        provenance = {"branch": session["branch"], "candidate_commit": session["commit"],
+                      "remote_task_workspace": "/work/task", "observed_at": "2000-01-01T00:00:00Z",
+                      "evidence_paths": [{"path": "README.md"}]}
+        file = self.write_progress(session, provenance=provenance)
+        original = self.manager.snapshot()["sessions"][0]
+        newer_provenance = {**provenance, "candidate_commit": "b" * 40,
+                            "observed_at": "2000-01-02T00:00:00Z"}
+        self.write_progress(session, plan=[{"step": "Adapt backend", "status": "invalid"}],
+                            summary="Rejected progress", provenance=newer_provenance)
+        rejected = self.manager.snapshot()["sessions"][0]
+        self.assertEqual(rejected["progress_warning"], {"code": "artifact_invalid"})
+        for key in ("reported_provenance", "plan", "progress_summary", "plan_updated_at",
+                    "plan_source", "status", "error", "thread_id", "turn_id"):
+            self.assertEqual(rejected[key], original[key], key)
+        self.write_progress(session, plan=[{"step": "Adapt backend", "status": "in_progress"}],
+                            summary="Valid progress", provenance=newer_provenance)
+        next_time = time.time() + 2
+        os.utime(file, (next_time, next_time))
+        recovered = self.manager.snapshot()["sessions"][0]
+        self.assertNotIn("progress_warning", recovered)
+        self.assertEqual(recovered["reported_provenance"]["candidate_commit"], newer_provenance["candidate_commit"])
+        self.assertEqual(recovered["reported_provenance"]["observed_at"], newer_provenance["observed_at"])
+        self.assertEqual(recovered["progress_summary"], "Valid progress")
+        self.assertNotEqual(recovered["plan_updated_at"], original["plan_updated_at"])
+        for key in ("status", "error", "thread_id", "turn_id"):
+            self.assertEqual(recovered[key], original[key], key)
+
     def test_resolved_file_outside_worktree_is_rejected_without_opening_it(self):
         session = self.manager.create(self.payload)
         self.write_progress(session)
         outside = self.base / "outside-progress.json"
         outside.write_text(json.dumps(self.artifact(session)), encoding="utf-8")
         original_resolve = Path.resolve
+        original_open = Path.open
 
         def resolve(path, *args, **kwargs):
             # Simulate a symlink target without requiring Windows symlink
@@ -73,9 +153,15 @@ class ProgressArtifactTest(TestCase):
                 return outside
             return original_resolve(path, *args, **kwargs)
 
-        with mock.patch.object(Path, "resolve", resolve), mock.patch.object(Path, "open", side_effect=AssertionError("outside file read")):
+        def open_file(path, *args, **kwargs):
+            if path == outside:
+                raise AssertionError("outside file read")
+            return original_open(path, *args, **kwargs)
+
+        with mock.patch.object(Path, "resolve", resolve), mock.patch.object(Path, "open", open_file):
             state = self.manager.snapshot()["sessions"][0]
         self.assertEqual(state["plan"], [])
+        self.assertEqual(state["progress_warning"], {"code": "artifact_unsafe_path"})
 
     def test_newer_notification_has_priority_until_artifact_is_updated(self):
         session = self.manager.create(self.payload)
