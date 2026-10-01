@@ -14,3 +14,8 @@ jobs:
           python-version: '3.11'
       - name: Run contract tests
         run: python -B -m unittest discover -s tests -p 'test_*.py' -v
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Run session event UI tests
+        run: node --test tests/test_session_event_ui.cjs

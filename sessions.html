@@ -16,6 +16,7 @@
     .machine-inventory { margin:0 0 16px; }.machine-group { margin-top:11px; }.machine-group h3 { margin:0 0 5px;color:var(--muted);font-size:11px; }.machine-entry { padding:9px 10px;border:1px solid var(--line);border-radius:7px;margin-top:5px;background:var(--soft); }.machine-entry strong { display:block;font-size:11px;overflow-wrap:anywhere; }.machine-entry .mono { font-size:11px;overflow-wrap:anywhere; }.machine-entry p { margin:3px 0 0;font-size:10px;color:var(--muted);overflow-wrap:anywhere; }.machine-entry .pill { margin-top:5px;font-size:9px;white-space:normal; }.profile-guidance { white-space:pre-wrap;overflow-wrap:anywhere; }
     .step-title { margin:0 0 12px;font-size:12px;display:flex;align-items:center;gap:8px; }.step-title span { display:grid;place-items:center;width:22px;height:22px;border-radius:7px;background:#e7efff;color:#315bdb;font-size:11px; }.connection-box { border:1px solid var(--line);border-radius:9px;background:var(--soft);padding:12px;margin-bottom:15px; }.connection-box .field:last-child { margin-bottom:0; }.check-summary { margin:13px 0;border:1px solid var(--line);border-radius:9px;padding:12px;background:var(--soft);font-size:11px; }.check-summary h3 { margin:0 0 8px;font-size:12px; }.check-item { display:flex;gap:8px;padding:6px 0;align-items:flex-start; }.check-item .pill { flex:0 0 auto; }.check-item div { min-width:0;overflow-wrap:anywhere; }.check-item small { display:block;color:var(--muted);margin-top:2px; }.pill.passed { color:#08724e;background:#e2f5ec; }.pill.warning,.machine-checks .pill.stale { color:#986011;background:#fff1d5; }.pill.blocked { color:#ab3447;background:#fce9eb; }.monitor-after-start { display:inline-block;margin-top:7px;font-size:12px; }.return-option { display:flex;gap:7px;align-items:center;margin:11px 0 5px;font-size:11px;color:var(--muted); }.return-option input { margin:0; }.machine-checks { margin-top:8px;border-top:1px solid var(--line);padding-top:5px; }.machine-checks p { display:flex;gap:7px;align-items:center;flex-wrap:wrap; }.machine-checks time { font-size:10px;color:var(--muted); }.machine-checks details { margin-top:6px;font-size:10px; }.machine-checks summary { cursor:pointer; }.machine-checks .check-detail { display:block;white-space:pre-wrap;overflow-wrap:anywhere;color:var(--muted); }
     .provenance-evidence dd { white-space:pre-wrap;max-height:220px;overflow:auto; }
+    .event-header { flex-wrap:wrap; }.event-source { color:var(--muted);overflow-wrap:anywhere; }
     @media(prefers-color-scheme:dark) { :root { color-scheme:dark;--bg:#101827;--panel:#1b2637;--ink:#edf2f9;--muted:#a0aec2;--line:#334257;--blue:#9bb8ff;--soft:#172232;--shadow:none; } body { background:radial-gradient(circle at 86% -13%,#1a3153 0,transparent 32%),var(--bg); }.button { color:#bfd2f0; }.button:hover:not(:disabled) { background:#283d5f; }.button.primary { color:white; }.button.danger { color:#ffbdc7;background:#41272d;border-color:#754650; }.field input,.field select,.field textarea,.followup textarea,.answer-text { border-color:#4a5e7a; }.session-card.selected { box-shadow:0 0 0 2px #2e446e; }.notice { color:#c5d6f0;background:#1b3457;border-color:#36557f; }.notice.error { color:#ffbcc3;background:#41272d;border-color:#704148; }.pill { background:#354154;color:#c2ccdb; }.pill.running,.pill.starting { background:#1d395f;color:#acc8ff; }.pill.waiting_input,.pill.waiting_approval { background:#493921;color:#f7cd83; }.pill.failed,.pill.disconnected { background:#4a2934;color:#ffadb6; }.pill.completed { background:#354154;color:#c2ccdb; }.event-header strong { color:#adc6f0; }.request { border-color:#725b2d;background:#312c21; }.request p,.option small { color:#dcc79d; }.question { border-color:#5d5137; } }
     @media(max-width:1080px) { .layout { grid-template-columns:310px minmax(0,1fr);gap:15px; }.shell { padding:0 20px 35px; }.session-list { grid-template-columns:1fr; }.detail-head { flex-direction:column; }.hero { align-items:flex-start; }.health { min-width:180px; } }
     @media(max-width:740px) { .shell { padding:0 14px 30px; }.topbar { min-height:65px;gap:8px; }.brand { font-size:13px; }.toplinks { gap:10px;font-size:11px; }.toplinks .secondary { display:none; }.hero { padding:22px 20px;display:block; }.hero h1 { font-size:27px; }.health { margin-top:17px; }.health strong { display:inline;margin-right:10px; }.health small { margin-top:6px; }.layout { grid-template-columns:1fr; }.detail-meta { grid-template-columns:1fr; }.session-list { grid-template-columns:repeat(2,minmax(0,1fr)); }.panel-head,.form,.detail-body { padding:16px; }.event-header { flex-wrap:wrap; }.event-header time { font-size:10px; }.followup .hint { max-width:100%; }.detail-head .actions { width:100%; } }
@@ -274,7 +275,12 @@
     }
     reconcileTaskNodes(box,sessions.map(session=>sessionListCards.get(String(session.id)).button));
   }
-  function summarizeEvent(event) {
+  function eventOrigin(event) {
+    const scope=['root','child'].includes(event.source_scope)?event.source_scope:'unknown';
+    const threadId=typeof event.source_thread_id==='string'?event.source_thread_id.trim():'';
+    return {scope,threadId,label:({root:'主任务',child:'子任务',unknown:'未知来源'})[scope]+(threadId?' · '+threadId.slice(0,12):' · thread 未记录')};
+  }
+  function summarizeEvent(event, monitor=false) {
     const method=event.method || event.type || 'event', p=event.params || {};
     if(typeof p.delta==='string')return p.delta;
     if(typeof p.text==='string')return p.text;
@@ -286,18 +292,24 @@
     if(item.command)return typeof item.command==='string'?item.command:JSON.stringify(item.command);
     if(p.error)return typeof p.error==='string'?p.error:JSON.stringify(p.error);
     if(p.turn?.error)return errorMessage(p.turn.error);
-    if(method==='turn/completed')return '本轮执行已结束。可查看输出并发送下一步指令。';
+    if(method==='turn/completed'){
+      const scope=eventOrigin(event).scope;
+      if(scope==='child')return '子任务本轮已结束。主任务进展请以上方任务状态为准。';
+      if(scope==='unknown')return '来源未确认的本轮已结束，请结合事件来源查看。';
+      return monitor?'主任务本轮已结束。此任务仅监控已有 PR，可查看历史输出。':'主任务本轮已结束。可查看输出并发送下一步指令。';
+    }
     if(method==='turn/started')return 'Codex 正在处理任务。';
     if(method==='thread/started')return '已建立 Codex 会话。';
     return '';
   }
-  function eventLabel(method) { if(method.includes('agentMessage'))return 'Codex';if(method.includes('commandExecution'))return '命令执行';if(method.includes('fileChange'))return '文件变更';if(method.includes('reasoning'))return '处理进展';if(method==='turn/completed')return '本轮结束';if(method==='turn/started')return '开始执行';if(method==='item/started')return '开始处理';if(method==='item/completed')return '处理结果';return method; }
+  function eventLabel(method, scope) { if(method.includes('agentMessage'))return 'Codex';if(method.includes('commandExecution'))return '命令执行';if(method.includes('fileChange'))return '文件变更';if(method.includes('reasoning'))return '处理进展';if(method==='turn/completed')return scope==='child'?'子任务本轮结束':scope==='root'?'主任务本轮结束':'来源未确认的本轮结束';if(method==='turn/started')return '开始执行';if(method==='item/started')return '开始处理';if(method==='item/completed')return '处理结果';return method; }
   function renderEvents(session) {
-    const events=Array.isArray(session.events)?session.events:[],key=JSON.stringify([session.id,events]);if(key===state.eventsKey)return;state.eventsKey=key;
+    const monitor=taskPolicy(session.backend,session.branch,session).mode==='monitor';
+    const events=Array.isArray(session.events)?session.events:[],key=JSON.stringify([session.id,session.status,monitor,events]);if(key===state.eventsKey)return;state.eventsKey=key;
     const box=$('events'),nearBottom=box.scrollHeight-box.scrollTop-box.clientHeight<55,fragment=document.createDocumentFragment(),groups=[];
-    for(const event of events){const method=event.method||event.type||'event',p=event.params||{},text=summarizeEvent(event);const prior=groups[groups.length-1];if(method.endsWith('/delta')&&prior?.method===method&&prior.itemId===(p.itemId||p.item_id||'')){prior.text+=text;prior.at=event.at;prior.count++;}else groups.push({method,text,at:event.at,itemId:p.itemId||p.item_id||'',event,count:1});}
-    if(!groups.length)fragment.append(el('div','event-empty',session.status==='prepared'?'任务已准备。点击「启动任务」后显示 Codex 输出。':'等待 Codex 输出…'));
-    for(const group of groups){const row=el('div','event');const header=el('div','event-header');header.append(el('strong','',eventLabel(group.method)),el('time','',formatTime(group.at)));row.append(header);if(group.text)row.append(el('div','event-text',group.text));const details=el('details');details.append(el('summary','',group.count>1?'事件详情 · 已合并 '+group.count+' 段输出':'事件详情'),el('pre','',JSON.stringify(group.event,null,2)));row.append(details);fragment.append(row);}
+    for(const event of events){const method=event.method||event.type||'event',p=event.params||{},origin=eventOrigin(event),text=summarizeEvent(event,monitor);const prior=groups[groups.length-1];if(method.endsWith('/delta')&&prior?.method===method&&prior.itemId===(p.itemId||p.item_id||'')&&origin.threadId&&prior.origin.scope===origin.scope&&prior.origin.threadId===origin.threadId){prior.text+=text;prior.at=event.at;prior.count++;}else groups.push({method,text,at:event.at,itemId:p.itemId||p.item_id||'',origin,event,count:1});}
+    if(!groups.length)fragment.append(el('div','event-empty',monitor?'尚无历史事件。此任务仅监控已有 PR。':session.status==='prepared'?'任务已准备。点击「启动任务」后显示 Codex 输出。':'等待 Codex 输出…'));
+    for(const group of groups){const row=el('div','event');const header=el('div','event-header'),origin=el('span','event-source',group.origin.label);if(group.origin.threadId)origin.title=group.origin.threadId;header.append(el('strong','',eventLabel(group.method,group.origin.scope)),origin,el('time','',formatTime(group.at)));row.append(header);if(group.text)row.append(el('div','event-text',group.text));const details=el('details');details.append(el('summary','',group.count>1?'事件详情 · 已合并 '+group.count+' 段输出':'事件详情'),el('pre','',JSON.stringify(group.event,null,2)));row.append(details);fragment.append(row);}
     box.replaceChildren(fragment);$('event-count').textContent=events.length?'最近 '+events.length+' 条事件':'';if(nearBottom)box.scrollTop=box.scrollHeight;
   }
   async function respond(session, requestId, response) { await act(session,'respond',{request_id:requestId,response}); }
