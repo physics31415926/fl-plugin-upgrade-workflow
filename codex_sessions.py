@@ -444,6 +444,14 @@ done
         stdout = probe.stdout.decode("utf-8", errors="replace") if isinstance(probe.stdout, bytes) else probe.stdout
         stderr = probe.stderr.decode("utf-8", errors="replace") if isinstance(probe.stderr, bytes) else probe.stderr
         remote_started = "FLFLOW_PROBE_READY=1" in stdout.splitlines()
+        # Some SSH gateways emit a failed handshake on stdout and exit zero.
+        # Without the remote marker, classify that transport failure directly.
+        transport_error = (stdout + "\n" + stderr).lower()
+        if not remote_started and any(value in transport_error for value in
+                                      ("ssh: handshake failed", "connection reset by peer")):
+            result["error"] = "SSH \u63e1\u624b\u5931\u8d25\u6216\u8fde\u63a5\u88ab\u91cd\u7f6e\uff0c\u8bf7\u68c0\u67e5\u7f51\u7edc\u3001\u8df3\u677f\u548c\u76ee\u6807\u673a\u5668\u540e\u91cd\u8bd5\u3002"
+            check("ssh", "failed", result["error"])
+            return result
         if probe.returncode and remote_started:
             check("ssh", "passed", "已通过 SSH 连接并执行远端只读预检。")
             result["error"] = "SSH 已连通，但远端只读预检执行失败（退出码 " + str(probe.returncode) + "）；请检查远端 shell 和命令执行策略。"

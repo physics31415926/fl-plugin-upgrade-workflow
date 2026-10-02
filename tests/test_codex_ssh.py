@@ -114,6 +114,21 @@ class SSHDispatchTest(TestCase):
             self.assertFalse(result["ok"])
             self.assertFalse(any(item["name"] == "ssh" and item["status"] == "passed" for item in result["checks"]))
 
+    def test_gateway_reset_is_transport_failure_even_with_zero_exit_or_stdout(self):
+        profile = self.direct_profile()
+        diagnostic = ("ssh: handshake failed: read tcp 192.0.2.1:40000->198.51.100.2:22: "
+                      "read: connection reset by peer raw-secret-token\n")
+        for code, stdout, stderr in ((0, diagnostic, ""), (0, "", diagnostic),
+                                     (255, diagnostic, "")):
+            with self.subTest(code=code, stdout=bool(stdout)):
+                result, _ = self.probe(profile, output=stdout, error=stderr, returncode=code)
+                self.assertFalse(result["ok"])
+                self.assertEqual(result["checks"][0]["name"], "ssh")
+                self.assertEqual(result["checks"][0]["status"], "failed")
+                public = json.dumps(result)
+                for private in ("192.0.2.1", "198.51.100.2", "raw-secret-token"):
+                    self.assertNotIn(private, public)
+
     def test_first_trust_and_password_failures_are_actionable_without_raw_stderr(self):
         profile = self.direct_profile()
         for stderr, expected in (("Host key verification failed. raw-secret-token", "主机"),
