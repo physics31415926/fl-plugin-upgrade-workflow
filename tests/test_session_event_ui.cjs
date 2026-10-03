@@ -34,9 +34,10 @@ class Element {
 }
 
 function renderer() {
-  const nodes = new Map([['events', new Element('div')], ['event-count', new Element('span')]]);
+  const nodes = new Map(['events','event-count','older-events','history-note','history-events','history-count'].map(id => [id, new Element('div')]));
   const context = {
     state: {eventsKey: '', policies: {}},
+    API: '/api/codex-sessions', URLSearchParams, encodeURIComponent,
     document: {createElement: tag => new Element(tag), createDocumentFragment: () => new Element('#fragment')},
     $: id => nodes.get(id), formatTime: value => value || '—',
     errorMessage: value => typeof value === 'string' ? value : value.message || '本轮异常'
@@ -47,7 +48,7 @@ function renderer() {
     sourceBetween('  function taskPolicy(', '  function prioritizedSessions('),
     sourceBetween('  function eventOrigin(', '  async function respond(')
   ].join('\n'), context, {filename: 'sessions.html event renderer'});
-  return {context, box: nodes.get('events'), count: nodes.get('event-count')};
+  return {context, box: nodes.get('events'), count: nodes.get('event-count'), nodes};
 }
 
 const rootThread = 'root-thread-0001';
@@ -62,6 +63,59 @@ const session = (events, mode = 'adapt') => ({
 });
 const visible = row => row.children.filter(child => child.tag !== 'details').map(child => child.textContent).join('\n');
 
+test('older event pages keep command identity and acceptance separate while live events update', async () => {
+  const {context,nodes,box} = renderer();
+  const input=session([event('root',rootThread,'item/agentMessage/delta',{delta:'live'})]);
+  context.current=()=>input;
+  const completed=event('root',rootThread,'item/completed',{item:{id:'command-example',type:'commandExecution',status:'completed',exitCode:0,command:'read-only example'}});
+  const calls=[];
+  context.request=async url=>{calls.push(url);return {session_id:input.id,events:[completed],status:'ok',has_more:true,next_cursor:'opaque-cursor',warnings:[]};};
+  const before=JSON.stringify(input);
+  context.renderEvents(input);
+  await context.loadOlderEvents();
+  assert.equal(JSON.stringify(input),before);
+  assert.match(calls[0], /\/session-example\/events\?limit=80$/);
+  const history=nodes.get('history-events');
+  assert.match(visible(history.children[0]), /OS 退出码：0（不代表测试或 Gate 结论）/);
+  assert.match(history.children[0].children.at(-1).textContent,/command-example/);
+  input.events=[event('root',rootThread,'item/agentMessage/delta',{delta:'new live'})];
+  context.renderEvents(input);
+  assert.match(box.textContent,/new live/);
+  assert.match(history.textContent,/command-example/);
+  await context.loadOlderEvents();
+  assert.match(calls[1],/cursor=opaque-cursor/);
+});
+
+test('a late history response cannot cross session selection and unavailable history can retry', async () => {
+  const {context,nodes}=renderer();
+  const original=session([]),other={...session([]),id:'other-session'};
+  let selected=original,complete;
+  context.current=()=>selected;
+  context.request=()=>new Promise(resolve=>{complete=resolve;});
+  const pending=context.loadOlderEvents();
+  assert.equal(nodes.get('older-events').disabled,true);
+  selected=other;context.renderEventHistory(other);
+  complete({session_id:original.id,events:[event('root',rootThread)],status:'ok',has_more:false});
+  await pending;
+  assert.equal(context.state.eventHistory.sessionId,other.id);
+  assert.equal(context.state.eventHistory.page,null);
+  assert.equal(nodes.get('older-events').disabled,false);
+  context.request=async()=>({session_id:other.id,events:[],status:'unavailable',warnings:['history_missing'],has_more:false});
+  await context.loadOlderEvents();
+  assert.equal(nodes.get('older-events').disabled,false);
+  assert.match(nodes.get('history-note').textContent,/暂不可用/);
+});
+
+test('history corruption and ended pagination are visible without offering task actions', async () => {
+  const {context,nodes}=renderer(),input=session([],'monitor');
+  context.current=()=>input;
+  context.request=async()=>({session_id:input.id,events:[event('root',rootThread)],status:'partial',warnings:['corrupt_records'],has_more:false});
+  await context.loadOlderEvents();
+  assert.equal(nodes.get('older-events').disabled,true);
+  assert.match(nodes.get('history-note').textContent,/损坏、不完整或超出读取上限/);
+  assert.doesNotMatch(nodes.get('history-events').textContent,/继续此任务|下一轮指令/);
+});
+
 test('both inline page scripts compile without executing their startup code', () => {
   for (const name of ['index.html', 'sessions.html']) {
     const text = fs.readFileSync(path.join(repository, name), 'utf8');
@@ -71,7 +125,7 @@ test('both inline page scripts compile without executing their startup code', ()
 
 test('homepage requests compact cards and pauses automatic polling while hidden', () => {
   const page = fs.readFileSync(path.join(repository, 'index.html'), 'utf8');
-  const script = [...page.matchAll(/<script\b[^>]*>([\s\S]*?)<\/script>/g)][0][1];
+  const script = [...page.matchAll(/<script\b[^>]*>([\s\S]*?)<\/script>/g)][0][1].replace(/\r\n/g, '\n');
   assert.match(script, /fetch\(appUrl\("api\/codex-sessions\?view=cards"\)/);
   assert.doesNotMatch(script, /session\.(?:events|prompt)\b/);
 

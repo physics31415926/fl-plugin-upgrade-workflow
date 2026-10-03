@@ -6,14 +6,20 @@ automatic approval is used. Machine profiles contain SSH aliases, never keys.
 from __future__ import annotations
 
 import atexit
+import base64
 from collections import deque
 from concurrent.futures import Future, TimeoutError as FutureTimeout
 from datetime import datetime, timedelta, timezone
 import json
+import hashlib
+import hmac
 import logging
+import math
 import os
 from pathlib import Path, PurePosixPath
 import re
+import secrets
+import stat
 import shlex
 import shutil
 import subprocess
@@ -209,9 +215,13 @@ class AppServerClient:
 class CodexSessionManager:
     ACTIVE = {"starting", "running", "waiting_approval", "waiting_input", "interrupting"}
     BACKENDS = {"cuda", "ascend", "metax", "corex", "hygon", "musa", "enflame", "kunlunxin", "thead"}
+    HISTORY_RECORD_LIMIT = 80
+    HISTORY_BYTE_LIMIT = 256 * 1024
+    HISTORY_SCAN_LIMIT = 240
 
     def __init__(self, config, base_dir, client_factory=AppServerClient):
         self.config = config
+        self._history_cursor_key = secrets.token_bytes(32)
         self.base_dir = Path(base_dir).resolve()
         self.repo = self._path(config["repo"])
         self.remote = self._name(config.get("remote", "upstream"), "remote")
@@ -704,6 +714,140 @@ done
                 "machine_profiles": list(self._profiles.values()),
                 "sessions": [self._session_view(s, compact=compact) for s in sorted(self._sessions.values(), key=lambda s: s["created_at"], reverse=True)],
             }))
+
+    def _history_cursor(self, session_id, identity, offset):
+        payload = json.dumps([session_id, *identity, offset], separators=(",", ":")).encode("ascii")
+        token = base64.urlsafe_b64encode(payload).decode("ascii").rstrip("=")
+        return token + "." + hmac.new(self._history_cursor_key, payload, hashlib.sha256).hexdigest()
+
+    def event_history(self, session_id, cursor=None, limit=80):
+        """Read one older page without touching session lifecycle or evidence."""
+        with self._lock:
+            if not re.fullmatch(r"[0-9a-f]{32}", session_id) or session_id not in self._sessions:
+                raise SessionError("Unknown session")
+        if isinstance(limit, bool) or not isinstance(limit, int) or not 1 <= limit <= self.HISTORY_RECORD_LIMIT:
+            raise SessionError("History limit must be between 1 and 80")
+        requested = None
+        if cursor is not None:
+            try:
+                if not isinstance(cursor, str) or len(cursor) > 512:
+                    raise ValueError
+                token, signature = cursor.split(".")
+                if not re.fullmatch(r"[A-Za-z0-9_-]+", token) or not re.fullmatch(r"[0-9a-f]{64}", signature):
+                    raise ValueError
+                payload = base64.urlsafe_b64decode(token + "=" * (-len(token) % 4))
+                if not hmac.compare_digest(signature, hmac.new(self._history_cursor_key, payload, hashlib.sha256).hexdigest()):
+                    raise ValueError
+                requested = json.loads(payload)
+                if (not isinstance(requested, list) or len(requested) != 4 or requested[0] != session_id
+                        or any(type(value) is not int or value < 0 for value in requested[1:])):
+                    raise ValueError
+            except (ValueError, TypeError, UnicodeError):
+                raise SessionError("History cursor is invalid or expired; reload history") from None
+        result = {"session_id": session_id, "events": [], "has_more": False, "next_cursor": None,
+                  "status": "ok", "warnings": [], "bytes_read": 0, "records_scanned": 0,
+                  "byte_limit": self.HISTORY_BYTE_LIMIT, "record_limit": limit,
+                  "response_byte_limit": self.HISTORY_BYTE_LIMIT, "event_bytes": 0}
+        path = self.root / session_id / "events.jsonl"
+        try:
+            # History is private to a known session; never accept a caller path
+            # or follow a log/session directory outside the configured root.
+            resolved = path.resolve(strict=True)
+            if path.is_symlink() or not resolved.is_relative_to(self.root.resolve() / session_id) or not resolved.is_file():
+                raise OSError
+            with path.open("rb") as file:
+                info = os.fstat(file.fileno())
+                if not stat.S_ISREG(info.st_mode):
+                    raise OSError
+                identity = (info.st_dev, info.st_ino)
+                end = info.st_size
+                if requested is not None:
+                    if tuple(requested[1:3]) != identity or requested[3] > end:
+                        raise SessionError("History cursor is invalid or expired; reload history")
+                    end = requested[3]
+                start = max(0, end - (self.HISTORY_BYTE_LIMIT - 1))
+                read_start = max(0, start - 1)
+                file.seek(read_start)
+                raw = file.read(end - read_start)
+                result["bytes_read"] = len(raw)
+                if len(raw) != end - read_start:
+                    raise SessionError("History changed while reading; reload history")
+        except FileNotFoundError:
+            return {**result, "status": "unavailable", "warnings": ["history_missing"]}
+        except OSError:
+            return {**result, "status": "unavailable", "warnings": ["history_unavailable"]}
+
+        prefix = raw[:1] if read_start < start else b"\n"
+        raw = raw[start - read_start:]
+        lines, position = [], start
+        for part in raw.splitlines(keepends=True):
+            lines.append((position, part))
+            position += len(part)
+        # Retain the first partial record for the following page, rather than
+        # misreading its suffix as a new event. Oversized records are explicit.
+        older_end = start
+        if lines and start and prefix != b"\n":
+            partial_start, partial = lines.pop(0)
+            older_end = partial_start + len(partial)
+            if not lines:
+                older_end = start
+                result["warnings"].append("record_exceeds_window")
+        if lines and not lines[-1][1].endswith(b"\n"):
+            position, _ = lines.pop()
+            older_end = min(older_end, position)
+            result["warnings"].append("incomplete_record")
+        def unique_object(pairs):
+            record = {}
+            for key, value in pairs:
+                if key in record:
+                    raise ValueError("Duplicate event field")
+                record[key] = value
+            return record
+
+        def finite_float(value):
+            number = float(value)
+            if not math.isfinite(number):
+                raise ValueError("Nonfinite event number")
+            return number
+
+        def reject_constant(value):
+            raise ValueError("Nonfinite event literal")
+
+        records = []
+        for position, line in reversed(lines):
+            if len(records) >= limit or result["records_scanned"] >= self.HISTORY_SCAN_LIMIT:
+                break
+            result["records_scanned"] += 1
+            previous_end = older_end
+            older_end = position
+            try:
+                event = json.loads(line, object_pairs_hook=unique_object,
+                                   parse_float=finite_float, parse_constant=reject_constant)
+                if (not isinstance(event, dict) or not isinstance(event.get("method"), str)
+                        or not isinstance(event.get("params"), dict) or not isinstance(event.get("at"), str)):
+                    raise ValueError
+                # Account for the JSON endpoint's indentation and escaping,
+                # reserving room for the fixed page metadata and signed cursor.
+                encoded = json.dumps(event, indent=2)
+                event_bytes = len(encoded.encode("utf-8")) + 4 * (encoded.count("\n") + 1) + 2
+                if result["event_bytes"] + event_bytes > self.HISTORY_BYTE_LIMIT - 4096:
+                    if records:
+                        older_end = previous_end
+                        break
+                    if "record_exceeds_response_limit" not in result["warnings"]:
+                        result["warnings"].append("record_exceeds_response_limit")
+                    continue
+                result["event_bytes"] += event_bytes
+                records.append(event)
+            except (ValueError, UnicodeError, RecursionError):
+                if "corrupt_records" not in result["warnings"]:
+                    result["warnings"].append("corrupt_records")
+        result["events"] = list(reversed(records))
+        result["has_more"] = older_end > 0
+        if result["has_more"]:
+            result["next_cursor"] = self._history_cursor(session_id, identity, older_end)
+        result["status"] = "partial" if result["warnings"] else "ok"
+        return result
 
     def _refresh_progress_artifact(self, session):
         """Read bounded progress from this session's isolated worktree only."""

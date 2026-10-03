@@ -774,6 +774,24 @@ def make_server(engine: Engine, host: str, port: int, monitor: object | None = N
             if not self._trusted_request():
                 return
             target = urlsplit(self.path)
+            history = re.fullmatch(r"/api/codex-sessions/([0-9a-f]{32})/events", target.path)
+            if history:
+                if sessions is None:
+                    self._json(HTTPStatus.SERVICE_UNAVAILABLE, {"error": "Codex sessions are not configured"})
+                    return
+                try:
+                    query = parse_qs(target.query, keep_blank_values=True)
+                    if set(query) - {"cursor", "limit"} or any(len(values) != 1 for values in query.values()):
+                        raise ValueError("Invalid history query")
+                    raw_limit = query.get("limit", ["80"])[0]
+                    if not re.fullmatch(r"[0-9]{1,2}", raw_limit):
+                        raise ValueError("History limit must be between 1 and 80")
+                    self._json(200, sessions.event_history(history[1], cursor=query.get("cursor", [None])[0], limit=int(raw_limit)))
+                except ValueError as exc:
+                    self._json(HTTPStatus.BAD_REQUEST, {"error": str(exc)})
+                except Exception:
+                    self._json(HTTPStatus.INTERNAL_SERVER_ERROR, {"error": "Session history unavailable"})
+                return
             if target.path == "/api/capabilities":
                 self._json(200, {"read_only": False, "sessions": sessions is not None,
                                  "refresh": monitor is not None})

@@ -57,7 +57,7 @@
         <article class="panel" id="session-detail" hidden><div class="panel-head detail-head"><div><div class="detail-title"><h2 id="detail-title">升级任务</h2><span id="detail-status" class="pill"></span></div><p id="detail-subtitle"></p></div><div class="actions"><button class="button primary small" id="start-session" type="button">启动任务</button><button class="button danger small" id="interrupt-session" type="button">中断当前执行</button></div></div>
           <dl class="detail-meta"><div><dt>验证机器</dt><dd id="detail-machine" class="mono"></dd></div><div><dt>基线分支 · 创建时提交</dt><dd id="detail-branch" class="mono"></dd></div><div><dt>任务工作分支</dt><dd id="detail-work-branch" class="mono"></dd></div><div><dt>上报候选 SHA</dt><dd id="detail-candidate">待核对 · 尚无结构化提交记录</dd></div><div><dt>本地独立 worktree</dt><dd id="detail-worktree" class="mono"></dd></div><div><dt>远端源仓库目录（机器配置）</dt><dd id="detail-seed" class="mono"></dd></div><div><dt>上报远端独立任务目录</dt><dd id="detail-remote-root">待上报 · 尚无结构化目录记录</dd></div><div><dt>Codex 会话 ID</dt><dd id="detail-thread" class="mono"></dd></div><div><dt>证据观察时间</dt><dd id="detail-observed-at" class="mono">待上报</dd></div><div><dt>记录性质</dt><dd id="detail-provenance-source">待核对 · 尚无有效上报</dd></div><div class="provenance-evidence"><dt>上报证据（相对路径）</dt><dd id="detail-provenance-evidence" class="mono">待上报</dd></div></dl>
           <div id="detail-policy" class="notice" role="status" hidden></div>
-          <div class="detail-body"><div id="detail-task-notice" class="notice">本轮对话结束后仍可继续任务。验收结果请在「分支验收监控」中查看，任务状态本身不代表 Gate 通过。</div><div id="detail-progress-warning" class="notice" role="status" hidden></div><section id="detail-progress" style="margin-bottom:16px" hidden><div class="tabs-head"><h3 id="detail-progress-title">当前进度摘要</h3></div><p id="detail-progress-summary" class="event-text"></p><small id="detail-plan-meta" class="hint"></small><ol id="detail-plan" class="event-text"></ol></section><details id="prompt-preview" class="subtle-details" style="margin-bottom:16px" hidden><summary>查看任务指令</summary><pre id="detail-prompt" class="event-text mono"></pre></details><div id="session-error" class="notice error" role="alert" hidden></div><div id="pending-requests" aria-label="等待你的处理"></div><div class="tabs-head"><h3>实时进展</h3><span id="event-count"></span></div><div id="events" class="events" aria-label="Codex 任务事件"></div>
+          <div class="detail-body"><div id="detail-task-notice" class="notice">本轮对话结束后仍可继续任务。验收结果请在「分支验收监控」中查看，任务状态本身不代表 Gate 通过。</div><div id="detail-progress-warning" class="notice" role="status" hidden></div><section id="detail-progress" style="margin-bottom:16px" hidden><div class="tabs-head"><h3 id="detail-progress-title">当前进度摘要</h3></div><p id="detail-progress-summary" class="event-text"></p><small id="detail-plan-meta" class="hint"></small><ol id="detail-plan" class="event-text"></ol></section><details id="prompt-preview" class="subtle-details" style="margin-bottom:16px" hidden><summary>查看任务指令</summary><pre id="detail-prompt" class="event-text mono"></pre></details><div id="session-error" class="notice error" role="alert" hidden></div><div id="pending-requests" aria-label="等待你的处理"></div><div class="tabs-head"><h3>实时进展</h3><span id="event-count"></span></div><div id="events" class="events" aria-label="Codex 任务事件"></div><details class="subtle-details" style="margin-top:14px"><summary>查看较早事件</summary><div class="tabs-head"><button class="button small" id="older-events" type="button">读取历史事件</button><span id="history-count"></span></div><p class="hint" id="history-note" role="status"></p><div id="history-events" class="events" aria-label="Codex 历史事件"></div></details>
             <form id="message-form" class="followup"><label class="field-label" for="message">给 Codex 补充指令</label><textarea id="message" placeholder="例如：先检查已有 Gate 结果；本轮只处理 graph 模式失败。" required></textarea><div class="actions"><small class="hint" id="message-hint">执行中可补充指令；本轮结束后可继续任务。</small><button class="button primary" id="send-message" type="submit">发送指令</button></div></form><div id="session-notice" class="notice" role="status"></div>
           </div></article><p class="footnote">页面可恢复本机保存的 Codex 会话。同一 SSH 别名限制一个活动会话；中断或结束对话后，远端 tmux 可能仍在运行。再次分配机器前请核对远端任务。</p>
       </section>
@@ -321,14 +321,47 @@
     return '';
   }
   function eventLabel(method, scope) { if(method.includes('agentMessage'))return 'Codex';if(method.includes('commandExecution'))return '命令执行';if(method.includes('fileChange'))return '文件变更';if(method.includes('reasoning'))return '处理进展';if(method==='turn/completed')return scope==='child'?'子任务本轮结束':scope==='root'?'主任务本轮结束':'来源未确认的本轮结束';if(method==='turn/started')return '开始执行';if(method==='item/started')return '开始处理';if(method==='item/completed')return '处理结果';return method; }
+  function drawEventRows(session, events, box, emptyText) {
+    const monitor=taskPolicy(session.backend,session.branch,session).mode==='monitor';
+    const fragment=document.createDocumentFragment(),groups=[];
+    for(const event of events){const method=event.method||event.type||'event',p=event.params||{},origin=eventOrigin(event),text=summarizeEvent(event,monitor);const prior=groups[groups.length-1];if(method.endsWith('/delta')&&prior?.method===method&&prior.itemId===(p.itemId||p.item_id||'')&&origin.threadId&&prior.origin.scope===origin.scope&&prior.origin.threadId===origin.threadId){prior.text+=text;prior.at=event.at;prior.count++;}else groups.push({method,text,at:event.at,itemId:p.itemId||p.item_id||'',origin,event,count:1});}
+    if(!groups.length)fragment.append(el('div','event-empty',emptyText));
+    for(const group of groups){const row=el('div','event');const header=el('div','event-header'),origin=el('span','event-source',group.origin.label);if(group.origin.threadId)origin.title=group.origin.threadId;header.append(el('strong','',eventLabel(group.method,group.origin.scope)),origin,el('time','',formatTime(group.at)));row.append(header);if(group.text)row.append(el('div','event-text',group.text));const details=el('details');details.append(el('summary','',group.count>1?'事件详情 · 已合并 '+group.count+' 段输出':'事件详情'),el('pre','',JSON.stringify(group.event,null,2)));row.append(details);fragment.append(row);}
+    box.replaceChildren(fragment);
+  }
   function renderEvents(session) {
     const monitor=taskPolicy(session.backend,session.branch,session).mode==='monitor';
     const events=Array.isArray(session.events)?session.events:[],key=JSON.stringify([session.id,session.status,monitor,events]);if(key===state.eventsKey)return;state.eventsKey=key;
-    const box=$('events'),nearBottom=box.scrollHeight-box.scrollTop-box.clientHeight<55,fragment=document.createDocumentFragment(),groups=[];
-    for(const event of events){const method=event.method||event.type||'event',p=event.params||{},origin=eventOrigin(event),text=summarizeEvent(event,monitor);const prior=groups[groups.length-1];if(method.endsWith('/delta')&&prior?.method===method&&prior.itemId===(p.itemId||p.item_id||'')&&origin.threadId&&prior.origin.scope===origin.scope&&prior.origin.threadId===origin.threadId){prior.text+=text;prior.at=event.at;prior.count++;}else groups.push({method,text,at:event.at,itemId:p.itemId||p.item_id||'',origin,event,count:1});}
-    if(!groups.length)fragment.append(el('div','event-empty',monitor?'尚无历史事件。此任务仅监控已有 PR。':session.status==='prepared'?'任务已准备。点击「启动任务」后显示 Codex 输出。':'等待 Codex 输出…'));
-    for(const group of groups){const row=el('div','event');const header=el('div','event-header'),origin=el('span','event-source',group.origin.label);if(group.origin.threadId)origin.title=group.origin.threadId;header.append(el('strong','',eventLabel(group.method,group.origin.scope)),origin,el('time','',formatTime(group.at)));row.append(header);if(group.text)row.append(el('div','event-text',group.text));const details=el('details');details.append(el('summary','',group.count>1?'事件详情 · 已合并 '+group.count+' 段输出':'事件详情'),el('pre','',JSON.stringify(group.event,null,2)));row.append(details);fragment.append(row);}
-    box.replaceChildren(fragment);$('event-count').textContent=events.length?'最近 '+events.length+' 条事件':'';if(nearBottom)box.scrollTop=box.scrollHeight;
+    const box=$('events'),nearBottom=box.scrollHeight-box.scrollTop-box.clientHeight<55;
+    drawEventRows(session,events,box,monitor?'尚无历史事件。此任务仅监控已有 PR。':session.status==='prepared'?'任务已准备。点击「启动任务」后显示 Codex 输出。':'等待 Codex 输出…');
+    $('event-count').textContent=events.length?'最近 '+events.length+' 条事件':'';if(nearBottom)box.scrollTop=box.scrollHeight;
+  }
+  function historyFor(session) {
+    if(state.eventHistory?.sessionId!==session.id)state.eventHistory={sessionId:session.id,cursor:null,page:null,hasMore:true,loading:false,error:'',renderKey:''};
+    return state.eventHistory;
+  }
+  function renderEventHistory(session) {
+    const history=historyFor(session),button=$('older-events'),page=history.page;
+    button.disabled=history.loading||(!history.hasMore&&page?.status!=='unavailable');
+    button.textContent=history.loading?'正在读取…':history.cursor?'加载更早事件':page&&!history.hasMore&&page.status!=='unavailable'?'已到历史开头':'读取历史事件';
+    const warnings=Array.isArray(page?.warnings)?page.warnings:[];
+    $('history-note').textContent=history.error||(!page?'实时列表仅保留最近的事件。可读取较早记录；历史事件不代表验收通过。':page.status==='unavailable'?'历史日志暂不可用，可稍后重试。':warnings.length?'部分记录损坏、不完整或超出读取上限；这里只显示可读取记录。历史事件不代表验收通过。':(history.hasMore?'可继续读取更早记录。':'已到可读取历史的开头。')+' 每次显示一页，实时列表持续更新。');
+    const events=Array.isArray(page?.events)?page.events:[],key=JSON.stringify([session.id,taskPolicy(session.backend,session.branch,session).mode,events]);
+    if(key!==history.renderKey){drawEventRows(session,events,$('history-events'),page?'本页没有可显示的完整事件。':'点击上方按钮读取历史事件。');history.renderKey=key;}
+    $('history-count').textContent=page?('本页 '+events.length+' 条事件'):'';
+  }
+  async function loadOlderEvents() {
+    const session=current();if(!session)return;
+    const history=historyFor(session);if(history.loading||(!history.hasMore&&history.page?.status!=='unavailable'))return;
+    history.loading=true;history.error='';renderEventHistory(session);
+    try{
+      const query=new URLSearchParams({limit:'80'});if(history.cursor)query.set('cursor',history.cursor);
+      const page=await request(API+'/'+encodeURIComponent(session.id)+'/events?'+query);
+      if(current()?.id!==session.id||state.eventHistory!==history)return;
+      if(page.session_id!==session.id||!Array.isArray(page.events)||page.events.length>80||(page.has_more===true&&(!page.next_cursor||typeof page.next_cursor!=='string')))throw new Error('历史记录与当前任务不匹配，请重试。');
+      history.page=page;history.hasMore=page.has_more===true;history.cursor=history.hasMore&&typeof page.next_cursor==='string'?page.next_cursor:null;
+    }catch(error){if(current()?.id===session.id&&state.eventHistory===history){history.error=error.message;history.cursor=null;history.hasMore=true;}}
+    finally{history.loading=false;if(current()?.id===session.id&&state.eventHistory===history)renderEventHistory(session);}
   }
   async function respond(session, requestId, response) { await act(session,'respond',{request_id:requestId,response}); }
   function responseButton(title, kind, handler) { const button=el('button','button small '+(kind||''),title);button.type='button';button.addEventListener('click',async()=>{button.disabled=true;try{await handler();}finally{if(button.isConnected)button.disabled=false;}});return button; }
@@ -380,7 +413,7 @@
     $('start-session').textContent=monitor?'仅监控':session.thread_id?'继续任务':'启动任务';$('start-session').disabled=monitor||working(session)||state.actionBusy||!state.available;$('interrupt-session').textContent=session.status==='prepared'?'取消待启动任务':'中断当前执行';$('interrupt-session').disabled=(!working(session)&&session.status!=='prepared')||session.status==='interrupting'||state.actionBusy;$('send-message').disabled=monitor||ending||state.actionBusy||['prepared','starting','interrupting','waiting_input','waiting_approval'].includes(session.status)||!state.available;$('send-message').textContent=session.thread_id&&!working(session)?'发送要求并继续原任务':'发送指令';$('message-hint').textContent=ending?'本轮结束处理中；修订文字会保留，状态更新后再发送。':monitor?'此任务仅监控，可查看已有 PR、日志或中断执行。':session.status==='waiting_input'||session.status==='waiting_approval'?'请先处理上方的授权或提问。':session.status==='prepared'?'启动任务后可以发送补充指令。':'执行中可补充指令；本轮结束后可发送修订要求，继续原任务。';
     $('prompt-preview').hidden=!session.prompt;$('detail-prompt').textContent=session.prompt||'';
     const progress=sessionProgress(session),plan=Array.isArray(session.plan)?session.plan:[],planNote=monitor?'历史任务计划 · '+(planMeta(session)||'记录时间未知'):planMeta(session);$('detail-progress').hidden=!progress&&!plan.length&&!planNote;$('detail-progress-summary').textContent=progress;$('detail-progress-summary').hidden=!progress;$('detail-plan-meta').textContent=planNote;$('detail-plan-meta').hidden=!planNote;$('detail-plan').replaceChildren();$('detail-plan').hidden=!plan.length;for(const step of plan)$('detail-plan').append(el('li','',planStepText(step.status,monitor)+' · '+step.step));
-    $('session-error').hidden=!session.error;$('session-error').textContent=errorMessage(session.error);renderPersistenceNotice(session);renderPending(session);renderEvents(session);
+    $('session-error').hidden=!session.error;$('session-error').textContent=errorMessage(session.error);renderPersistenceNotice(session);renderPending(session);renderEvents(session);renderEventHistory(session);
   }
   async function refresh(quiet=false) {
     if(state.fetching)return;state.fetching=true;
@@ -410,6 +443,7 @@
     $('health-status').textContent=!state.available?'未找到本机 Codex':!health?'已找到 Codex，待检查连接':health.error?'Codex 连接需要处理':health.authenticated?'Codex 已登录':'Codex 需要登录';
     if(health)$('health-note').textContent=errorMessage(health.error)||[health.version,health.account_type,'会话保存在本机，可在此页面继续。'].filter(Boolean).join(' · ');
   }
+  $('older-events').addEventListener('click',loadOlderEvents);
   $('health-check').addEventListener('click',async()=>{const button=$('health-check');button.disabled=true;$('health-note').textContent='正在检查 Codex 连接与登录状态…';try{const health=await request('/api/codex-health');state.available=!!health.available;renderHealth(health);}catch(error){$('health-status').textContent='Codex 连接检查失败';$('health-note').textContent=error.message;}finally{button.disabled=false;}});
   connectionMode();checkButtons();refresh();setInterval(()=>{if(!document.hidden)refresh(true);},3000);document.addEventListener('visibilitychange',()=>{if(!document.hidden)refresh(true);});
 })();
