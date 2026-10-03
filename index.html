@@ -699,7 +699,7 @@
     const url = new URL(window.location.href);
     url.searchParams.set("branch", data.branch || branch);
     window.history.replaceState(null, "", url);
-    if (sessionsEnabled) loadTasks();
+    if (sessionsEnabled && !document.hidden) loadTasks();
   }
   async function loadBranch(branch) {
     if (fetching || remoteRefreshing) return;
@@ -967,7 +967,7 @@
     if (!sessionsEnabled || tasksFetching) return;
     tasksFetching = true;
     try {
-      const response = await fetch(appUrl("api/codex-sessions"),{cache:"no-store"});
+      const response = await fetch(appUrl("api/codex-sessions?view=cards"),{cache:"no-store"});
       const data = await response.json().catch(() => ({}));
       if (!response.ok) throw new Error(errorMessage(data.error) || "无法读取任务");
       const policies = data.backend_task_policies && typeof data.backend_task_policies === "object" ? data.backend_task_policies : {};
@@ -1015,8 +1015,13 @@
     }
     byId("tasks-panel").hidden = !sessionsEnabled;
     await loadBranch(initialBranch);
-    setInterval(() => loadBranch(byId("branch-select").value || initialBranch), 15000);
-    if (sessionsEnabled) setInterval(loadTasks, 3000);
+    setInterval(() => { if (!document.hidden) loadBranch(byId("branch-select").value || initialBranch); }, 15000);
+    if (sessionsEnabled) setInterval(() => { if (!document.hidden) loadTasks(); }, 3000);
+    document.addEventListener("visibilitychange", () => {
+      if (document.hidden) return;
+      loadBranch(byId("branch-select").value || initialBranch);
+      if (sessionsEnabled) loadTasks();
+    });
   }
   initialize();
 })();

@@ -98,6 +98,33 @@ class SessionsTest(unittest.TestCase):
         with self.assertRaises(SessionError):
             self.create()
 
+    def test_compact_snapshot_omits_events_and_prompt_without_changing_session(self):
+        session = self.create()
+        stored = self.manager._sessions[session["id"]]
+        stored["events"] = [{"method": "item/outputDelta", "params": {"delta": "x" * 4000}}
+                            for _ in range(80)]
+        stored["prompt"] = "initial task instruction"
+        stored["progress_summary"] = "CPU adaptation in progress"
+        stored["last_agent_message"] = "Latest agent update"
+        stored["plan"] = [{"step": "Run acceptance", "status": "pending"}]
+        stored["pending_requests"] = [{"id": 42, "method": "item/commandExecution/requestApproval",
+                                       "params": {"command": "read-only action"}}]
+        stored["reported_provenance"] = {"candidate_commit": "a" * 40}
+
+        full = self.manager.snapshot()["sessions"][0]
+        cards = self.manager.snapshot(compact=True)["sessions"][0]
+        self.assertEqual(len(full["events"]), 80)
+        self.assertEqual(full["prompt"], "initial task instruction")
+        self.assertNotIn("events", cards)
+        self.assertNotIn("prompt", cards)
+        self.assertEqual(cards, {key: value for key, value in full.items()
+                                 if key not in ("events", "prompt")})
+        for key in ("status", "error", "progress_summary", "last_agent_message", "plan",
+                    "pending_requests", "reported_provenance", "task_policy", "thread_id"):
+            self.assertEqual(cards[key], full[key])
+        self.assertEqual(len(stored["events"]), 80)
+        self.assertEqual(stored["prompt"], "initial task instruction")
+
     def test_machine_exclusivity_and_cancel_prepared(self):
         session = self.create()
         with self.assertRaises(SessionError):

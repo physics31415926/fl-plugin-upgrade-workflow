@@ -69,6 +69,40 @@ test('both inline page scripts compile without executing their startup code', ()
   }
 });
 
+test('homepage requests compact cards and pauses automatic polling while hidden', () => {
+  const page = fs.readFileSync(path.join(repository, 'index.html'), 'utf8');
+  const script = [...page.matchAll(/<script\b[^>]*>([\s\S]*?)<\/script>/g)][0][1];
+  assert.match(script, /fetch\(appUrl\("api\/codex-sessions\?view=cards"\)/);
+  assert.doesNotMatch(script, /session\.(?:events|prompt)\b/);
+
+  const start = script.indexOf('    setInterval(() => { if (!document.hidden) loadBranch');
+  const end = script.indexOf('\n  }\n  initialize();', start);
+  assert(start >= 0 && end > start, 'homepage polling source exists');
+  const timers = new Map(), listeners = new Map(), calls = [];
+  let hidden = true;
+  vm.runInNewContext(script.slice(start, end), {
+    document: {
+      get hidden() { return hidden; },
+      addEventListener(name, callback) { listeners.set(name, callback); }
+    },
+    setInterval(callback, milliseconds) { timers.set(milliseconds, callback); },
+    sessionsEnabled: true,
+    initialBranch: 'initial-branch',
+    byId() { return {value: 'selected-branch'}; },
+    loadBranch(branch) { calls.push(['branch', branch]); },
+    loadTasks() { calls.push(['tasks']); }
+  }, {filename: 'index.html polling'});
+  assert.equal(timers.size, 2);
+  timers.get(15000)(); timers.get(3000)();
+  listeners.get('visibilitychange')();
+  assert.deepEqual(calls, [], 'hidden tab does not poll');
+  hidden = false;
+  listeners.get('visibilitychange')();
+  assert.deepEqual(calls, [['branch', 'selected-branch'], ['tasks']], 'visible tab refreshes immediately');
+  timers.get(15000)(); timers.get(3000)();
+  assert.deepEqual(calls.slice(2), [['branch', 'selected-branch'], ['tasks']], 'visible tab keeps polling');
+});
+
 test('parallel root and child completion remain distinct and preserve input state and raw event', () => {
   const {context, box} = renderer();
   const input = session([event('child', childThread), event('root', rootThread)]);

@@ -330,10 +330,18 @@ class FlflowTests(unittest.TestCase):
     def test_session_routes_require_explicit_start_and_local_origin(self) -> None:
         self.config()
         calls = []
+        snapshot_calls = []
 
         class FakeSessions:
-            def snapshot(self):
-                return {"sessions": []}
+            def snapshot(self, **kwargs):
+                snapshot_calls.append(kwargs)
+                row = {"id": "abc", "status": "running", "progress_summary": "Preparing",
+                       "events": [{"method": "item/outputDelta", "params": {"delta": "x" * 10000}}],
+                       "prompt": "initial task instruction"}
+                if kwargs.get("compact"):
+                    row.pop("events")
+                    row.pop("prompt")
+                return {"sessions": [row]}
 
             def check_machine(self, payload):
                 calls.append(("check", payload))
@@ -374,6 +382,21 @@ class FlflowTests(unittest.TestCase):
             response = connection.getresponse()
             self.assertEqual(json.loads(response.read()), {"read_only": False, "sessions": True, "refresh": False})
             connection.close()
+            for path, compact in (("/api/codex-sessions", False),
+                                  ("/api/codex-sessions?view=cards", True),
+                                  ("/api/codex-sessions?view=other", False)):
+                connection = HTTPConnection("127.0.0.1", server.server_port, timeout=3)
+                try:
+                    connection.request("GET", path)
+                    response = connection.getresponse()
+                    self.assertEqual(response.status, 200)
+                    row = json.loads(response.read())["sessions"][0]
+                    self.assertEqual(row["progress_summary"], "Preparing")
+                    self.assertEqual("events" in row, not compact)
+                    self.assertEqual("prompt" in row, not compact)
+                finally:
+                    connection.close()
+            self.assertEqual(snapshot_calls, [{}, {"compact": True}, {}])
             code, result = request("/api/codex-machines/check", {"profile_id": "test"})
             self.assertEqual(code, 200)
             self.assertFalse(result["ok"])

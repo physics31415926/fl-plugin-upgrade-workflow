@@ -684,11 +684,16 @@ done
                 # finished. Keep ownership even when the machine or HEAD changes.
                 raise SessionError(f"Use existing session {existing['id']} for this backend and baseline branch")
 
-    def _session_view(self, session):
+    def _session_view(self, session, compact=False):
         view = {**session, "task_policy": self._task_policy(session["backend"], session["branch"])}
+        if compact:
+            # Cards need lifecycle, progress, provenance and pending approvals,
+            # but not the event history or the initial task instruction.
+            view.pop("events", None)
+            view.pop("prompt", None)
         return json.loads(json.dumps(view))
 
-    def snapshot(self):
+    def snapshot(self, compact=False):
         with self._lock:
             for session in self._sessions.values():
                 self._refresh_progress_artifact(session)
@@ -697,7 +702,7 @@ done
                 "backends": sorted(self.backends), "health": self._health,
                 "backend_task_policies": self.backend_task_policies,
                 "machine_profiles": list(self._profiles.values()),
-                "sessions": [self._session_view(s) for s in sorted(self._sessions.values(), key=lambda s: s["created_at"], reverse=True)],
+                "sessions": [self._session_view(s, compact=compact) for s in sorted(self._sessions.values(), key=lambda s: s["created_at"], reverse=True)],
             }))
 
     def _refresh_progress_artifact(self, session):

@@ -783,7 +783,13 @@ def make_server(engine: Engine, host: str, port: int, monitor: object | None = N
                     self._json(HTTPStatus.SERVICE_UNAVAILABLE, {"error": "Codex sessions are not configured"})
                     return
                 try:
-                    self._json(200, sessions.health() if target.path.endswith("health") else sessions.snapshot())
+                    if target.path.endswith("health"):
+                        result = sessions.health()
+                    elif parse_qs(target.query).get("view") == ["cards"]:
+                        result = sessions.snapshot(compact=True)
+                    else:
+                        result = sessions.snapshot()
+                    self._json(200, result)
                 except ValueError as exc:
                     self._json(HTTPStatus.BAD_REQUEST, {"error": str(exc)})
                 except Exception as exc:
