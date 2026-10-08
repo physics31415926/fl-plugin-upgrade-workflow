@@ -84,3 +84,46 @@ for(const page of ['overview.html','index.html']) {
     }
   });
 }
+
+
+test('overview hides branch-wide CI while preserving backend CI and coverage', () => {
+  class Node {
+    constructor(tag) { this.tagName=tag.toUpperCase();this.className='';this.textContent='';this.childNodes=[]; }
+    append(...nodes) { this.childNodes.push(...nodes); }
+    replaceChildren(...nodes) { this.textContent='';this.childNodes=[...nodes]; }
+    get options() { return this.childNodes; }
+  }
+  const textOf=node=>node.textContent+node.childNodes.map(textOf).join('');
+  const text=source('overview.html'),context={URL,location:{href:'https://example.invalid/dashboard/'},document:{createElement:tag=>new Node(tag)}};
+  vm.createContext(context);
+  const implementation=between(text,'  const labels=', '  function makeCard(')
+    +between(text,'  function acceptanceLink(', '  function isActiveTask(')
+    +between(text,'  function renderSnapshot(', '  async function loadSessions(');
+  vm.runInContext(implementation+'\nglobalThis.render=renderSnapshot;',context);
+  const card={project:{id:'vllm'},branch:'dev',select:new Node('select'),engine:new Node('span'),meta:new Node('div'),
+    counts:{merged:new Node('strong'),ci:new Node('strong'),gate:new Node('strong')},collection:new Node('div'),
+    notice:new Node('div'),tbody:new Node('tbody'),detail:new Node('a'),taskLink:new Node('a')};
+  const data={branch:'dev',branches:['dev'],head:'current',observed_at:'2026-01-01T00:00:00Z',cases:[{scenario:'fixture_case'}],
+    branch_ci:{status:'failed',url:'https://github.com/owner/repo/actions/runs/123'},
+    backends:[
+      {id:'cuda',label:'NVIDIA',integration:{status:'merged'},ci:{status:'passed',scope:'accepted-tree'},
+        gate:{status:'missing',total:20,requests_total:104}},
+      {id:'ascend',label:'Ascend',integration:{status:'merged'},ci:{status:'failed',scope:'branch',commit:'current'},
+        gate:{status:'missing',total:20,requests_total:104}}
+    ]};
+  for(const branchStatus of ['failed','running','passed']) {
+    data.branch_ci.status=branchStatus;
+    const original=JSON.stringify(data);
+    context.render(card,data);
+    assert.equal(textOf(card.collection),'\u9a8c\u6536\u8986\u76d6 20 \u573a\u666f \u00b7 104 \u8bf7\u6c42 / backend');
+    assert.equal(card.collection.childNodes.length,1,'collection must contain coverage alone');
+    assert.equal(card.collection.childNodes[0].tagName,'SPAN');
+    assert.equal(card.collection.childNodes[0].className,'','coverage is not a CI status badge');
+    assert.equal(card.counts.ci.textContent,'1 / 2');
+    assert.equal(card.counts.merged.textContent,'2 / 2');
+    assert.equal(card.tbody.childNodes[0].childNodes[0].childNodes[0].textContent,'NVIDIA');
+    assert.equal(card.tbody.childNodes[0].childNodes[2].childNodes[0].className,'pill passed');
+    assert.equal(card.tbody.childNodes[1].childNodes[2].childNodes[0].className,'pill failed');
+    assert.equal(JSON.stringify(data),original,'display must not alter CI data');
+  }
+});

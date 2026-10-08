@@ -98,6 +98,25 @@ python -B share_server.py --projects-config projects.json --host <LAN-IPv4> --po
 
 验证 `powershell.exe -NoProfile -File .\start_lan_dashboard.ps1` 后，可注册以当前用户、最低权限、登录时触发的 Windows 计划任务，启动命令增加 `-WindowStyle Hidden`。计划任务的执行时限设为零，避免长时间运行后被默认时限停止。重新配置监听地址或证书后，重启该共享服务；本机任务控制台独立运行。
 
+### Windows 本机任务控制台常驻
+
+`start_local_dashboard.ps1 -ConfigPath <config>` 读取受信任、忽略的 `runs/local/<config>.json`，用于运行 `flflow.py serve`。`python` 填本机 Python `.exe`，`working_directory` 填仓库目录，`arguments` 是完整 argv 数组，包含 `-u`、`-B`、`flflow.py` 路径及 `serve` 参数；可另填 `program` 指定 `flflow.py`，此时 `arguments` 从 `serve` 开始。默认配置为 `runs/local/dashboard.json`；旧 owner 可使用独立配置，分别保持各自端口及会话目录。标准输出写入 `log_file`，标准错误写入同名 `.stderr`，启动或退出诊断追加到 `.launcher.log`。每次启动会重建标准输出/错误日志，需要长期保留时先归档旧日志。配置仅由本机维护者编辑，不接受网页提供的命令字符串。
+
+```json
+{
+  "python": "<absolute Python executable>",
+  "arguments": ["-u", "-B", "<absolute flflow.py>", "serve", "--projects-config", "<absolute projects.json>", "--host", "127.0.0.1", "--port", "8766"],
+  "working_directory": "<repository directory>",
+  "log_file": "<repository directory>/runs/local/dashboard.log"
+}
+```
+
+计划任务使用当前登录用户、`Interactive` 登录类型、最低权限 `Limited`，登录时触发；保留同一用户的 Codex 登录及 DPAPI 配置。Action 使用下面的独立 PowerShell 进程；设置 `ExecutionTimeLimit = 0`、`RestartCount = 3`、`RestartInterval = 1 分钟`、`MultipleInstances = IgnoreNew`，使 Python 异常退出后可自动重启且不会重复运行 owner。启动器以隐藏窗口等待 Python，直接分别重定向 stdout/stderr；Windows PowerShell 5.1 不使用 `& python 2>&1`，正常 stderr 不会触发 `ErrorActionPreference = Stop` 退出。更新计划任务 Action 只影响下次启动；维护已运行的旧 owner 时，不通过重启加载启动器变更，以免中断现有任务。
+
+```powershell
+powershell.exe -NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -File "<repository directory>\start_local_dashboard.ps1" -ConfigPath "<repository directory>\runs\local\dashboard.json"
+```
+
 ### 临时 SSH 访问
 
 有开发机 SSH 权限的维护者可转发端口：
