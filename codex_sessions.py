@@ -212,6 +212,28 @@ class AppServerClient:
                     self.process.kill()
 
 
+def require_free_machine(machine, managers, *, excluding_manager=None, excluding_session=None, message=None):
+    """Check live project leases while the caller holds the shared machine lock.
+
+    Remote managers must refresh their allocation records and raise on an
+    unavailable upstream, so a disconnected dashboard never permits takeover.
+    """
+    for manager in managers:
+        allocation = getattr(manager, "allocation_sessions", None)
+        if callable(allocation):
+            sessions = allocation()
+        else:
+            with manager._lock:
+                sessions = list(manager._sessions.values())
+        for existing in sessions:
+            if manager is excluding_manager and existing["id"] == excluding_session:
+                continue
+            if (existing["status"] in CodexSessionManager.ACTIVE | {"prepared"}
+                    and CodexSessionManager._same_machine(existing, machine)):
+                raise SessionError(message or
+                    "This machine already has an active or prepared session; finish or interrupt it first")
+
+
 class CodexSessionManager:
     ACTIVE = {"starting", "running", "waiting_approval", "waiting_input", "interrupting"}
     BACKENDS = {"cuda", "ascend", "metax", "corex", "hygon", "musa", "enflame", "kunlunxin", "thead"}
@@ -224,8 +246,25 @@ class CodexSessionManager:
         self._history_cursor_key = secrets.token_bytes(32)
         self.base_dir = Path(base_dir).resolve()
         self.repo = self._path(config["repo"])
+        self.engine = config.get("engine", "vllm")
+        if self.engine not in ("vllm", "sglang"):
+            raise SessionError("engine must be vllm or sglang")
+        self.project_label = self._text(config.get("project_label", self.engine + "-plugin-FL"),
+                                        "project_label", 200, True)
+        self.case_dir = config.get("case_dir", "tools/adaptation-gate-cases")
+        if (not isinstance(self.case_dir, str) or len(self.case_dir) > 512 or
+                not all(re.fullmatch(r"[A-Za-z0-9_.-]+", part) and part not in {".", ".."}
+                        for part in self.case_dir.split("/"))):
+            raise SessionError("case_dir must be a relative repository directory without path escapes")
+        self.case_sources = config.get("case_sources", ["examples", "tests/e2e_tests/concurrent"]
+                                       if self.engine == "sglang" else [self.case_dir])
+        if (not isinstance(self.case_sources, list) or not 1 <= len(self.case_sources) <= 20
+                or any(not isinstance(path, str) or len(path) > 512
+                       or not all(re.fullmatch(r"[A-Za-z0-9_.-]+", part) and part not in {".", ".."}
+                                  for part in path.split("/")) for path in self.case_sources)):
+            raise SessionError("case_sources must list relative repository directories without path escapes")
         self.remote = self._name(config.get("remote", "upstream"), "remote")
-        self.default_branch = config.get("branch", "0.4.0-dev")
+        self.default_branch = config.get("branch", "0.4.0-dev" if self.engine == "vllm" else "main")
         self.root = self._path(config.get("sessions_dir", "runs/codex-sessions"))
         self.evidence_dir = self._path(config.get("evidence_dir", "runs/gate-evidence"))
         self.executable = config.get("codex_executable") or shutil.which("codex")
@@ -233,6 +272,10 @@ class CodexSessionManager:
         self.backend_task_policies = self._task_policies(config.get("backend_task_policies", {}))
         self.client_factory = client_factory
         self._lock = threading.RLock()
+        # A registry may replace these defaults with one shared lease lock and
+        # its complete manager list. Single-project callers remain compatible.
+        self.machine_lock = threading.RLock()
+        self.peer_managers = [self]
         self._clients = {}
         self._workers = {}
         self._sessions = {}
@@ -709,6 +752,8 @@ done
                 self._refresh_progress_artifact(session)
             return json.loads(json.dumps({
                 "available": bool(self.executable), "default_branch": self.default_branch,
+                "engine": self.engine, "project_label": self.project_label, "case_dir": self.case_dir,
+                "case_sources": self.case_sources,
                 "backends": sorted(self.backends), "health": self._health,
                 "backend_task_policies": self.backend_task_policies,
                 "machine_profiles": list(self._profiles.values()),
@@ -1042,6 +1087,16 @@ done
         return (left_connection["host"].lower(), left_connection["user"], left_connection["port"]) == (
             right_connection["host"].lower(), right_connection["user"], right_connection["port"])
 
+    def allocation_sessions(self):
+        """Return only the fields needed for shared machine ownership checks."""
+        with self._lock:
+            return [{key: session.get(key) for key in ("id", "status", "ssh_alias", "ssh_connection")}
+                    for session in self._sessions.values()]
+
+    def _require_free_machine(self, machine, excluding=None, message=None):
+        require_free_machine(machine, self.peer_managers, excluding_manager=self,
+                             excluding_session=excluding, message=message)
+
     def create(self, payload):
         """Prepare only; callers explicitly invoke start to begin model work."""
         profile = None
@@ -1092,14 +1147,12 @@ done
             "preflight_required": preflight_required, "preflight": preflight, "profile_id": payload.get("profile_id"),
             "plan": [], "last_agent_message": None,
         }
-        with self._lock:
+        with self.machine_lock, self._lock:
             self._require_new_session(machine["backend"], branch)
             self._require_adapt(machine["backend"], branch)
-            # This lease covers active/prepared Codex sessions only. Remote tmux
-            # processes can outlive a completed/interrupted local Codex turn.
-            for existing in self._sessions.values():
-                if self._same_machine(existing, machine) and existing["status"] in self.ACTIVE | {"prepared"}:
-                    raise SessionError("This machine already has an active or prepared session; finish or interrupt it first")
+            # This lease covers active/prepared Codex sessions in every project.
+            # Remote tmux can outlive a completed/interrupted local Codex turn.
+            self._require_free_machine(machine)
             if machine["ssh_connection"]:
                 config_path = self.root / session_id / "ssh.conf"
                 self._write_ssh_config(config_path, machine["ssh_alias"], machine["ssh_connection"])
@@ -1119,6 +1172,9 @@ done
             "mode": "<eager-or-graph>", "port": 8000, "results_dir": "results",
             "created_at": "<actual-run-UTC-time>",
         }
+        if self.engine == "sglang":
+            manifest_example.update(engine="sglang", mode="<actual-engine-mode>")
+            manifest_example.pop("port")
         progress_example = {"schema_version": 1, "session_id": session["id"], "backend": session["backend"],
                             "plan": [{"step": "环境检查", "status": "in_progress"},
                                      {"step": "版本适配", "status": "pending"},
@@ -1126,6 +1182,102 @@ done
                                      {"step": "Gate 验收", "status": "pending"},
                                      {"step": "结果归档", "status": "pending"}],
                             "summary": "填写当前真实进展、阻塞和下一步。"}
+        if self.engine == "sglang":
+            preparation = (
+                "先读取仓库 AGENTS.md、README.md、pyproject.toml、tests/README.md 和 .github/workflows/ci.yml，"
+                "确认实际 SGLang 版本、sglang_fl 插件入口、backend 与依赖。"
+                "以所选分支真实源码和 CI 为准适配 SGLang 平台、dispatch、FlagGems/FlagCX 与服务接口。"
+                "不得调用 vLLM 专用升级或安装技能，不得把 vLLM API、版本 pin 或启动命令套用于 SGLang。\n"
+            )
+            test_instruction = (
+                "核对所选分支 tests/run.py、tests/unit_tests、tests/functional_tests、tests/e2e_tests、"
+                "tests/benchmarks、tests/platforms 和 tests/models 的实际内容。"
+                "依据 tests/README.md 及 .github/workflows 的真实 matrix，选择该 backend 支持的 unit、"
+                "functional、e2e（inference/serving/concurrent）与 benchmark 测试。"
+                "若该分支提供 tests/validate.sh 与 tests/test_precision_align.py，按实际说明进行精度对齐。"
+                "SGLang 的 eager/graph 必须核对实际 disable_cuda_graph 和平台支持，不能套用 vLLM 参数。"
+                "记录每条测试命令、真实退出码、通过/失败/跳过数、模型与设备、原始日志和 CI 链接；"
+                "模型缺失导致 skip、dummy 权重 benchmark、CPU 单测或服务启动不能证明真实模型验收通过。\n"
+            )
+        else:
+            preparation = (
+                "先读取仓库 AGENTS.md 和相关 vllm-upgrade-flagos / vllm-plugin-fl-setup-flagos 技能，确认版本和 backend。"
+            )
+            test_instruction = (
+                "依据所选分支真实 README、tests 和 .github/workflows 记录已有 CI 与测试要求、执行结果和未执行项。\n"
+            )
+        gate_available = (Path(session["worktree"]) / self.case_dir).is_dir()
+        if self.engine == "sglang":
+            collector_argv = ["python", "<remote-isolated-tools>/sglang_evidence.py",
+                              "--repo", "<remote-isolated-clean-candidate-repo>",
+                              "--branch", session["branch"], "--commit", "<actual-tested-40-hex-commit>",
+                              "--backend", session["backend"], "--model-path", "<actual-model-path>",
+                              "--mode", "eager", "--scenario", "all",
+                              "--output-dir", "<remote-task-private-evidence>/<model>/eager"]
+            gate_instruction = (
+                f"SGLang 面板配置 case_sources：{json.dumps(self.case_sources, ensure_ascii=False)}。"
+                "SGLang 的验收来源是所选分支 examples/ 的真实 offline inference、concurrent 等 case，"
+                "以及 tests/e2e_tests/concurrent/test_concurrent_smoke.py 和 tests/models/ 中驱动并发场景的 YAML。"
+                "先阅读这些原始 case 的输入、expected、插件加载与输出校验，再按其实际模型、TP、模式和平台要求运行。"
+                "并发场景必须记录 text/vl/mixed 的实际选择、CONCURRENT_N、每请求输入/输出/expected/校验与失败；"
+                "没有实际执行的模型或场景明确为未执行。不得把单请求服务可用视为并发验收通过。"
+                "保留原始 case stdout/stderr、测试报告、逐请求校验和源 case 身份，以面板配置的 SGLang 结果解析格式归档；"
+                "不得修改原始验证规则、制造 vLLM Gate、伪造 summary.passed，或假定 vLLM 的固定场景和模型数量。"
+                "若所选分支缺失对应 case 或未配置可验证的结果格式，明确报告“未配置 Gate”或具体缺失项，保留原生测试证据。"
+                f"\nSGLang 验收证据归档根目录（本机）：{evidence_root}\n"
+                "每个模型/实际引擎模式独立归档 <model>/<mode>/<run_id>/manifest.json 与同级 results/；"
+                "SGLang manifest 使用以下格式（offline/Engine 场景无需 HTTP port），所有字段必须来自真实运行：\n"
+                + json.dumps(manifest_example, ensure_ascii=False, indent=2) + "\n"
+                "results/<scenario>.json 必须使用独立 SGLang schema：schema_version=1、"
+                "evidence_type=sglang_raw_requests；case 包含 scenario、model_path、source、source_blob、"
+                "commit、backend、mode、request_count；execution 保存 completed、exit_code、"
+                "plugin_loaded、plugin_active 的真实值。requests 逐项保留原始 input(kind/text prompt 或 vl image/question)、"
+                "output(text/error)、checks(nonempty/expected) 和 status；summary 记录 request_count、"
+                "passed_count、failed_count、skipped_count、passed，不得从 exit_code 自动合成全通过。"
+                "pytest 并发场景还需 definition_files 绑定实际模型 YAML 和 plugin_utils 的 Git blob。"
+                "source_blob 与 definition_files 使用 git rev-parse <actual-commit>:<source-path> 的真实 Git blob ID；"
+                "面板会独立复核原场景输入次序、请求数、非空输出与 expected，不能只信 checks 或退出码。\n"
+                f"本机 SGLang 采集器：{Path(__file__).resolve().with_name('sglang_evidence.py')}。"
+                "远端运行前将此独立采集器原样复制到本任务工具目录，保持目标插件仓库 clean；"
+                "输出放在候选仓库之外的任务私有证据目录。采集器原样调用所选源码 examples 和 pytest 并发函数，保留原 assert，"
+                "自动发现该候选支持的场景、执行并生成上述 manifest 与原始逐请求 JSON；不得自行合成通过结果。"
+                "每个实际模型运行一次完整 --scenario all；以下 argv 为 eager 示例，需先确认原场景支持所选引擎模式：\n"
+                + json.dumps(collector_argv, ensure_ascii=False) + "\n"
+                "--commit 必须等于该干净候选的真实 HEAD，不能填写只读基线 SHA。"
+                "可用 --run-id 保持同一轮身份，既有 case 结果禁止覆盖；失败重试创建新 run_id 并保留失败原件。"
+                "将该次 run_id 下 manifest.json 与全部 results/<scenario>.json 原样复制回上述本机证据根目录，"
+                "保持相对布局，不改 commit/source_blob/原始输出；没有支持场景的模型或模式明确为未执行。\n"
+                "证据必须绑定实际被测试的候选完整 commit、backend、模型、设备、模式、命令、时间和原始路径；"
+                "有未提交修改时先提交隔离工作分支再验证，不能冒用基线 SHA。"
+                "候选 commit 与监控分支 HEAD 不同会显示证据过期，不能修改证据身份伪装成 HEAD。\n"
+            )
+        elif gate_available:
+            gate_instruction = (
+                f"验收用所选分支 {self.case_dir} 的真实 case；先核对其原始场景和结果格式。"
+                "不得用 pytest 退出码代替结果 JSON 的 summary.passed 和逐请求 checks。"
+                f"\nGate 归档根目录（本机）：{evidence_root}\n"
+                "每个模型/模式独立创建 <model>/<mode>/manifest.json 和同级 results/ 目录；"
+                "manifest 使用以下格式并填写真实运行值：\n"
+                + json.dumps(manifest_example, ensure_ascii=False, indent=2) + "\n"
+                f"从验证机器原样复制 {self.case_dir} 生成的各 <scenario>.json 到 results/，保留原始时间、输入、输出、checks 和 summary；"
+                "保留失败结果，不得重写结果为通过。manifest 的 model 必须与面板模型名及原始 JSON 的 model_path 文件名或 served_model_name 相符；"
+                "port 必须是该次验证的真实端口。results_dir 相对 manifest 且位于面板 evidence_dir 内。"
+                "commit 填写实际被测试的干净代码提交；有未提交修改时先提交隔离工作分支再验证，不能冒用基线 SHA。"
+                "候选工作分支 commit 与监控分支 HEAD 不同会显示证据过期，须如实报告，不能修改 manifest 伪装成 HEAD。\n"
+            )
+        else:
+            gate_instruction = (
+                f"当前固定基线 worktree 未提供配置的 Gate case 目录 {self.case_dir}，必须报告“未配置 Gate”。"
+                "不得制造、复制其他仓库的 vLLM Gate 或伪造该目录和结果格式；"
+                "根据本仓库实际 CI 与上述原生 tests 记录适配进展，测试通过仍不能标为 Gate 通过。"
+                "Gate 验收阶段保留未完成并列明缺失配置，原始测试日志和真实 JSON 保存在本任务私有证据目录。"
+                f"\n测试证据归档根目录（本机）：{evidence_root}\n"
+            )
+        if self.engine == "vllm":
+            gate_instruction += (
+                f"实际验证前再次核对远端所选候选的 {self.case_dir}；缺失或场景/格式不匹配时报告“未配置 Gate”，"
+                "不能凭 CI/pytest 成功构造 Gate manifest 或宣称通过。\n"
+            )
         ssh_arguments = ["ssh"]
         if session.get("ssh_config_path"):
             ssh_arguments += ["-F", session["ssh_config_path"]]
@@ -1133,7 +1285,7 @@ done
         ssh_instruction = ("本任务所有 SSH 连接必须使用此 argv，禁止 shell=True；远端命令中的目录和参数必须正确引用："
                            + json.dumps(ssh_arguments, ensure_ascii=False) + "。")
         return (
-            "请跟进 vllm-plugin-FL 的 backend 适配，持续记录实现、测试和阻塞情况。\n"
+            f"请跟进 {self.project_label} 的 {self.engine} backend 适配，持续记录实现、测试和阻塞情况。\n"
             f"Backend: {session['backend']}\nBase branch: {session['branch']}\nBase commit: {session['commit']}\n"
             f"Local isolated worktree: {session['worktree']}\nWork branch: {session['work_branch']}\n"
             f"SSH host alias: {session['ssh_alias']}\nRemote workspace: {session['remote_workspace']}\n"
@@ -1153,7 +1305,7 @@ done
             "candidate_commit 为实际候选完整40位SHA，remote_task_workspace 为实际远端独立任务绝对目录，"
             "observed_at 为真实 RFC3339 时间（T 分隔，显式 Z 或 ±HH:MM 时区），evidence_paths 为最多20项本 worktree 内已有文件的相对路径引用"
             "（每项 path 最多512字符、/分隔且无空、.或..组件，可选 sha256）。摘要更新时间不能代替证据时间；引用哈希仅上报，服务不会验证其内容或据此判定Gate。\n"
-            "先读取仓库 AGENTS.md 和相关 vllm-upgrade-flagos / vllm-plugin-fl-setup-flagos 技能，确认版本和 backend。"
+            + preparation +
             "For source byte-length/SHA pins across Windows and Linux, use the fixed commit Git blob raw bytes "
             "(git show <commit>:<path>), since working-tree copies can convert line endings. Independently verify "
             "the actual remote provider bytes and identity; never silently normalize differences to pass a guard. "
@@ -1171,19 +1323,11 @@ done
             "分别报告传输、采集器、worker 与容器的真实退出码和失败阶段；源码准备、启动或 CPU 检查不能证明完整 Gate，"
             "通过仍须原场景和逐请求验收。\n"
             "每阶段报告：环境检查、版本适配、服务启动、Gate 验收、结果收集。"
-            "验收用所选分支 tools/adaptation-gate-cases 的真实 case；不得用 pytest 退出码代替结果 JSON 的 summary.passed 和逐请求 checks。"
+            + test_instruction + gate_instruction +
             "记录实际测试的 commit、backend、模型、eager/graph、机器、命令、时间、原始结果路径；报告失败和未执行项。"
-            f"\n面板配置模型：{json.dumps(self.config.get('models', ['Qwen3.6-27B', 'Qwen3.6-35B-A3B']), ensure_ascii=False)}；"
-            f"模式：{json.dumps(self.config.get('modes', ['eager', 'graph']), ensure_ascii=False)}。\n"
-            f"Gate 归档根目录（本机）：{evidence_root}\n"
-            "每个模型/模式独立创建 <model>/<mode>/manifest.json 和同级 results/ 目录；"
-            "manifest 使用以下格式并填写真实运行值：\n"
-            + json.dumps(manifest_example, ensure_ascii=False, indent=2) + "\n"
-            "从验证机器原样复制 tools/adaptation-gate-cases 生成的各 <scenario>.json 到 results/，保留原始时间、输入、输出、checks 和 summary；"
-            "保留失败结果，不得重写结果为通过。manifest 的 model 必须与面板模型名及原始 JSON 的 model_path 文件名或 served_model_name 相符；"
-            "port 必须是该次验证的真实端口。results_dir 相对 manifest 且位于面板 evidence_dir 内。"
-            "commit 填写实际被测试的干净代码提交；有未提交修改时先提交隔离工作分支再验证，不能冒用基线 SHA。"
-            "候选工作分支 commit 与监控分支 HEAD 不同会显示证据过期，须如实报告，不能修改 manifest 伪装成 HEAD。"
+            f"\n面板配置模型：{json.dumps(self.config.get('models', ['Qwen3.6-27B', 'Qwen3.6-35B-A3B'] if self.engine == 'vllm' else []), ensure_ascii=False)}；"
+            f"模式：{json.dumps(self.config.get('modes', ['eager', 'graph'] if self.engine == 'vllm' else []), ensure_ascii=False)}。"
+            "未显式配置的模型和模式以所选分支原生 case/YAML 为准，不假定固定覆盖数。\n"
             "写归档目录若需要沙盒权限则提出对应审批；无法写入时先保留在本 worktree 并报告可导入路径。"
             "Codex 轮次完成只表示本轮执行结束，绝不等同于 backend 或 Gate 验收通过。\n"
             "在用户指定机器及隔离工作目录持续完成常规适配、修复、测试、重试和证据归档，直到任务完成或确有阻塞；"
@@ -1246,16 +1390,15 @@ done
         return self._launch(session_id, text)
 
     def _launch(self, session_id, text):
-        with self._lock:
+        with self.machine_lock, self._lock:
             session = self._get(session_id)
             self._require_adapt(session["backend"], session["branch"])
             if session["status"] in self.ACTIVE:
                 raise SessionError("Session already has an active turn")
             if session_id in self._workers and self._workers[session_id].is_alive():
                 raise SessionError("Previous startup is still settling; refresh before resuming")
-            for other in self._sessions.values():
-                if other["id"] != session_id and self._same_machine(other, session) and other["status"] in self.ACTIVE | {"prepared"}:
-                    raise SessionError("This machine is reserved by another session")
+            self._require_free_machine(session, excluding=session_id,
+                                       message="This machine is reserved by another session")
             previous_status = session["status"]
             # Reserve startup before releasing the lock for the SSH probe.
             # interrupt() keeps this lease until the probe acknowledges it.

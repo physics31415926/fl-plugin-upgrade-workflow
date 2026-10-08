@@ -380,7 +380,10 @@ class FlflowTests(unittest.TestCase):
             connection = HTTPConnection("127.0.0.1", server.server_port, timeout=3)
             connection.request("GET", "/api/capabilities")
             response = connection.getresponse()
-            self.assertEqual(json.loads(response.read()), {"read_only": False, "sessions": True, "refresh": False})
+            capabilities = json.loads(response.read())
+            self.assertEqual({key: capabilities[key] for key in ("read_only", "sessions", "refresh")},
+                             {"read_only": False, "sessions": True, "refresh": False})
+            self.assertTrue(capabilities["workflow"])
             connection.close()
             for path, compact in (("/api/codex-sessions", False),
                                   ("/api/codex-sessions?view=cards", True),

@@ -111,6 +111,9 @@ class BranchMonitorTests(unittest.TestCase):
         status = self._monitor().status()
         cuda = self._backend(status)
         self.assertEqual(status["vllm_version"], "0.28.0")
+        self.assertEqual(status["engine"], "vllm")
+        self.assertEqual(status["upstream_version"], "0.28.0")
+        self.assertEqual(status["case_dir"], "tools/adaptation-gate-cases")
         self.assertEqual(len(status["cases"]), 5)
         self.assertEqual(cuda["integration"]["status"], "merged")
         self.assertEqual(cuda["ci"]["status"], "failed")
@@ -475,6 +478,352 @@ class BranchMonitorTests(unittest.TestCase):
         self.assertIn("test", status["cases"][0])
         self.assertIn("file", status["cases"][0])
 
+    def test_sglang_version_uses_engine_pin_in_optional_dependencies(self) -> None:
+        self._write("pyproject.toml",
+                    '[project]\nname = "plugin"\ndependencies = ["vllm==9.9.9"]\n'
+                    '[project.optional-dependencies]\ncuda = ["sglang[all]==0.5.18"]\n')
+        git(self.repo, "add", ".")
+        git(self.repo, "commit", "-qm", "sglang version fixture")
+        self.head = git(self.repo, "rev-parse", "HEAD")
+        git(self.repo, "update-ref", "refs/remotes/upstream/0.4.0-dev", self.head)
+        status = BranchMonitor(dict(self.config, engine="sglang"), transport=self._transport).status()
+        self.assertEqual(status["engine"], "sglang")
+        self.assertEqual(status["upstream_version"], "0.5.18")
+        self.assertIsNone(status["vllm_version"])
+        self.assertEqual(len(status["cases"]), 0)
+
+    def test_sglang_without_pin_does_not_report_vllm_version(self) -> None:
+        status = BranchMonitor(dict(self.config, engine="sglang"), transport=self._transport).status()
+        self.assertIsNone(status["upstream_version"])
+        self.assertIsNone(status["vllm_version"])
+
+    def test_configurable_case_directory_keeps_exact_case_evidence_checks(self) -> None:
+        self._write("acceptance/cases/test_engine.py",
+                    'def test_engine():\n    run_case("text_single")\n')
+        git(self.repo, "add", ".")
+        git(self.repo, "commit", "-qm", "custom case directory")
+        self.head = git(self.repo, "rev-parse", "HEAD")
+        git(self.repo, "update-ref", "refs/remotes/upstream/0.4.0-dev", self.head)
+        for model in MODELS:
+            for mode in MODES:
+                self._write_run(model, mode)
+        monitor = BranchMonitor(dict(self.config, case_dir="acceptance/cases"),
+                                transport=self._transport)
+        status = monitor.status()
+        self.assertEqual(status["case_dir"], "acceptance/cases")
+        self.assertEqual([case["scenario"] for case in status["cases"]], ["text_single"])
+        gate = self._backend(status)["gate"]
+        self.assertEqual(gate["status"], "passed")
+        self.assertEqual(gate["total"], 4)
+        self.assertEqual(gate["requests_passed"], 4)
+        evidence = monitor.read_evidence("0.4.0-dev", "cuda", MODELS[0], "eager", "text_single")
+        self.assertEqual(evidence["manifest"]["commit"], self.head)
+        self.assertTrue(evidence["result"]["summary"]["passed"])
+        result_path = self.evidence / "cuda" / MODELS[0] / "eager" / "run-1" / "results" / "text_single.json"
+        result = json.loads(result_path.read_text(encoding="utf-8"))
+        result["output"][0]["checks"]["quality"] = False
+        result_path.write_text(json.dumps(result), encoding="utf-8")
+        self.assertEqual(self._backend(monitor.status())["gate"]["status"], "failed")
+
+    def test_unparseable_case_directory_never_reports_pass_from_existing_evidence(self) -> None:
+        self._write("tests/e2e_tests/test_smoke.py", 'def test_smoke():\n    assert True\n')
+        git(self.repo, "add", ".")
+        git(self.repo, "commit", "-qm", "ordinary smoke suite")
+        self.head = git(self.repo, "rev-parse", "HEAD")
+        git(self.repo, "update-ref", "refs/remotes/upstream/0.4.0-dev", self.head)
+        for model in MODELS:
+            for mode in MODES:
+                self._write_run(model, mode)
+        self._write_audit()
+        monitor = BranchMonitor(dict(self.config, engine="sglang", case_dir="tests/e2e_tests"),
+                                transport=self._transport)
+        status = monitor.status()
+        self.assertEqual(status["cases"], [])
+        gate = self._backend(status)["gate"]
+        self.assertEqual(gate["status"], "unknown")
+        self.assertEqual(gate["passed"], 0)
+        self.assertEqual(gate["total"], 0)
+        self.assertIn("tests/e2e_tests", gate["detail"])
+        with self.assertRaisesRegex(MonitorError, "Unknown gate scenario"):
+            monitor.read_evidence("0.4.0-dev", "cuda", MODELS[0], "eager", "text_single")
+
+    def test_engine_and_case_directory_validate_explicit_config(self) -> None:
+        for engine in (None, "other", "SGLang", {}, []):
+            with self.subTest(engine=engine), self.assertRaisesRegex(MonitorError, "engine must"):
+                BranchMonitor(dict(self.config, engine=engine))
+        for case_dir in (None, "", "/tmp/cases", "../cases", "cases/../tests", "cases//tests",
+                         "cases/./tests", "C:/cases", "cases\\tests", "cases\n/tests"):
+            with self.subTest(case_dir=case_dir), self.assertRaisesRegex(MonitorError, "case_dir must"):
+                BranchMonitor(dict(self.config, case_dir=case_dir))
+
+
+    def _sglang_fixture(self, *, include_pytest=True, sources=None):
+        text_prompts = ["State count?", "Capital?"]
+        text_expected = {"State count?": ["50"], "Capital?": ["paris"]}
+        vl_cases = [{"image": name, "question": "Identify " + name, "expected": [answer]}
+                    for name, answer in (("red.jpg", "red"), ("cat.jpg", "cat"), ("sign.png", "red"), ("seven.png", "7"))]
+        stems = ["qwen3_6_27b", "qwen3_6_35b_a3b"]
+        for model, stem in zip(MODELS, stems):
+            common = ('import os\nMODEL_PATH = os.environ.get("MODEL_PATH", ' + repr('/models/' + model) + ')\n'
+                      'TEXT_PROMPTS = ' + repr(text_prompts) + '\nVL_CASES = ' + repr(vl_cases) + '\n'
+                      'def _make_engine():\n    return Engine(disable_cuda_graph=True)\n')
+            offline = common + 'TEXT_EXPECTED = ' + repr({"State count?": "50", "Capital?": "Paris"}) + '\n'
+            offline += ('def run_engine():\n    return ["50", "Paris"], ["red", "cat", "red", "7"]\n'
+                        'def validate(text_outputs, vl_outputs):\n    assert text_outputs == ["50", "Paris"]\n'
+                        '    assert vl_outputs == ["red", "cat", "red", "7"]\n')
+            self._write('examples/' + stem + '_offline_inference.py', offline)
+            concurrent = (common + 'TEXT_EXPECTED = ' + repr(text_expected) + '\n'
+                          'CONCURRENT_N = int(os.environ.get("CONCURRENT_N", "4"))\nALL_MODES = ["text", "vl", "mixed"]\n')
+            self._write('examples/' + stem + '_concurrent.py', concurrent)
+        if include_pytest:
+            defaults = [{'text': prompt, 'expected': text_expected[prompt]} for prompt in text_prompts]
+            self._write('tests/e2e_tests/concurrent/test_concurrent_smoke.py',
+                        '_DEFAULT_TEXT_CASES = ' + repr(defaults) + '\n_DEFAULT_VL_CASES = ' + repr(vl_cases) + '\n')
+            self._write('tests/e2e_tests/plugin_utils.py', 'def assert_expected(text, expected, label):\n    assert text\n')
+            for model, case in zip(MODELS, ['27b_tp4_nograph', '35b_a3b_tp4_nograph']):
+                self._write('tests/models/qwen3_6/' + case + '.yaml',
+                            'llm:\n  model: "/models/' + model + '"\n  disable_cuda_graph: true\n'
+                            'concurrent:\n  modes: [text, vl, mixed]\n  concurrent_n: 4\n')
+        self._write('pyproject.toml', '[project]\nname = "sglang_fl"\n'
+                    '[project.optional-dependencies]\ncuda = ["sglang==0.5.18"]\n')
+        git(self.repo, 'add', '.')
+        git(self.repo, 'commit', '-qm', 'sglang acceptance source fixture')
+        self.head = git(self.repo, 'rev-parse', 'HEAD')
+        git(self.repo, 'update-ref', 'refs/remotes/upstream/0.4.0-dev', self.head)
+        config = dict(self.config, engine='sglang', modes=['eager'], merged_commits={'cuda': self.head})
+        if sources is not None:
+            config['case_sources'] = sources
+        return BranchMonitor(config, transport=self._transport)
+
+    def _write_sglang_run(self, monitor, model, *, run_id='run-1', only=None, commit=None):
+        from sglang_evidence import request_specs, _input
+        run = self.evidence / 'cuda' / model / 'eager' / run_id
+        (run / 'results').mkdir(parents=True, exist_ok=True)
+        manifest = {'schema_version': 1, 'engine': 'sglang', 'run_id': run_id, 'backend': 'cuda',
+                    'branch': '0.4.0-dev', 'commit': commit or self.head, 'model': model, 'mode': 'eager', 'results_dir': 'results'}
+        (run / 'manifest.json').write_text(json.dumps(manifest), encoding='utf-8')
+        for case in monitor._cases(self.head):
+            if model not in case['models'] or (only is not None and case['scenario'] not in only):
+                continue
+            rows = [{'input': _input(spec), 'output': {'text': spec['expected'][0] if spec['expected'] else 'answer', 'error': None},
+                     'checks': {'nonempty': True, 'expected': True}, 'status': 'passed'} for spec in request_specs(case)]
+            value = {'schema_version': 1, 'evidence_type': 'sglang_raw_requests',
+                     'case': {'scenario': case['scenario'], 'model_path': '/models/' + model, 'source': case['source'],
+                              'source_blob': case['source_blob'], 'commit': manifest['commit'], 'backend': 'cuda', 'mode': 'eager',
+                              'request_count': case['requests'], 'definition_files': case['definition_files']},
+                     'execution': {'completed': True, 'exit_code': 0, 'plugin_loaded': True, 'plugin_active': True},
+                     'requests': rows, 'summary': {'request_count': case['requests'], 'passed_count': case['requests'],
+                                'failed_count': 0, 'skipped_count': 0, 'passed': True}}
+            (run / 'results' / (case['scenario'] + '.json')).write_text(json.dumps(value), encoding='utf-8')
+        return run / 'results'
+
+    def test_sglang_examples_and_pytest_discover_actual_models_requests_and_sources(self):
+        monitor = self._sglang_fixture()
+        status = monitor.status()
+        self.assertEqual(status['engine'], 'sglang')
+        self.assertEqual(status['upstream_version'], '0.5.18')
+        self.assertEqual(status['case_sources'], ['examples', 'tests/e2e_tests/concurrent'])
+        self.assertEqual(status['case_discovery']['warnings'], [])
+        self.assertEqual(len(status['cases']), 16)
+        self.assertEqual(sum(case['requests'] for case in status['cases']), 60)
+        self.assertEqual(self._backend(status)['gate']['status'], 'missing')
+        self.assertEqual(self._backend(status)['gate']['total'], 16)
+        self.assertEqual(self._backend(status)['gate']['requests_total'], 60)
+        self.assertEqual(len(self._backend(status)['results']), 16)
+        self.assertTrue(all('请求' in case['label'] for case in status['cases']))
+        self.assertTrue(all(case['source_blob'] == git(self.repo, 'rev-parse', self.head + ':' + case['source']) for case in status['cases']))
+        mixed = next(case for case in status['cases'] if case['scenario'] == 'qwen3_6_27b_concurrent_mixed')
+        from sglang_evidence import request_specs
+        self.assertEqual([spec['kind'] for spec in request_specs(mixed)], ['text', 'text', 'vl', 'vl'])
+        pytest_case = next(case for case in status['cases'] if case['family'] == 'pytest_concurrent')
+        self.assertEqual(pytest_case['environment']['FL_CONCURRENT_N'], '4')
+        self.assertEqual(len(pytest_case['definition_files']), 2)
+
+    def test_sglang_complete_raw_matrix_passes_and_exposes_evidence(self):
+        monitor = self._sglang_fixture()
+        for model in MODELS:
+            self._write_sglang_run(monitor, model)
+        status = monitor.status()
+        gate = self._backend(status)['gate']
+        self.assertEqual(gate['status'], 'passed')
+        self.assertEqual(gate['passed'], 16)
+        self.assertEqual(gate['requests_passed'], 60)
+        self.assertEqual(gate['requests_total'], 60)
+        case = next(case for case in status['cases'] if case['model'] == MODELS[0])
+        evidence = monitor.read_evidence('0.4.0-dev', 'cuda', MODELS[0], 'eager', case['scenario'])
+        self.assertEqual(evidence['result']['evidence_type'], 'sglang_raw_requests')
+        self.assertNotIn('port', evidence['manifest'])
+        with self.assertRaisesRegex(MonitorError, 'does not apply'):
+            monitor.read_evidence('0.4.0-dev', 'cuda', MODELS[1], 'eager', case['scenario'])
+
+    def test_sglang_raw_output_rechecked_even_when_summary_checks_and_exit_claim_success(self):
+        monitor = self._sglang_fixture()
+        results = self._write_sglang_run(monitor, MODELS[0])
+        path = results / 'qwen3_6_27b_offline_inference_text.json'
+        original = json.loads(path.read_text(encoding='utf-8'))
+        for text in ('wrong answer', '', '50'):
+            value = json.loads(json.dumps(original))
+            index = 1 if text == '50' else 0
+            value['requests'][index]['output']['text'] = text
+            path.write_text(json.dumps(value), encoding='utf-8')
+            with self.subTest(text=text):
+                self.assertEqual(self._backend(monitor.status())['gate']['status'], 'failed')
+        value = json.loads(json.dumps(original))
+        value['requests'][0]['input']['prompt'] = 'different source input'
+        path.write_text(json.dumps(value), encoding='utf-8')
+        self.assertEqual(self._backend(monitor.status())['gate']['status'], 'failed')
+
+    def test_sglang_source_pin_identity_activation_skip_and_summary_are_required(self):
+        monitor = self._sglang_fixture()
+        results = self._write_sglang_run(monitor, MODELS[0])
+        path = results / 'qwen3_6_27b_concurrent_text.json'
+        original = json.loads(path.read_text(encoding='utf-8'))
+        mutations = [('source blob', lambda value: value['case'].update(source_blob='a' * 40)),
+                     ('candidate commit', lambda value: value['case'].update(commit='a' * 40)),
+                     ('backend', lambda value: value['case'].update(backend='musa')),
+                     ('model', lambda value: value['case'].update(model_path='/models/' + MODELS[1])),
+                     ('plugin', lambda value: value['execution'].update(plugin_active=False)),
+                     ('exit code', lambda value: value['execution'].update(exit_code=1)),
+                     ('skip', lambda value: value['requests'][0].update(status='skipped')),
+                     ('summary', lambda value: value['summary'].update(skipped_count=1)),
+                     ('missing request', lambda value: value['requests'].pop())]
+        for name, change in mutations:
+            value = json.loads(json.dumps(original))
+            change(value)
+            path.write_text(json.dumps(value), encoding='utf-8')
+            with self.subTest(name=name):
+                self.assertEqual(self._backend(monitor.status())['gate']['status'], 'failed')
+
+    def test_sglang_partial_run_does_not_reuse_older_complete_manifest(self):
+        monitor = self._sglang_fixture()
+        for model in MODELS:
+            self._write_sglang_run(monitor, model)
+        self.assertEqual(self._backend(monitor.status())['gate']['status'], 'passed')
+        selected = 'qwen3_6_27b_concurrent_text'
+        results = self._write_sglang_run(monitor, MODELS[0], run_id='run-new', only=[selected])
+        manifest_path = results.parent / 'manifest.json'
+        value = json.loads(manifest_path.read_text(encoding='utf-8'))
+        value['created_at'] = '2099-01-01T00:00:00Z'
+        manifest_path.write_text(json.dumps(value), encoding='utf-8')
+        gate = self._backend(monitor.status())['gate']
+        self.assertEqual(gate['status'], 'partial')
+        self.assertEqual(gate['passed'], 9)
+        self.assertEqual(gate['missing'], 7)
+
+    def test_sglang_manifest_commit_stale_and_pytest_yaml_pin_change_rejects_evidence(self):
+        monitor = self._sglang_fixture()
+        self._write_sglang_run(monitor, MODELS[0], commit='a' * 40)
+        self.assertEqual(self._backend(monitor.status())['gate']['status'], 'stale')
+        results = self._write_sglang_run(monitor, MODELS[0], run_id='run-current')
+        path = results / 'pytest_qwen3_6_27b_tp4_nograph_text.json'
+        value = json.loads(path.read_text(encoding='utf-8'))
+        value['case']['definition_files'][0]['blob'] = 'a' * 40
+        path.write_text(json.dumps(value), encoding='utf-8')
+        self.assertEqual(self._backend(monitor.status())['gate']['status'], 'failed')
+
+    def test_sglang_missing_source_stays_explicit_and_blocks_full_acceptance(self):
+        monitor = self._sglang_fixture(include_pytest=False)
+        self.assertEqual(len(monitor._cases(self.head)), 10)
+        for model in MODELS:
+            self._write_sglang_run(monitor, model)
+        status = monitor.status()
+        self.assertEqual(status['case_discovery']['warnings'][0]['source'], 'tests/e2e_tests/concurrent')
+        self.assertEqual(self._backend(status)['gate']['status'], 'partial')
+        self.assertIn('不能判定完整', self._backend(status)['gate']['detail'])
+
+    def test_sglang_sources_validate_relative_paths_and_vllm_json_not_accepted(self):
+        for sources in ([], 'examples', ['../examples'], ['/examples'], ['examples//x'], [None]):
+            with self.subTest(sources=sources), self.assertRaisesRegex(MonitorError, 'case_sources'):
+                BranchMonitor(dict(self.config, engine='sglang', case_sources=sources))
+        monitor = self._sglang_fixture()
+        results = self._write_sglang_run(monitor, MODELS[0])
+        path = results / 'qwen3_6_27b_concurrent_text.json'
+        path.write_text(json.dumps({'schema_version': 1, 'case': {}, 'output': [], 'summary': {'passed': True}}), encoding='utf-8')
+        self.assertEqual(self._backend(monitor.status())['gate']['status'], 'failed')
+
+    def test_sglang_collector_calls_original_offline_source_and_archives_outputs_without_gpu(self):
+        from unittest.mock import patch
+        from types import SimpleNamespace
+        from sglang_evidence import collect
+        monitor = self._sglang_fixture(sources=['examples'])
+        selected = [case for case in monitor._cases(self.head) if case['model'] == MODELS[0] and case['family'] == 'offline']
+        cache = {}
+        # Synthetic source fixture only: these functions return literal fixture
+        # outputs. This tests archival; it is not actual GPU acceptance.
+        with patch.dict('sys.modules', {'sglang_fl': SimpleNamespace(is_plugin_loaded=lambda: True, is_plugin_active=lambda: True)}), patch.dict('os.environ'):
+            for case in selected:
+                result = collect(self.repo, self.head, '0.4.0-dev', 'cuda', case, '/models/' + MODELS[0],
+                                 self.evidence / 'cuda' / MODELS[0] / 'eager', 'collected-offline', cache)
+                self.assertEqual(result['status'], 'passed')
+            with self.assertRaisesRegex(ValueError, 'already contains'):
+                collect(self.repo, self.head, '0.4.0-dev', 'cuda', selected[0], '/models/' + MODELS[0],
+                        self.evidence / 'cuda' / MODELS[0] / 'eager', 'collected-offline', cache)
+        run = self.evidence / 'cuda' / MODELS[0] / 'eager' / 'collected-offline'
+        self.assertEqual(len(list((run / 'results').glob('*.json'))), 2)
+        gate = self._backend(monitor.status())['gate']
+        self.assertEqual(gate['status'], 'partial')
+        self.assertEqual(gate['passed'], 2)
+
+
+    def test_sglang_missing_configured_model_prevents_full_pass(self):
+        fixture = self._sglang_fixture(sources=['examples'])
+        monitor = BranchMonitor(dict(fixture.config, models=[MODELS[0], 'Missing-Model']), transport=self._transport)
+        self._write_sglang_run(monitor, MODELS[0])
+        status = monitor.status()
+        self.assertTrue(any(row.get('model') == 'Missing-Model' for row in status['case_discovery']['warnings']))
+        self.assertEqual(self._backend(status)['gate']['status'], 'partial')
+
+    def test_sglang_collector_refuses_existing_manifest_identity_change(self):
+        from unittest.mock import patch
+        from types import SimpleNamespace
+        from sglang_evidence import collect
+        monitor = self._sglang_fixture(sources=['examples'])
+        selected = [case for case in monitor._cases(self.head) if case['model'] == MODELS[0] and case['family'] == 'offline']
+        output_dir = self.evidence / 'cuda' / MODELS[0] / 'eager'
+        with patch.dict('sys.modules', {'sglang_fl': SimpleNamespace(is_plugin_loaded=lambda: True, is_plugin_active=lambda: True)}), patch.dict('os.environ'):
+            collect(self.repo, self.head, '0.4.0-dev', 'cuda', selected[0], '/models/' + MODELS[0], output_dir, 'same-run')
+            manifest_path = output_dir / 'same-run' / 'manifest.json'
+            original = manifest_path.read_bytes()
+            with self.assertRaisesRegex(ValueError, 'manifest identity differs'):
+                collect(self.repo, self.head, '0.4.0-dev', 'musa', selected[1], '/models/' + MODELS[0], output_dir, 'same-run')
+            self.assertEqual(manifest_path.read_bytes(), original)
+
+    def test_sglang_collector_records_actual_pytest_model_and_rejects_mismatch(self):
+        from unittest.mock import patch
+        from types import SimpleNamespace
+        from sglang_evidence import collect
+        monitor = self._sglang_fixture()
+        case = next(case for case in monitor._cases(self.head) if case['model'] == MODELS[0] and case['family'] == 'pytest_concurrent')
+        cfg = SimpleNamespace(model='/actual/different-model', engine_kwargs=lambda: {'model_path': '/actual/different-model'})
+        module = SimpleNamespace(_CFG=cfg)
+        loader_spec = SimpleNamespace(loader=SimpleNamespace(exec_module=lambda _: None))
+        with patch('sglang_evidence.importlib.util.spec_from_file_location', return_value=loader_spec), patch('sglang_evidence.importlib.util.module_from_spec', return_value=module), patch.dict('os.environ'):
+            result = collect(self.repo, self.head, '0.4.0-dev', 'cuda', case, '/models/' + MODELS[0], self.evidence, 'actual-model')
+        self.assertEqual(result['status'], 'failed')
+        value = json.loads((self.evidence / 'actual-model' / 'results' / (case['scenario'] + '.json')).read_text(encoding='utf-8'))
+        self.assertEqual(value['case']['model_path'], '/actual/different-model')
+        self.assertFalse(value['execution']['completed'])
+        self.assertIn('Actual pytest model config differs', value['execution']['error'])
+
+    def test_sglang_collector_records_actual_returned_request_inputs(self):
+        from unittest.mock import patch
+        from types import SimpleNamespace
+        from sglang_evidence import collect
+        monitor = self._sglang_fixture()
+        case = next(case for case in monitor._cases(self.head) if case['model'] == MODELS[0] and case['family'] == 'pytest_concurrent' and case['request_kind'] == 'text')
+        model_path = '/models/' + MODELS[0]
+        cfg = SimpleNamespace(model=model_path, engine_kwargs=lambda: {'model_path': model_path})
+        module = SimpleNamespace(_CFG=cfg, _engine_kwargs=lambda: {'disable_cuda_graph': True},
+                                 _run_text_concurrent=lambda _: [('different actual prompt', '50')] * case['requests'])
+        module.test_concurrent = lambda: module._run_text_concurrent(None)
+        loader_spec = SimpleNamespace(loader=SimpleNamespace(exec_module=lambda _: None))
+        with patch('sglang_evidence.importlib.util.spec_from_file_location', return_value=loader_spec), patch('sglang_evidence.importlib.util.module_from_spec', return_value=module), patch.dict('sys.modules', {'sglang_fl': SimpleNamespace(is_plugin_loaded=lambda: True, is_plugin_active=lambda: True)}), patch.dict('os.environ'):
+            result = collect(self.repo, self.head, '0.4.0-dev', 'cuda', case, model_path, self.evidence, 'actual-inputs')
+        self.assertEqual(result['status'], 'failed')
+        value = json.loads((self.evidence / 'actual-inputs' / 'results' / (case['scenario'] + '.json')).read_text(encoding='utf-8'))
+        self.assertEqual(value['requests'][0]['input']['prompt'], 'different actual prompt')
+        self.assertTrue(value['execution']['completed'])
+
     def test_branch_without_gate_cases_is_monitorable(self) -> None:
         for path in (self.repo / "tools/adaptation-gate-cases").glob("test_*.py"):
             path.unlink()
@@ -484,7 +833,7 @@ class BranchMonitorTests(unittest.TestCase):
         git(self.repo, "update-ref", "refs/remotes/upstream/main", other_head)
         status = self._monitor().status(branch="main")
         self.assertEqual(status["cases"], [])
-        self.assertEqual(self._backend(status)["gate"]["status"], "missing")
+        self.assertEqual(self._backend(status)["gate"]["status"], "unknown")
         self.assertEqual(self._backend(status)["gate"]["total"], 0)
         with self.assertRaises(MonitorError):
             self._monitor().read_evidence("main", "cuda", MODELS[0], "eager", "text_single")

@@ -1,0 +1,15 @@
+{
+  "projects": [
+    {
+      "id": "vllm",
+      "label": "vLLM-Plugin-FL",
+      "monitor_config": "branch-monitor.json",
+      "workflow_config": "workflow.json"
+    },
+    {
+      "id": "sglang",
+      "label": "SGLang-Plugin-FL",
+      "monitor_config": "branch-monitor.sglang.json"
+    }
+  ]
+}

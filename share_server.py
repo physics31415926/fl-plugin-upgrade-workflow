@@ -17,18 +17,20 @@ import os
 from pathlib import Path
 import re
 import secrets
+import ssl
 import threading
 import time
 from urllib.parse import parse_qs, urlsplit
 
 from branch_monitor import BranchMonitor
+from project_registry import ProjectRegistry
 
 
 CAPABILITIES = {"read_only": True, "sessions": False, "refresh": True, "evidence": False}
 STATUS_FIELDS = {"status", "scope", "commit", "target_commit", "tree", "tree_matches_head", "run_id", "attempt"}
 GATE_FIELDS = {"status", "passed", "total", "failed", "missing", "requests_passed", "requests_total",
                "latest_commit", "evidence_type", "tree_matches_head", "recorded_cases", "raw_results_available"}
-RESULT_FIELDS = {"model", "mode", "scenario", "requests", "status", "requests_passed", "evidence_type", "raw_results_available"}
+RESULT_FIELDS = {"model", "mode", "scenario", "requests", "status", "requests_passed", "evidence_type", "raw_results_available", "label", "source", "source_blob"}
 PRIVATE_VALUE = re.compile(r"(?:[A-Za-z]:[\\/]|\\\\|(?:^|\s)[~/][A-Za-z0-9_.-]+(?:/|$)|\b(?:\d{1,3}\.){3}\d{1,3}\b)")
 
 
@@ -70,11 +72,21 @@ def sanitize_snapshot(snapshot):
 Free-form diagnostic strings are not forwarded because they may contain local
 paths, machine aliases, private IPs, source task IDs, or commands.
 """
-    result = _fields(snapshot, {"branch", "branch_ref", "head", "observed_at", "vllm_version"})
+    result = _fields(snapshot, {"branch", "branch_ref", "head", "observed_at", "vllm_version", "engine", "upstream_version"})
     result["head_url"] = _public_url(snapshot.get("head_url"))
     for key in ("branches", "models", "modes"):
         result[key] = [clean for value in snapshot.get(key, []) if (clean := _scalar(value)) is not None][:100]
-    result["cases"] = [_fields(case, {"scenario", "requests", "file", "test"}) for case in snapshot.get("cases", [])[:100] if isinstance(case, dict)]
+    result["cases"] = []
+    for case in snapshot.get("cases", [])[:100]:
+        if not isinstance(case, dict):
+            continue
+        public_case = _fields(case, {"scenario", "requests", "file", "test", "model", "label", "source", "source_blob"})
+        for key in ("models", "modes"):
+            values = case.get(key)
+            if isinstance(values, list):
+                public_case[key] = [clean for value in values[:100]
+                                    if isinstance(value, str) and (clean := _scalar(value)) is not None]
+        result["cases"].append(public_case)
     result["branch_ci"] = _status(snapshot.get("branch_ci", {}))
     result["backends"] = []
     for backend in snapshot.get("backends", [])[:50]:
@@ -171,6 +183,59 @@ class SnapshotCache:
         self._stop.set()
 
 
+class ProjectSnapshotCache:
+    """Separate public caches; one project's failure cannot hide its peers."""
+    def __init__(self, registry, refresh_interval=300):
+        if refresh_interval != 0 and refresh_interval < 30:
+            raise ValueError("refresh_interval must be 0 (disabled) or at least 30 seconds")
+        self.registry = registry
+        self.refresh_interval = refresh_interval
+        self._caches = {}
+        self._cache_locks = {project.id: threading.Lock() for project in registry.projects}
+        from concurrent.futures import ThreadPoolExecutor
+        def initialize(project):
+            try:
+                self.get_cache(project.id)
+            except Exception:
+                pass
+        with ThreadPoolExecutor(max_workers=min(8, len(registry.projects))) as pool:
+            list(pool.map(initialize, registry.projects))
+
+    def get_cache(self, project_id):
+        project = self.registry.select("project=" + project_id)
+        with self._cache_locks[project.id]:
+            if project_id not in self._caches:
+                if project.monitor is None:
+                    raise RuntimeError("Project monitor is unavailable")
+                self._caches[project_id] = SnapshotCache(project.monitor, self.refresh_interval)
+            return self._caches[project_id]
+
+    def get(self, branch=None, *, project=None):
+        project_id = project or self.registry.projects[0].id
+        return self.get_cache(project_id).get(branch)
+
+    def refresh(self, branch=None, *, project=None):
+        project_id = project or self.registry.projects[0].id
+        return self.get_cache(project_id).refresh(branch)
+
+    def statuses(self):
+        from concurrent.futures import ThreadPoolExecutor
+        def status(project):
+            result = _fields(project.metadata(read_only=True), {"id", "label", "engine"})
+            result.update(status=None, error=None)
+            try:
+                result["status"] = self.get(project=project.id)
+            except Exception:
+                result["error"] = "Project data is temporarily unavailable"
+            return result
+        with ThreadPoolExecutor(max_workers=min(8, len(self.registry.projects))) as pool:
+            return {"projects": list(pool.map(status, self.registry.projects))}
+
+    def close(self):
+        for cache in self._caches.values():
+            cache.close()
+
+
 def _loopback(host):
     if host == "localhost":
         return True
@@ -178,6 +243,22 @@ def _loopback(host):
         return ipaddress.ip_address(host).is_loopback
     except ValueError:
         return False
+
+
+def load_tls_context(cert_path=None, key_path=None):
+    """Load optional direct HTTPS credentials before starting monitor workers."""
+    if (cert_path is None) != (key_path is None):
+        raise ValueError("--tls-cert and --tls-key must be provided together")
+    if cert_path is None:
+        return None
+    context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+    context.minimum_version = ssl.TLSVersion.TLSv1_2
+    try:
+        # No interactive password prompt during unattended service startup.
+        context.load_cert_chain(certfile=cert_path, keyfile=key_path, password="")
+    except (OSError, ssl.SSLError) as exc:
+        raise ValueError(f"Cannot load TLS certificate/key: {exc}") from exc
+    return context
 
 
 class BoundedHTTPServer(ThreadingHTTPServer):
@@ -204,7 +285,7 @@ class BoundedHTTPServer(ThreadingHTTPServer):
 
 
 def make_server(cache, host="127.0.0.1", port=8765, *, username="viewer", password=None,
-                trusted_ingress=False, base_path="", index_path=None):
+                trusted_ingress=False, base_path="", index_path=None, tls_context=None):
     if password is not None and (not isinstance(password, str) or not password or len(password.encode("utf-8")) > 1024 or any(c in password for c in "\r\n\x00")):
         raise ValueError("Password must be nonempty, at most 1024 UTF-8 bytes, and contain no control newline")
     if not isinstance(username, str) or not username or len(username.encode("utf-8")) > 128 or any(c in username for c in ":\r\n\x00"):
@@ -214,7 +295,16 @@ def make_server(cache, host="127.0.0.1", port=8765, *, username="viewer", passwo
     prefix = "/" + base_path.strip("/") if base_path.strip("/") else ""
     if prefix and not re.fullmatch(r"(?:/[A-Za-z0-9_-]+)+", prefix):
         raise ValueError("base_path must contain simple URL path segments")
-    page = Path(index_path or Path(__file__).with_name("index.html")).read_bytes()
+    registry = cache.registry if isinstance(cache, ProjectSnapshotCache) else ProjectRegistry.single(monitor=cache.monitor)
+    page = Path(index_path or Path(__file__).with_name("overview.html" if registry.multi_project else "index.html")).read_bytes()
+    monitor_page = Path(index_path or Path(__file__).with_name("index.html")).read_bytes()
+    def public_projects():
+        return {"projects": [_fields(project.metadata(read_only=True),
+                                     {"id", "label", "engine", "default_branch", "github_repo", "sessions", "workflow"})
+                             for project in registry.projects], "read_only": True}
+    def project_snapshot(project, branch=None, *, refresh=False):
+        method = cache.refresh if refresh else cache.get
+        return method(branch, project=project.id) if isinstance(cache, ProjectSnapshotCache) else method(branch)
     expected_user = username.encode("utf-8")
     expected_password = password.encode("utf-8") if password is not None else None
 
@@ -280,17 +370,39 @@ def make_server(cache, host="127.0.0.1", port=8765, *, username="viewer", passwo
                 return
             if prefix and path.startswith(prefix + "/"):
                 path = path[len(prefix):]
+            try:
+                project = registry.select(parsed.query)
+            except ValueError:
+                self._send(400, {"error": "Unknown or duplicate project"})
+                return
             if path in ("/", "/index.html"):
                 self._send(200, page, content_type="text/html; charset=utf-8")
+            elif path in ("/monitor", "/monitor.html"):
+                self._send(200, monitor_page, content_type="text/html; charset=utf-8")
+            elif path == "/api/projects":
+                self._send(200, public_projects())
+            elif path == "/api/projects-status":
+                if isinstance(cache, ProjectSnapshotCache):
+                    self._send(200, cache.statuses())
+                else:
+                    result = _fields(project.metadata(read_only=True), {"id", "label", "engine"})
+                    result.update(status=None, error=None)
+                    try:
+                        result["status"] = cache.get()
+                    except Exception:
+                        result["error"] = "Project data is temporarily unavailable"
+                    self._send(200, {"projects": [result]})
             elif path == "/api/capabilities":
-                self._send(200, {**CAPABILITIES, "default_branch": cache.default_branch})
+                self._send(200, {**CAPABILITIES, "refresh": project.monitor is not None, "default_branch": _scalar(project.default_branch),
+                                 "project_id": _scalar(project.id), "label": _scalar(project.label), "multi_project": registry.multi_project,
+                                 "engine": _scalar(project.engine_name), "workflow": False})
             elif path == "/healthz":
                 self._send(200, {"ok": True, "read_only": True})
             elif path == "/api/branch-status":
                 try:
-                    query = parse_qs(parsed.query, max_num_fields=5)
+                    query = parse_qs(parsed.query, keep_blank_values=True, max_num_fields=5)
                     branch = query.get("branch", [None])[0]
-                    self._send(200, cache.get(branch))
+                    self._send(200, project_snapshot(project, branch))
                 except ValueError:
                     self._send(400, {"error": "Invalid or unavailable branch"})
                 except Exception:
@@ -301,9 +413,15 @@ def make_server(cache, host="127.0.0.1", port=8765, *, username="viewer", passwo
         def do_POST(self):
             if not self._authorized():
                 return
-            path = urlsplit(self.path).path
+            target = urlsplit(self.path)
+            path = target.path
             if prefix and path.startswith(prefix + "/"):
                 path = path[len(prefix):]
+            try:
+                project = registry.select(target.query)
+            except ValueError:
+                self._send(400, {"error": "Unknown or duplicate project"})
+                return
             if path != "/api/branch-refresh":
                 self._send(405, {"error": "This shared dashboard is read-only"})
                 return
@@ -332,7 +450,7 @@ def make_server(cache, host="127.0.0.1", port=8765, *, username="viewer", passwo
                 body = json.loads(self.rfile.read(length) or b"{}")
                 if not isinstance(body, dict):
                     raise ValueError("Refresh requires a JSON object")
-                self._send(200, cache.refresh(body.get("branch")))
+                self._send(200, project_snapshot(project, body.get("branch"), refresh=True))
             except (ValueError, TypeError):
                 self._send(400, {"error": "Invalid or unavailable branch"})
             except Exception:
@@ -347,27 +465,49 @@ def make_server(cache, host="127.0.0.1", port=8765, *, username="viewer", passwo
         do_DELETE = _deny_control
         do_OPTIONS = _deny_control
 
-    return BoundedHTTPServer((host, port), Handler)
+    server = BoundedHTTPServer((host, port), Handler)
+    if tls_context is not None:
+        try:
+            # Handshake in the bounded request worker, under its connection timeout.
+            server.socket = tls_context.wrap_socket(server.socket, server_side=True,
+                                                    do_handshake_on_connect=False)
+        except Exception:
+            server.server_close()
+            raise
+    return server
 
 
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--monitor-config", type=Path, required=True)
+    parser.add_argument("--monitor-config", type=Path)
+    parser.add_argument("--projects-config", type=Path)
     parser.add_argument("--host", default="127.0.0.1")
     parser.add_argument("--port", type=int, default=8765)
     parser.add_argument("--username", default="viewer")
     parser.add_argument("--password-env", default="FLFLOW_SHARE_PASSWORD")
     parser.add_argument("--trusted-ingress", action="store_true", help="Trust a private/reverse-proxy ingress that provides access control and TLS")
     parser.add_argument("--base-path", default="")
+    parser.add_argument("--tls-cert", type=Path, help="PEM certificate chain for direct HTTPS")
+    parser.add_argument("--tls-key", type=Path, help="Unencrypted PEM private key for direct HTTPS")
     parser.add_argument("--refresh-interval", type=int, default=300, help="Git/API refresh seconds; 0 disables background fetching")
     args = parser.parse_args(argv)
+    if not args.monitor_config and not args.projects_config:
+        parser.error("--monitor-config or --projects-config is required")
+    try:
+        tls_context = load_tls_context(args.tls_cert, args.tls_key)
+    except ValueError as exc:
+        parser.error(str(exc))
     cache = None
     server = None
     try:
-        cache = SnapshotCache(BranchMonitor(args.monitor_config), args.refresh_interval)
+        if args.projects_config:
+            registry = ProjectRegistry.from_config(args.projects_config, read_only=True)
+            cache = ProjectSnapshotCache(registry, args.refresh_interval)
+        else:
+            cache = SnapshotCache(BranchMonitor(args.monitor_config), args.refresh_interval)
         server = make_server(cache, args.host, args.port, username=args.username, password=os.environ.get(args.password_env),
-                             trusted_ingress=args.trusted_ingress, base_path=args.base_path)
-        print(f"Read-only dashboard listening on port {server.server_port}", flush=True)
+                             trusted_ingress=args.trusted_ingress, base_path=args.base_path, tls_context=tls_context)
+        print(f"Read-only dashboard listening via {'HTTPS' if tls_context else 'HTTP'} on port {server.server_port}", flush=True)
         server.serve_forever(poll_interval=0.5)
     except KeyboardInterrupt:
         pass

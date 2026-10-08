@@ -17,5 +17,5 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
-      - name: Run session event UI tests
-        run: node --test tests/test_session_event_ui.cjs
+      - name: Run dashboard UI tests
+        run: node --test tests/*.cjs

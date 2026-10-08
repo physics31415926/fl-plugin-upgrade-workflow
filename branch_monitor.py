@@ -85,6 +85,22 @@ class BranchMonitor:
         self.config = raw.get("monitor", raw)
         if not isinstance(self.config, dict):
             raise MonitorError("monitor must be an object")
+        self.engine = self.config.get("engine", "vllm")
+        if self.engine not in ("vllm", "sglang"):
+            raise MonitorError("engine must be vllm or sglang")
+        self.case_dir = self.config.get("case_dir", "examples" if self.engine == "sglang" else CASE_DIR)
+        if (not isinstance(self.case_dir, str) or len(self.case_dir) > 512 or
+                not all(re.fullmatch(r"[A-Za-z0-9_.-]+", part) and part not in {".", ".."}
+                        for part in self.case_dir.split("/"))):
+            raise MonitorError("case_dir must be a relative repository directory without path escapes")
+        default_sources = (["examples", "tests/e2e_tests/concurrent"] if self.engine == "sglang" else [self.case_dir])
+        self.case_sources = self.config.get("case_sources", [self.case_dir] if "case_dir" in self.config else default_sources)
+        if (not isinstance(self.case_sources, list) or not self.case_sources or len(self.case_sources) > 20 or
+                not all(isinstance(source, str) and len(source) <= 512 and
+                        all(re.fullmatch(r"[A-Za-z0-9_.-]+", part) and part not in {".", ".."}
+                            for part in source.split("/")) for source in self.case_sources)):
+            raise MonitorError("case_sources must be nonempty relative repository paths without escapes")
+        self._sglang_case_cache = {}
         repo_value = self.config.get("repo") or self.config.get("plugin_repo")
         if not isinstance(repo_value, str) or not repo_value:
             raise MonitorError("Monitor repo is required")
@@ -211,7 +227,7 @@ class BranchMonitor:
             for optional in project.get("optional-dependencies", {}).values():
                 dependencies.extend(optional)
             for dep in dependencies:
-                match = re.match(r"vllm(?:\[[^]]+\])?\s*==\s*([^\s;,]+)", dep, re.I)
+                match = re.match(re.escape(self.engine) + r"(?:\[[^]]+\])?\s*==\s*([^\s;,]+)", dep, re.I)
                 if match:
                     return match.group(1)
         except (MonitorError, tomllib.TOMLDecodeError, TypeError):
@@ -219,7 +235,16 @@ class BranchMonitor:
         return None
 
     def _cases(self, sha: str) -> list[dict[str, Any]]:
-        paths = self._git("ls-tree", "-r", "--name-only", sha, CASE_DIR).stdout.splitlines()
+        if self.engine == "sglang":
+            from sglang_evidence import discover_cases
+            if sha not in self._sglang_case_cache:
+                self._sglang_case_cache[sha] = discover_cases(
+                    self._show,
+                    lambda commit, prefix: self._git("ls-tree", "-r", "--name-only", commit, "--", prefix).stdout.splitlines(),
+                    lambda commit, source: self._git("rev-parse", f"{commit}:{source}").stdout.strip(),
+                    sha, self.models, self.case_sources)
+            return self._sglang_case_cache[sha][0]
+        paths = self._git("ls-tree", "-r", "--name-only", sha, "--", self.case_dir).stdout.splitlines()
         cases: dict[str, dict[str, Any]] = {}
         for path in paths:
             name = Path(path).name
@@ -556,7 +581,31 @@ class BranchMonitor:
                     "port": group.get("port"), "results_dir": group["raw_results_dir"]}
         return self._result(self.evidence_dir / record["backend"] / "acceptance.json", manifest, scenario, requests)
 
-    def _result(self, manifest_path: Path, manifest: dict[str, Any], scenario: str, requests: int) -> tuple[str, str, Path | None, int]:
+    def _sglang_result(self, manifest_path: Path, manifest: dict[str, Any], case: dict[str, Any] | None) -> tuple[str, str, Path | None, int]:
+        from sglang_evidence import validate_result
+        if (manifest.get("schema_version") != 1 or manifest.get("engine") != "sglang" or
+                not isinstance(manifest.get("run_id"), str) or not manifest["run_id"] or not case):
+            return "failed", "Invalid SGLang manifest schema, engine, or source case", None, 0
+        directory = manifest.get("results_dir")
+        if not isinstance(directory, str) or not directory:
+            return "failed", "Missing SGLang results_dir", None, 0
+        results_dir = (manifest_path.parent / directory).resolve()
+        if not _inside(results_dir, self.evidence_dir):
+            return "failed", "results_dir escapes evidence_dir", None, 0
+        path = results_dir / (case["scenario"] + ".json")
+        if not path.is_file() or not _inside(path, self.evidence_dir):
+            return "missing", "SGLang raw-request JSON is missing", None, 0
+        try:
+            value = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            return "failed", "SGLang raw-request JSON is invalid", path, 0
+        status, reason, passed = validate_result(value, manifest, case)
+        return status, reason, path, passed
+
+    def _result(self, manifest_path: Path, manifest: dict[str, Any], scenario: str, requests: int,
+                case: dict[str, Any] | None = None) -> tuple[str, str, Path | None, int]:
+        if self.engine == "sglang":
+            return self._sglang_result(manifest_path, manifest, case)
         if manifest.get("schema_version") != 1 or not isinstance(manifest.get("run_id"), str) or not manifest["run_id"]:
             return "failed", "Invalid manifest schema or run_id", None, 0
         port = manifest.get("port")
@@ -608,9 +657,13 @@ class BranchMonitor:
 
     def _gate(self, backend: str, branch: str, sha: str, cases: list[dict[str, Any]],
               manifests: list[tuple[Path, dict[str, Any]]]) -> tuple[dict[str, Any], list[dict[str, Any]]]:
+        if not cases:
+            return {"status": "unknown", "passed": 0, "total": 0, "failed": 0, "missing": 0,
+                    "requests_passed": 0, "requests_total": 0, "latest_commit": None, "run_id": None,
+                    "detail": f"所选分支的 {self.case_dir} 未发现可验证的 Gate case；不能判定通过。"}, []
         rows: list[dict[str, Any]] = []
         used: list[tuple[Path, dict[str, Any]]] = []
-        audit = self._audit_record(backend, branch)
+        audit = self._audit_record(backend, branch) if self.engine == "vllm" else None
         audit_matches = bool(audit and self._audit_matches(audit, sha, cases))
         for model in self.models:
             for mode in self.modes:
@@ -623,15 +676,21 @@ class BranchMonitor:
                 if selected:
                     used.append(selected)
                 for case in cases:
+                    if (self.engine == "sglang" and
+                            (model not in case.get("models", []) or mode not in case.get("modes", []))):
+                        continue
                     scenario, requests = case["scenario"], case["requests"]
                     row = {"model": model, "mode": mode, "scenario": scenario, "requests": requests,
                            "status": "missing", "reason": "No evidence manifest", "evidence_url": None}
+                    if self.engine == "sglang":
+                        row.update(label=case.get("label"), source=case["source"], source_blob=case["source_blob"],
+                                   evidence_format="sglang_raw_requests")
                     if selected:
                         path, manifest = selected
                         if manifest.get("commit") != sha:
                             row.update(status="stale", reason=f"Evidence belongs to {manifest.get('commit')}")
                         else:
-                            status, reason, evidence_path, passed_count = self._result(path, manifest, scenario, requests)
+                            status, reason, evidence_path, passed_count = self._result(path, manifest, scenario, requests, case)
                             evidence_url = ("/api/branch-evidence?" + urlencode({"branch": branch, "backend": backend,
                                             "model": model, "mode": mode, "scenario": scenario})) if evidence_path else None
                             row.update(status=status, reason=reason, evidence_url=evidence_url,
@@ -664,6 +723,9 @@ class BranchMonitor:
         else:
             gate_status = "passed"
         latest = max(used, key=lambda item: (str(item[1].get("created_at", "")), item[0].stat().st_mtime_ns))[1] if used else None
+        discovery_warnings = self._sglang_case_cache.get(sha, ([], []))[1] if self.engine == "sglang" else []
+        if gate_status == "passed" and discovery_warnings:
+            gate_status = "partial"
         gate = {"status": gate_status, "passed": totals["passed"] + totals["recorded_pass"], "total": len(rows),
                 "failed": totals["failed"], "missing": totals["missing"] + totals["stale"],
                 "requests_passed": None if any(row.get("requests_passed") is None and row["status"] == "recorded_pass" for row in rows)
@@ -671,6 +733,10 @@ class BranchMonitor:
                 "requests_total": sum(row["requests"] for row in rows),
                 "latest_commit": latest.get("commit") if latest else None,
                 "run_id": latest.get("run_id") if latest else None}
+        if self.engine == "sglang":
+            gate.update(evidence_format="sglang_raw_requests", case_sources=self.case_sources,
+                        detail="原始脚本没有结果 JSON；归档后逐请求重核输入、输出断言与所选提交源码。" +
+                               ("部分用例来源无法读取，不能判定完整验收通过。" if discovery_warnings else ""))
         if audit:
             gate.update(audit_sources=audit.get("sources"), source_thread=audit.get("source_thread"),
                         evidence_type="audited_record" if totals["recorded_pass"] else "raw_json",
@@ -713,9 +779,13 @@ class BranchMonitor:
             backends.append({"id": backend, "label": self.backend_labels.get(backend, LABELS.get(backend, backend)),
                              "ci_enabled": registry.get(self._ci_platform(backend), False), "integration": integration,
                              "ci": ci, "current_ci": current_ci, "pr": pr, "gate": gate, "results": results})
+        upstream_version = self._version(sha)
         return {"branch": branch, "branch_ref": ref, "head": sha,
                 "head_url": f"https://github.com/{self.github_repo}/commit/{sha}" if self.github_repo else None,
-                "observed_at": _utc_now(), "vllm_version": self._version(sha),
+                "observed_at": _utc_now(), "engine": self.engine, "upstream_version": upstream_version,
+                "vllm_version": upstream_version if self.engine == "vllm" else None,
+                "case_dir": self.case_dir, "case_sources": self.case_sources,
+                "case_discovery": {"warnings": self._sglang_case_cache.get(sha, ([], []))[1]} if self.engine == "sglang" else {},
                 "branches": self._branches(), "models": self.models, "modes": self.modes,
                 "cases": cases, "branch_ci": branch_ci, "backends": backends, "errors": errors}
 
@@ -748,7 +818,11 @@ class BranchMonitor:
         cases = {case["scenario"]: case for case in self._cases(sha)}
         if scenario not in cases:
             raise MonitorError("Unknown gate scenario")
+        if self.engine == "sglang" and (model not in cases[scenario].get("models", []) or mode not in cases[scenario].get("modes", [])):
+            raise MonitorError("SGLang scenario does not apply to this model or runtime mode")
         def historical_evidence() -> dict[str, Any]:
+            if self.engine == "sglang":
+                raise MonitorError("No current-HEAD SGLang raw-request evidence")
             audit = self._audit_record(backend, branch)
             if not audit or not self._audit_matches(audit, sha, list(cases.values())):
                 raise MonitorError("No current-HEAD evidence manifest or matching acceptance record")
@@ -763,7 +837,7 @@ class BranchMonitor:
         if not candidates:
             return historical_evidence()
         path, manifest = max(candidates, key=lambda item: (str(item[1].get("created_at", "")), item[0].stat().st_mtime_ns))
-        _, _, result_path, _ = self._result(path, manifest, scenario, cases[scenario]["requests"])
+        _, _, result_path, _ = self._result(path, manifest, scenario, cases[scenario]["requests"], cases[scenario])
         if result_path is None or not _inside(result_path, self.evidence_dir):
             return historical_evidence()
         try:

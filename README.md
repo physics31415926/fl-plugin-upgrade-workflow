@@ -1,6 +1,48 @@
-# vllm-plugin-FL 升级工作流：可配置首版
+# FL 插件适配工作台：vLLM 与 SGLang
 
 这个目录提供分支适配监控、Codex 升级任务页面和本地编排器。监控面板分别显示 backend 的代码合入、CI 和 adaptation gate 状态；任务页面可按验证机器启动独立 Codex 会话并跟进进展。编排器支持先适配 CUDA 公共层，再让其他 backend 并行运行。页面由本地 HTTP 服务提供，可在 Codex 桌面端的内置 Browser 面板打开。
+
+
+## 双仓库进展与任务
+
+同一个首页并排展示 **vLLM-Plugin-FL** 和 **SGLang-Plugin-FL** 的适配进展。每个仓库独立选择分支、读取远端状态、查看 backend PR / 代码合入 / CI / Gate，以及已有 Codex 任务；进入详情和发送任务指令时会保留仓库身份。一个仓库采集失败不会遮盖另一个的结果。
+
+复制 `projects.example.json` 为 `projects.json`，为其中每个仓库准备对应的监控配置。vLLM 使用 `branch-monitor.example.json`；SGLang 使用 `branch-monitor.sglang.example.json`。配置文件及运行目录均只保存在本机，不随源码提交。
+
+```text
+python -B flflow.py serve --projects-config projects.json --host 127.0.0.1 --port 8766
+```
+
+- `/`：双仓库总览。
+- `/monitor?project=vllm` 与 `/monitor?project=sglang`：各仓库的分支、PR、CI 和逐项验收详情。
+- `/sessions?project=vllm` 与 `/sessions?project=sglang`：各仓库的验证机器和 Codex 适配任务。
+- `/workflow?project=vllm`：已有配置命令编排器。只有配置 `workflow_config` 的项目才启用此功能；SGLang 适配使用任务页，不能误运行 vLLM 演示命令。
+
+监控配置通过 `engine: "vllm"` 或 `engine: "sglang"` 选择上游版本解析和验收来源。SGLang 的 `dev/0.5.18` 使用 `examples` 的离线文本/图片示例和文本/图片/混合并发示例，并展示 `tests/e2e_tests/concurrent` 的并发测试；case、期望结果和请求数量均读取所选分支的源码。两个引擎的通过条件分别核验，缺少逐请求结果仍显示无证据。
+
+各仓库必须使用独立的 `sessions_dir` 和 `evidence_dir`。默认保留 vLLM 原有目录；SGLang 使用 `runs/sglang/`。配置重叠会拒绝启动。机器占用跨仓库检查，同一 SSH 连接已经有待启动或执行中的任务时不会重复派发。
+
+已有控制服务仍有活动任务时，可以在该仓库的本机监控配置增加 `sessions_api_url`，指向原服务的 loopback 地址（例如 `http://127.0.0.1:8765`）。新看板代理原会话 API，保留原服务和正在等待处理的任务；不会在第二个进程重新打开其会话存储。原服务不可达时，新任务派发会被阻止，避免错误复用机器。保留原服务时，新适配任务统一从双仓库入口派发，以使用跨项目机器占用检查。未配置代理时使用各项目独立的本地会话管理器。
+
+团队只读版本同样支持双仓库：
+
+```text
+python -B share_server.py --projects-config projects.json --host 127.0.0.1 --port 8766
+```
+
+共享入口保持脱敏和只读，不创建 Codex 执行器、不访问现有会话代理，也不提供机器、控制接口或原始私有证据。单仓库旧命令仍兼容。
+
+### SGLang 原始结果归档
+
+`sglang_evidence.py` 在验证机器的干净候选 checkout 上调用原始 example / 并发测试函数，保存实际请求输入、原始输出、源文件 Git blob、模型、运行模式、插件激活状态和逐请求校验。脚本应放在候选仓库外的独立工具目录，以免其副本使候选 checkout 变脏。每个模型执行完整的一组，用不同 `output-dir` 分开保存：
+
+```text
+python -B <tools>/sglang_evidence.py --repo <clean-candidate> --branch <baseline-branch> --commit <tested-sha> --backend <backend> --model-path <actual-model-path> --mode eager --scenario all --output-dir <evidence-root>/<model>/eager
+```
+
+`--scenario all` 根据指定提交读取该模型的全部源码场景；原始脚本的 graph 设置决定可用模式。示例基线中的两个模型各有 8 个场景、102 个请求，合计 16 场景、204 请求。原生 pytest YAML 的实际模型路径必须与提供的模型路径一致，采集器不会修改测试或模型配置。模型/请求输入、源码提交或插件激活状态无法核对时保留失败记录。
+
+归档使用独立格式：`manifest.json` 的 `engine` 为 `sglang`，场景 JSON 的 `evidence_type` 为 `sglang_raw_requests`，包含 `case`、`execution`、`requests`、`summary`。将整个 `<run_id>/` 原样导入此项目配置的证据目录；面板重新检查源码定义与每个请求，不能凭退出码、CI 或自报 `passed` 判定通过。完整验收要求同一模型/模式最新一轮覆盖全部场景；部分重跑不会借用较旧完整轮次的缺项。复用 `run-id` 时身份不一致或场景已存在会拒绝覆盖。此项目的页面与采集器检查不等于已在 GPU 上完成验收。
 
 ## 分支适配监控
 

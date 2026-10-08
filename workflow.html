@@ -58,6 +58,7 @@
 <body>
 <main>
   <header>
+    <nav><a href="/">双仓库总览</a></nav>
     <div><h1>vllm-plugin-FL 升级工作流</h1><p class="subtle">版本固定 · CUDA 基线 · 多 backend 并行 · 严格验收</p></div>
     <div class="controls" aria-label="运行控制">
       <button id="start" class="primary" type="button">启动</button>
@@ -93,6 +94,8 @@
   <footer id="updated">页面每 2 秒刷新状态；“暂停”只阻止下一阶段开始，已运行的命令会继续执行。</footer>
 </main>
 <script>
+const projectId = new URLSearchParams(location.search).get('project');
+function projectUrl(path) { const url=new URL(path,location.href);if(projectId)url.searchParams.set('project',projectId);return url.href; }
 (() => {
   const $ = id => document.getElementById(id);
   const names = {idle:'未启动', pending:'待运行', preparing:'准备中', queued:'排队中', running:'运行中', passed:'通过', completed:'完成', failed:'失败', blocked:'阻塞', paused:'已暂停', pausing:'暂停中', cancelling:'取消中', cancelled:'已取消', simulated:'模拟完成（未验收）', skipped:'跳过', ready_for_integration:'待汇合验收'};
@@ -159,7 +162,7 @@
   async function loadLog(platform, attempt) {
     try {
       const url = `/api/logs?platform=${encodeURIComponent(platform)}&attempt=${attempt}&tail=120`;
-      const response = await fetch(url, {cache:'no-store'});
+      const response = await fetch(projectUrl(url), {cache:'no-store'});
       const result = await response.json();
       if (!response.ok) throw new Error(result.error || `日志接口返回 ${response.status}`);
       const content = (result.logs || []).map(x => `# ${x.label}\n${(x.lines || []).join('\n')}`).join('\n\n');
@@ -189,7 +192,7 @@
   }
   async function refresh() {
     try {
-      const response = await fetch('/api/status', {cache:'no-store'});
+      const response = await fetch(projectUrl('/api/status'), {cache:'no-store'});
       if (!response.ok) throw new Error(`状态接口返回 ${response.status}`);
       render(await response.json());
       showNotice('');
@@ -198,7 +201,7 @@
   async function action(name) {
     busy = true; render(current);
     try {
-      const response = await fetch('/api/' + name, {method:'POST',headers:{'Content-Type':'application/json'},body:'{}'});
+      const response = await fetch(projectUrl('/api/' + name), {method:'POST',headers:{'Content-Type':'application/json'},body:'{}'});
       const result = await response.json().catch(() => ({}));
       if (!response.ok) throw new Error(result.error || result.message || `操作失败 (${response.status})`);
       showNotice(''); await refresh();

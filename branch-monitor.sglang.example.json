@@ -1,0 +1,84 @@
+{
+  "engine": "sglang",
+  "project_label": "SGLang-Plugin-FL",
+  "repo": "../sglang-plugin-FL",
+  "remote": "upstream",
+  "branch": "dev/0.5.18",
+  "github_repo": "flagos-ai/sglang-plugin-FL",
+  "sessions_dir": "runs/sglang/codex-sessions",
+  "evidence_dir": "runs/sglang/gate-evidence",
+  "models": [
+    "Qwen3.6-27B",
+    "Qwen3.6-35B-A3B"
+  ],
+  "modes": [
+    "eager"
+  ],
+  "backend_labels": {
+    "cuda": "NVIDIA",
+    "musa": "Moore Threads",
+    "ascend": "Ascend",
+    "corex": "CoreX",
+    "metax": "MetaX",
+    "hygon": "Hygon",
+    "thead": "THead",
+    "enflame": "Enflame",
+    "kunlunxin": "Kunlunxin"
+  },
+  "backend_ci_platforms": {
+    "corex": "iluvatar"
+  },
+  "backend_prs": {
+    "cuda": 89,
+    "musa": 95,
+    "ascend": 131,
+    "corex": 132
+  },
+  "backend_pr_discovery": {
+    "ascend": {
+      "head_prefixes": [
+        "codex/ascend-sglang-",
+        "exp/0.5.18-ascend"
+      ],
+      "title_terms": [
+        "ascend"
+      ]
+    },
+    "corex": {
+      "head_prefixes": [
+        "feat/iluvatar-impl-",
+        "exp/0.5.18-iluvatar"
+      ],
+      "title_terms": [
+        "iluvatar",
+        "corex"
+      ]
+    }
+  },
+  "backend_task_policies": {
+    "cuda": {
+      "mode": "monitor",
+      "branch": "dev/0.5.18",
+      "pr": 89,
+      "reason": "已有适配 PR，跟进现有进展，避免重复派发适配任务。"
+    },
+    "musa": {
+      "mode": "monitor",
+      "branch": "dev/0.5.18",
+      "pr": 95,
+      "reason": "已有适配 PR，跟进现有进展，避免重复派发适配任务。"
+    },
+    "ascend": {
+      "mode": "monitor",
+      "branch": "dev/0.5.18",
+      "pr": 131,
+      "reason": "已有适配 PR，跟进现有进展，避免重复派发适配任务。"
+    },
+    "corex": {
+      "mode": "monitor",
+      "branch": "dev/0.5.18",
+      "pr": 132,
+      "reason": "已有适配 PR，跟进现有进展，避免重复派发适配任务。"
+    }
+  }
+}

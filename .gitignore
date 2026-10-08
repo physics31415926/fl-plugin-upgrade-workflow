@@ -7,3 +7,6 @@ workflow.json
 branch-monitor.json
 runs/
 *.log
+projects.json
+branch-monitor.sglang.json
+.idea/

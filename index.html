@@ -192,8 +192,8 @@
 <body>
 <div class="shell">
   <header class="topbar">
-    <div class="brand"><span class="mark" aria-hidden="true">FL</span><span>vllm-plugin-FL <span style="font-weight:400;color:var(--muted)">/ 适配监控</span></span></div>
-    <nav class="toplinks" aria-label="页面导航">
+    <div class="brand"><span class="mark" aria-hidden="true">FL</span><span><span id="project-brand">vLLM-Plugin-FL</span> <span style="font-weight:400;color:var(--muted)">/ 适配监控</span></span></div>
+    <nav class="toplinks" aria-label="页面导航"><a id="overview-link" href="./" hidden>双仓库总览</a><label id="project-picker" hidden>仓库 <select id="project-select" aria-label="选择仓库"></select></label>
       <a class="secondary" id="repository-link" hidden target="_blank" rel="noopener noreferrer">查看 HEAD</a>
       <a class="secondary" href="/workflow">演示流程</a>
       <a class="demo" href="/sessions">分配机器 · Codex 任务 ↗</a>
@@ -218,7 +218,7 @@
       <div class="hero-meta">
         <span>Ref <strong id="branch-ref" class="mono">—</strong></span>
         <span>HEAD <strong id="head" class="mono">—</strong></span>
-        <span>vLLM <strong id="vllm-version">—</strong></span>
+        <span><span id="engine-name">vLLM</span> <strong id="vllm-version">—</strong></span>
         <span><span id="adaptation-ci-label">已合入平台适配 CI</span> <strong id="adaptation-ci">—</strong> <a id="adaptation-ci-link" hidden target="_blank" rel="noopener noreferrer">查看验收运行 ↗</a></span>
         <span>采集于 <strong id="observed-at">—</strong></span>
         <span id="access-mode" hidden>团队只读看板</span>
@@ -263,7 +263,12 @@
   let backendTaskPolicies = {};
   let taskSessions = [];
   let latestBranchSnapshot = null;
-  const appUrl = path => new URL(path.replace(/^\/+/, ""), window.location.href).href;
+  let projectId = new URLSearchParams(window.location.search).get("project");
+  const appUrl = path => {
+    const url = new URL(path.replace(/^\/+/, ""), window.location.href);
+    if (projectId) url.searchParams.set("project", projectId);
+    return url.href;
+  };
   const labels = {
     merged:"已合入", open:"打开", draft:"草稿", closed:"已关闭", pending:"待合入", unknown:"未知",
     passed:"通过", recorded_pass:"通过 · 验收记录", failed:"失败", running:"运行中",
@@ -399,7 +404,7 @@
     return {
       session,
       text:session?'查看 '+label+' 任务 ↗':'为 '+label+' 分配验证机器并跟进升级 ↗',
-      href:appUrl('sessions')+'?branch='+encodeURIComponent(branch)+'&backend='+encodeURIComponent(backend)+(session?'&session='+encodeURIComponent(session.id):'')
+      href:appUrl('sessions?branch='+encodeURIComponent(branch)+'&backend='+encodeURIComponent(backend)+(session?'&session='+encodeURIComponent(session.id):''))
     };
   }
   function reconcileTaskNodes(container,nodes) {
@@ -485,7 +490,8 @@
     put("branch-ref", data.branch_ref);
     put("head", shortSha(data.head));
     byId("head").title = safe(data.head);
-    put("vllm-version", data.vllm_version);
+    put("vllm-version", data.upstream_version || data.vllm_version);
+    put("engine-name", data.engine === "sglang" ? "SGLang" : "vLLM");
     put("observed-at", dateText(data.observed_at));
     const integrated = (Array.isArray(data.backends) ? data.backends : []).filter(b => b.integration?.status === "merged");
     const outcomes = integrated.map(b => effectiveCi(b, data.head));
@@ -532,7 +538,7 @@
     const groups = [];
     for (const model of models) {
       for (const mode of modes) {
-        const rows = cases.map((descriptor) => {
+        const rows = cases.filter(descriptor => (!descriptor.model || descriptor.model === model) && (!descriptor.mode || descriptor.mode === mode) && (!Array.isArray(descriptor.models) || descriptor.models.includes(model)) && (!Array.isArray(descriptor.modes) || descriptor.modes.includes(mode))).map((descriptor) => {
           const result = results.find((r) => r.model === model && r.mode === mode && r.scenario === descriptor.scenario);
           return {descriptor, result: result || null};
         });
@@ -545,7 +551,7 @@
     const groups = expectedRows(data, backend);
     const stale = effectiveGate(backend, data.head) === "stale";
     if (!groups.length || !Array.isArray(data.cases) || !data.cases.length) {
-      container.append(el("div", "empty", "目标分支尚无可读取的 adaptation-gate-cases 清单。"));
+      container.append(el("div", "empty", "目标分支尚无可识别的验收用例清单。"));
       return;
     }
     for (const group of groups) {
@@ -562,7 +568,7 @@
         const status = stale && isPassed(recordedStatus) ? "stale" : recordedStatus;
         const count = Number.isInteger(descriptor.requests) ? descriptor.requests : Number(result.requests) || 0;
         const item = el("div", "case-row");
-        const titleCell = el("div", "case-title", scenarioLabels[descriptor.scenario] || descriptor.scenario);
+        const titleCell = el("div", "case-title", descriptor.label || scenarioLabels[descriptor.scenario] || descriptor.scenario);
         titleCell.append(el("span", "case-path mono", descriptor.file || descriptor.test || descriptor.scenario));
         item.append(titleCell);
         item.append(el("span", "mono", count ? count + " 请求" : "—"));
@@ -572,7 +578,7 @@
         item.append(el("div", "case-reason", result.reason ? reasonText(result.reason) :
           (status === "missing" ? "尚无该提交的逐项结果" : "—")));
         const evidenceCell = el("div", "case-evidence");
-        const evidence = link(result.evidence_url, "查看证据 ↗");
+        const evidence = link(result.evidence_url ? appUrl(result.evidence_url) : null, "查看证据 ↗");
         evidenceCell.append(evidence || el("span", "case-reason", "—"));
         item.append(evidenceCell);
         groupBox.append(item);
@@ -688,6 +694,7 @@
     if (!backends.length) box.append(el("div", "empty", "没有发现 backend。请检查目标分支和监控服务配置。"));
     backends.forEach((backend, index) => box.append(renderBackend(data, backend, index)));
     const errors = Array.isArray(data.errors) ? data.errors.filter(Boolean) : [];
+    for (const warning of data.case_discovery?.warnings || []) errors.push("验收用例来源不完整：" + (warning.detail || warning.source || warning.model || "待核对"));
     showNotice(errors.map(errorMessage).join("\n"));
   }
   let fetching = false;
@@ -706,7 +713,7 @@
     fetching = true;
     const generation = branchGeneration;
     try {
-      const response = await fetch(appUrl("api/branch-status") + "?branch=" + encodeURIComponent(branch), {cache:"no-store"});
+      const response = await fetch(appUrl("api/branch-status?branch=" + encodeURIComponent(branch)), {cache:"no-store"});
       const data = await response.json().catch(() => ({}));
       if (!response.ok) throw new Error(errorMessage(data.error) || "状态接口返回 " + response.status);
       if (generation === branchGeneration) applySnapshot(data, branch);
@@ -949,7 +956,7 @@
     if (card.controlKey !== controlKey) {
       card.controlKey = controlKey; card.actions.replaceChildren();
       const detail = el("a", "button", "任务详情 · 日志 ↗");
-      detail.href = appUrl("sessions") + "?branch=" + encodeURIComponent(session.branch) + "&session=" + encodeURIComponent(session.id);
+      detail.href = appUrl("sessions?branch=" + encodeURIComponent(session.branch) + "&session=" + encodeURIComponent(session.id));
       card.actions.append(detail);
       if (activeTasks.has(session.status) || session.status === "prepared") {
         if (session.status !== "interrupting") card.actions.append(taskButton(session.status === "prepared" ? "取消待启动任务" : "中断执行",session,"interrupt"));
@@ -991,7 +998,7 @@
         updateTaskCard(card,session);
       }
       reconcileTaskNodes(box,sessions.map(session=>taskCards.get(session.id).root));
-      byId("new-task-link").href = appUrl("sessions") + "?branch=" + encodeURIComponent(branch);
+      byId("new-task-link").href = appUrl("sessions?branch=" + encodeURIComponent(branch));
     } catch (error) { taskNotice("读取任务失败：" + error.message); }
     finally { tasksFetching = false; }
   }
@@ -1002,6 +1009,33 @@
       const response = await fetch(appUrl("api/capabilities"), {cache:"no-store"});
       if (response.ok) {
         const capabilities = await response.json();
+        if (capabilities.multi_project) projectId = projectId || capabilities.project_id;
+        if ((capabilities.project_label || capabilities.label)) {
+          const brand = byId("project-brand");
+          if (brand) brand.textContent = (capabilities.project_label || capabilities.label);
+          document.title = "分支适配监控 · " + (capabilities.project_label || capabilities.label);
+        }
+        byId("overview-link").hidden = !capabilities.multi_project;
+        document.querySelector('.toplinks a[href="/workflow"]').hidden = capabilities.workflow === false;
+        document.querySelectorAll('.toplinks a[href="/workflow"], .toplinks a[href="/sessions"]').forEach(node => {
+          node.dataset.route = node.getAttribute("href");
+          node.href = appUrl(node.dataset.route);
+        });
+        if (capabilities.multi_project) {
+          const projectsResponse = await fetch(appUrl("api/projects"), {cache:"no-store"});
+          if (projectsResponse.ok) {
+            const projects = (await projectsResponse.json()).projects || [];
+            const picker = byId("project-select");
+            for (const item of projects) {
+              const option = document.createElement("option"); option.value = item.id; option.textContent = item.label; picker.append(option);
+            }
+            picker.value = capabilities.project_id;
+            byId("project-picker").hidden = false;
+            picker.addEventListener("change", () => {
+              const url = new URL("monitor", window.location.href); url.searchParams.set("project", picker.value); window.location.assign(url.href);
+            });
+          }
+        }
         readOnly = capabilities.read_only === true;
         sessionsEnabled = !readOnly && capabilities.sessions === true;
         byId("refresh-remote").hidden = capabilities.refresh === false;
@@ -1010,7 +1044,7 @@
     } catch (_) { /* Older local servers expose only the existing status API. */ }
     if (readOnly) {
       byId("access-mode").hidden = false;
-      document.querySelectorAll('.toplinks a[href="/workflow"], .toplinks a[href="/sessions"]').forEach(node => { node.hidden = true; });
+      document.querySelectorAll('.toplinks a[data-route="/workflow"], .toplinks a[data-route="/sessions"], .toplinks a[href="/workflow"], .toplinks a[href="/sessions"]').forEach(node => { node.hidden = true; });
       document.querySelector(".footnote").textContent = "团队看板每 15 秒读取采集结果；点击“读取最新状态”可触发一次采集（连续点击在 30 秒内合并）。任务控制、机器配置及原始私有记录由维护者在本机管理。";
     }
     byId("tasks-panel").hidden = !sessionsEnabled;

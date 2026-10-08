@@ -28,6 +28,7 @@ from pathlib import Path
 from urllib.parse import parse_qs, urlsplit
 
 from branch_monitor import MonitorError
+from project_registry import ProjectRegistry, ProjectError
 
 
 SCHEMA_VERSION = 1
@@ -718,10 +719,11 @@ class Engine:
             self.worker.start()
 
 
-def make_server(engine: Engine, host: str, port: int, monitor: object | None = None,
-                sessions: object | None = None) -> ThreadingHTTPServer:
+def make_server(engine: Engine | None, host: str, port: int, monitor: object | None = None,
+                sessions: object | None = None, *, registry: ProjectRegistry | None = None) -> ThreadingHTTPServer:
     if host not in ("127.0.0.1", "localhost", "::1"):
         raise WorkflowError("HTTP control must bind to loopback only")
+    registry = registry or ProjectRegistry.single(engine, monitor, sessions)
 
     class Handler(BaseHTTPRequestHandler):
         def _json(self, status: int, body: dict) -> None:
@@ -774,6 +776,21 @@ def make_server(engine: Engine, host: str, port: int, monitor: object | None = N
             if not self._trusted_request():
                 return
             target = urlsplit(self.path)
+            try:
+                project = registry.select(target.query)
+            except ValueError as exc:
+                self._json(HTTPStatus.BAD_REQUEST, {"error": str(exc)})
+                return
+            engine, monitor, sessions = project.workflow, project.monitor, project.sessions
+            if target.path == "/api/projects":
+                self._json(200, registry.metadata())
+                return
+            if target.path == "/api/projects-status":
+                self._json(200, registry.statuses())
+                return
+            if target.path in ("/api/status", "/api/logs") and engine is None:
+                self._json(HTTPStatus.SERVICE_UNAVAILABLE, {"error": project.workflow_error or "Workflow is not configured for this project"})
+                return
             history = re.fullmatch(r"/api/codex-sessions/([0-9a-f]{32})/events", target.path)
             if history:
                 if sessions is None:
@@ -781,7 +798,7 @@ def make_server(engine: Engine, host: str, port: int, monitor: object | None = N
                     return
                 try:
                     query = parse_qs(target.query, keep_blank_values=True)
-                    if set(query) - {"cursor", "limit"} or any(len(values) != 1 for values in query.values()):
+                    if set(query) - {"cursor", "limit", "project"} or any(len(values) != 1 for values in query.values()):
                         raise ValueError("Invalid history query")
                     raw_limit = query.get("limit", ["80"])[0]
                     if not re.fullmatch(r"[0-9]{1,2}", raw_limit):
@@ -794,7 +811,9 @@ def make_server(engine: Engine, host: str, port: int, monitor: object | None = N
                 return
             if target.path == "/api/capabilities":
                 self._json(200, {"read_only": False, "sessions": sessions is not None,
-                                 "refresh": monitor is not None})
+                                 "refresh": monitor is not None, "workflow": engine is not None,
+                                 "project_id": project.id, "label": project.label, "multi_project": registry.multi_project,
+                                 "engine": project.engine_name, "default_branch": project.default_branch})
                 return
             if target.path in ("/api/codex-sessions", "/api/codex-health"):
                 if sessions is None:
@@ -869,9 +888,10 @@ def make_server(engine: Engine, host: str, port: int, monitor: object | None = N
                 except (KeyError, IndexError, ValueError):
                     self._json(400, {"error": "Invalid platform, attempt, or tail"})
                 return
-            if target.path in ("/", "/index.html", "/workflow", "/workflow.html", "/sessions", "/sessions.html"):
+            if target.path in ("/", "/index.html", "/monitor", "/monitor.html", "/workflow", "/workflow.html", "/sessions", "/sessions.html"):
                 filename = ("sessions.html" if target.path in ("/sessions", "/sessions.html") else
-                            "workflow.html" if target.path in ("/workflow", "/workflow.html") else "index.html")
+                            "workflow.html" if target.path in ("/workflow", "/workflow.html") else
+                            "overview.html" if registry.multi_project and target.path in ("/", "/index.html") else "index.html")
                 path = Path(__file__).with_name(filename)
                 if not path.is_file():
                     self._json(404, {"error": f"{filename} is not installed"})
@@ -889,8 +909,14 @@ def make_server(engine: Engine, host: str, port: int, monitor: object | None = N
         def do_POST(self) -> None:
             if not self._trusted_request(post=True):
                 return
-            target = urlsplit(self.path).path
+            parsed = urlsplit(self.path)
+            target = parsed.path
             try:
+                project = registry.select(parsed.query)
+                engine, monitor, sessions = project.workflow, project.monitor, project.sessions
+                if target in ("/api/start", "/api/retry", "/api/retry-failed", "/api/pause", "/api/resume", "/api/cancel") and engine is None:
+                    self._json(HTTPStatus.SERVICE_UNAVAILABLE, {"error": project.workflow_error or "Workflow is not configured for this project"})
+                    return
                 if self.headers.get("Content-Type", "").split(";", 1)[0].strip().lower() != "application/json":
                     raise WorkflowError("Content-Type must be application/json")
                 length = int(self.headers.get("Content-Length", "0"))
@@ -949,15 +975,17 @@ def make_server(engine: Engine, host: str, port: int, monitor: object | None = N
     return ThreadingHTTPServer((host, port), Handler)
 
 
-def serve(engine: Engine, host: str, port: int, monitor: object | None = None,
-          sessions: object | None = None) -> None:
-    server = make_server(engine, host, port, monitor, sessions)
+def serve(engine: Engine | None, host: str, port: int, monitor: object | None = None,
+          sessions: object | None = None, *, registry: ProjectRegistry | None = None) -> None:
+    server = make_server(engine, host, port, monitor, sessions, registry=registry)
     print(f"FL workflow dashboard: http://{host}:{server.server_port}/", flush=True)
     try:
         server.serve_forever()
     finally:
         server.server_close()
-        if sessions is not None:
+        if registry is not None:
+            registry.close()
+        elif sessions is not None:
             sessions.close()
 
 
@@ -966,15 +994,22 @@ def main(argv: list[str] | None = None) -> int:
     sub = parser.add_subparsers(dest="action", required=True)
     for action in ("validate", "start", "status", "pause", "resume", "cancel", "retry-failed", "serve"):
         cmd = sub.add_parser(action)
-        cmd.add_argument("--config", required=True, type=Path)
+        cmd.add_argument("--config", required=action != "serve", type=Path)
         if action == "start":
             cmd.add_argument("--dry-run", action="store_true")
         if action == "serve":
             cmd.add_argument("--host", default="127.0.0.1")
             cmd.add_argument("--port", type=int, default=8765)
             cmd.add_argument("--monitor-config", type=Path)
+            cmd.add_argument("--projects-config", type=Path)
     args = parser.parse_args(argv)
     try:
+        if args.action == "serve" and args.projects_config:
+            registry = ProjectRegistry.from_config(args.projects_config)
+            serve(None, args.host, args.port, registry=registry)
+            return 0
+        if args.config is None:
+            raise WorkflowError("--config or --projects-config is required for serve")
         engine = Engine(args.config)
         if args.action == "validate":
             print(json.dumps({"valid": True, "platforms": [p["name"] for p in engine.cfg["platforms"]]}, indent=2))
@@ -998,7 +1033,7 @@ def main(argv: list[str] | None = None) -> int:
             result = engine.request(args.action)
         print(json.dumps(result, indent=2))
         return 0 if result["status"] in ("passed", "simulated", "idle", "running", "pausing", "paused", "cancelling") else 1
-    except (WorkflowError, KeyboardInterrupt) as exc:
+    except (WorkflowError, ProjectError, KeyboardInterrupt) as exc:
         print(json.dumps({"error": str(exc)}), file=sys.stderr)
         return 2
 
