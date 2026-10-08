@@ -18,7 +18,7 @@
     "cuda": "NVIDIA",
     "musa": "Moore Threads",
     "ascend": "Ascend",
-    "corex": "CoreX",
+    "corex": "iluvatar",
     "metax": "MetaX",
     "hygon": "Hygon",
     "thead": "THead",

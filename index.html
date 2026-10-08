@@ -187,6 +187,7 @@
       .cell-label { display: block; }
       .backend-detail { padding: 14px; }
     }
+  .record-entry{padding:12px 0;border-bottom:1px solid var(--line);overflow-wrap:anywhere}.record-entry p{margin:6px 0}
   </style>
 </head>
 <body>
@@ -227,7 +228,7 @@
     <div class="summary" aria-label="分支概览">
       <div class="stat"><span class="stat-label">已合入 backend</span><strong class="stat-value" id="merged-count">—</strong><div class="stat-note">代码合入目标分支</div></div>
       <div class="stat"><span class="stat-label">适配 CI 通过</span><strong class="stat-value" id="ci-count">—</strong><div class="stat-note">验收提交或候选 PR，见明细</div></div>
-      <div class="stat"><span class="stat-label">Gate 通过</span><strong class="stat-value" id="gate-count">—</strong><div class="stat-note">逐项结果或已核验的验收记录</div></div>
+      <div class="stat"><span class="stat-label">当前分支 Gate</span><strong class="stat-value" id="gate-count">—</strong><div class="stat-note">逐项结果或已核验的验收记录</div></div>
       <div class="stat"><span class="stat-label">Gate case 覆盖</span><strong class="stat-value" id="case-count">—</strong><div class="stat-note">目标分支上的场景</div></div>
     </div>
     <div class="guidance"><span class="symbol" aria-hidden="true">ⓘ</span><span>顶部汇总已合入平台的适配 CI。历史验收只有在代码树与当前分支相同、用例清单一致时才计入；“验收记录”会保留原始运行和对话来源。最近一次分支工作流见下方记录。</span></div>
@@ -242,6 +243,7 @@
       <div class="section-heading"><div><h2 id="tasks-title">适配任务</h2><p>显示 agent 的实际计划和最新进展；需要回答或授权时可在这里处理。</p></div><a id="new-task-link" class="button" href="/sessions">配置机器 · 启动任务 ↗</a></div>
       <div id="tasks-notice" class="notice" role="alert" hidden></div>
       <details id="machines-panel" class="machines-panel" hidden><summary>验证机器 / 最近检查 <span id="machines-summary"></span></summary><p class="task-note">SSH 连通性与完整环境预检分别显示；连接成功后还需确认项目目录、模型和验收环境。检查时间仅代表该次记录。</p><div id="machine-status-list"></div></details>
+      <div id="observed-task-list" class="task-list"></div>
       <div id="task-list" class="task-list"><div class="empty">正在读取任务…</div></div>
     </section>
     <div class="section-heading">
@@ -260,6 +262,8 @@
   const expanded = new Set();
   let readOnly = false;
   let sessionsEnabled = false;
+  let nativeTasksEnabled = false;
+  const backendOrder=(a,b)=>(a.id!=="cuda")-(b.id!=="cuda")||String(a.label||a.id).localeCompare(String(b.label||b.id),"en",{sensitivity:"base"});
   let backendTaskPolicies = {};
   let taskSessions = [];
   let latestBranchSnapshot = null;
@@ -476,7 +480,7 @@
     select.value = selected;
   }
   function renderSummary(data) {
-    const backends = Array.isArray(data.backends) ? data.backends : [];
+    const backends = [...(Array.isArray(data.backends) ? data.backends : [])].sort(backendOrder);
     put("merged-count", backends.filter((b) => b.integration && b.integration.status === "merged").length + " / " + backends.length);
     put("ci-count", backends.filter((b) => effectiveCi(b, data.head) === "passed").length + " / " + backends.length);
     put("gate-count", backends.filter((b) => isPassed(effectiveGate(b, data.head))).length + " / " + backends.length);
@@ -654,6 +658,16 @@
         (latest.detail || "") + " · " + shortSha(latest.commit), latest.url, "查看后续运行"));
     }
     detail.append(meta);
+    if(backend.acceptance_records?.length){
+      const records=el('section','acceptance-records');records.append(el('h3','matrix-heading','实验验收记录'),el('p','matrix-help','优先使用本机存档，缺少存档时查看 PR；历史实验的版本与覆盖范围单独列出。'));
+      for(const record of backend.acceptance_records){
+        const box=el('div','record-entry');box.append(el('strong','',record.title||'实验记录'),el('p','',record.summary||''),el('p','matrix-help',record.scope||''));
+        if(record.tested_commit)box.append(el('p','mono','测试版本 '+shortSha(record.tested_commit)+(record.tree_matches_head?' · 代码树与当前分支相同；范围见记录':' · 历史测试版本')));
+        if(!readOnly&&record.archive_available&&record.archive_url){const archive=link(appUrl(record.archive_url),'查看本地存档 ↗');if(archive)box.append(archive,el('span','',' · '));}
+        const prRecord=githubPrLink(record.pr_url,'PR #'+record.pr_number+' 验收说明 ↗');if(prRecord)box.append(prRecord);records.append(box);
+      }
+      detail.append(records);
+    }
     const policy = taskPolicy(id, data.branch);
     const taskEntry = backendTaskEntry(data.branch, id, backend.label || id);
     if (!readOnly && taskEntry.session) {
@@ -690,7 +704,7 @@
     renderSummary(data);
     const box = byId("backend-list");
     box.replaceChildren();
-    const backends = Array.isArray(data.backends) ? data.backends : [];
+    const backends = [...(Array.isArray(data.backends) ? data.backends : [])].sort(backendOrder);
     if (!backends.length) box.append(el("div", "empty", "没有发现 backend。请检查目标分支和监控服务配置。"));
     backends.forEach((backend, index) => box.append(renderBackend(data, backend, index)));
     const errors = Array.isArray(data.errors) ? data.errors.filter(Boolean) : [];
@@ -706,7 +720,7 @@
     const url = new URL(window.location.href);
     url.searchParams.set("branch", data.branch || branch);
     window.history.replaceState(null, "", url);
-    if (sessionsEnabled && !document.hidden) loadTasks();
+    if ((sessionsEnabled||nativeTasksEnabled) && !document.hidden) loadTasks();
   }
   async function loadBranch(branch) {
     if (fetching || remoteRefreshing) return;
@@ -766,7 +780,7 @@
     return labels[status] || (monitor ? '待确认（历史记录）' : '待确认');
   }
   const activeTasks = new Set(["starting","running","waiting_input","waiting_approval","interrupting"]);
-  const machineLabels = {cuda:"NVIDIA / CUDA",ascend:"Ascend / 昇腾",metax:"MetaX / 沐曦",corex:"CoreX / 天数智芯",hygon:"Hygon / 海光",musa:"MUSA / 摩尔线程",enflame:"Enflame / 燧原",kunlunxin:"Kunlunxin / 昆仑芯",thead:"T-Head / 平头哥"};
+  const machineLabels = {cuda:"NVIDIA / CUDA",ascend:"Ascend / 昇腾",metax:"MetaX / 沐曦",corex:"iluvatar / 天数智芯",hygon:"Hygon / 海光",musa:"MUSA / 摩尔线程",enflame:"Enflame / 燧原",kunlunxin:"Kunlunxin / 昆仑芯",thead:"T-Head / 平头哥"};
   let machineProfilesKey = null;
   function machineHealth(profile){
     const full=profile.last_check,connection=profile.last_connection_check,time=record=>{const value=Date.parse(record?.checked_at);return Number.isNaN(value)?-Infinity:value;};
@@ -800,7 +814,7 @@
     const openGroups=new Map([...box.querySelectorAll('.machine-group')].map(group=>[group.getAttribute('data-backend'),group.open])),groups=new Map();
     for(const profile of records){const role=profile.role||'compute',group=role!=='compute'?role:machineLabels[profile.backend]?profile.backend:'unknown';if(!groups.has(group))groups.set(group,[]);groups.get(group).push(profile);}
     const fragment=document.createDocumentFragment();
-    for(const group of [...Object.keys(machineLabels),'unknown','development','gateway']){const members=groups.get(group);if(!members?.length)continue;const title=group==='development'?'开发机 / 看板部署节点':group==='gateway'?'跳板机':group==='unknown'?'待确认 backend':machineLabels[group],failures=members.filter(profile=>machineHealth(profile).ssh.status==='failed').length;
+    for(const group of [...Object.keys(machineLabels).sort((a,b)=>backendOrder({id:a,label:machineLabels[a]},{id:b,label:machineLabels[b]})),'unknown','development','gateway']){const members=groups.get(group);if(!members?.length)continue;const title=group==='development'?'开发机 / 看板部署节点':group==='gateway'?'跳板机':group==='unknown'?'待确认 backend':machineLabels[group],failures=members.filter(profile=>machineHealth(profile).ssh.status==='failed').length;
       const section=el('details','machine-group');section.setAttribute('data-backend',group);section.open=openGroups.has(group)?openGroups.get(group):failures>0;section.append(el('summary','',title+' · '+members.length+' 台'+(failures?' · '+failures+' 台连接失败':'')));const grid=el('div','machine-grid');
       for(const profile of members){const entry=el('article','machine-entry'),health=machineHealth(profile);entry.append(el('strong','',profile.label||profile.ssh_alias||profile.id),el('div','machine-alias',profile.ssh_alias||'—'));appendMachineHealth(entry,health);grid.append(entry);}section.append(grid);fragment.append(section);
     }
@@ -931,9 +945,11 @@
     card.workBranch.textContent = "任务工作分支：" + (session.work_branch || "待核对");
     const identityKey=JSON.stringify([session.branch,session.commit,session.work_branch,session.worktree,session.remote_workspace,session.reported_provenance]);
     if(card.identityKey!==identityKey){card.identityKey=identityKey;renderProvenance(card,session);}
-    card.title.textContent = (machineLabels[session.backend] || session.backend || "Backend") + " 适配任务";
+    card.title.textContent = (machineLabels[session.backend] || session.backend || "Backend") + " · " + (session.provider==="claude"?"Claude":"Codex") + " 适配任务";
     card.goal.hidden = !session.goal; card.goalText.textContent = session.goal || "";
-    const waiting = session.status === "waiting_input" || session.status === "waiting_approval";
+    const denied=session.provider==="claude"&&session.status==="waiting_input"&&session.claude_permission_denials?.length;
+    const claudeRunning=session.provider==="claude"&&session.status==="running";
+    const waiting = (session.status === "waiting_input"&&!denied) || session.status === "waiting_approval";
     card.status.className = "pill " + (waiting ? "partial" : session.status === "failed" ? "failed" : activeTasks.has(session.status) ? "running" : "unknown");
     const approvalEnding = session.approval_cancel_pending && activeTasks.has(session.status);
     card.status.textContent = approvalEnding ? "本轮结束处理中" : taskLabels[session.status] || session.status;
@@ -952,7 +968,7 @@
     const latest = latestSessionMessage(session);card.latestSection.hidden = !latest;card.latestMessage.textContent = latest.length > 350 ? latest.slice(0,350) + '…' : latest;card.latestFull.hidden = latest.length <= 350;card.latestFullText.textContent = latest;
     card.error.hidden = !session.error; card.error.textContent = errorMessage(session.error);
     renderTaskRequests(card,session);
-    const controlKey = session.status + ":" + Boolean(session.thread_id) + ":" + policy.mode;
+    const controlKey = session.status + ":" + Boolean(session.thread_id) + ":" + policy.mode + ":" + Boolean(denied);
     if (card.controlKey !== controlKey) {
       card.controlKey = controlKey; card.actions.replaceChildren();
       const detail = el("a", "button", "任务详情 · 日志 ↗");
@@ -961,20 +977,44 @@
       if (activeTasks.has(session.status) || session.status === "prepared") {
         if (session.status !== "interrupting") card.actions.append(taskButton(session.status === "prepared" ? "取消待启动任务" : "中断执行",session,"interrupt"));
       }
-      if (!activeTasks.has(session.status)) {
+      if (!activeTasks.has(session.status)||denied) {
         const start = taskButton(monitor ? "仅监控" : session.thread_id ? "继续跟进" : "检查连接并启动",session,"start");
         start.disabled = monitor; card.actions.append(start);
       }
     }
     card.text.disabled = monitor;
-    card.send.disabled = monitor || approvalEnding || card.messageBusy || waiting || ["prepared","starting","interrupting"].includes(session.status);
-    card.send.title = monitor ? "已有 PR · 仅监控" : approvalEnding ? "本轮正在结束；状态更新后可发送修订要求，继续原任务。远端 tmux 不会自动停止。" : "";
+    card.send.disabled = monitor || approvalEnding || card.messageBusy || waiting || claudeRunning || ["prepared","starting","interrupting"].includes(session.status);
+    card.send.title = monitor ? "已有 PR · 仅监控" : claudeRunning ? "Claude 执行中；请等待本轮结束或先中断再跟进。" : denied ? "请在任务详情核对 Claude 工具规则，随后继续原任务。" : approvalEnding ? "本轮正在结束；状态更新后可发送修订要求，继续原任务。远端 tmux 不会自动停止。" : "";
+  }
+  function renderObservedTasks(tasks,branch) {
+    const box=byId("observed-task-list");box.replaceChildren();
+    const rows=tasks.filter(task=>task.branch===branch&&!task.historical&&(readOnly||task.source==="codex_native"));
+    for(const task of rows){
+      const card=el("article","task-card"),label=machineLabels[task.backend]||task.backend;
+      card.append(el("h3","",label+" · "+(taskLabels[task.status]||"状态未知")),el("p","task-note",task.source==="codex_native"?"Codex 原生子会话 · 只读跟踪":(task.provider==="claude"?"Claude":"Codex")+" 看板任务 · 只读状态"));
+      if(task.updated_at)card.append(el("p","task-note","任务更新 "+dateText(task.updated_at)));
+      if(task.stale)card.append(el("p","task-note","等待新的会话状态"));
+      if(!readOnly){
+        card.append(el("p","task-progress",task.progress_summary||task.last_agent_message||"等待任务进展记录"));
+        if(task.plan?.length){const list=el("ol","task-plan");for(const step of task.plan)list.append(el("li","",planStepText(step.status)+" · "+(step.step||step.text||"")));card.append(list);}
+      }
+      box.append(card);
+    }
   }
   async function loadTasks() {
-    if (!sessionsEnabled || tasksFetching) return;
+    if ((!sessionsEnabled&&!nativeTasksEnabled) || tasksFetching) return;
     tasksFetching = true;
     try {
-      const response = await fetch(appUrl("api/codex-sessions?view=cards"),{cache:"no-store"});
+      const [response,observedResponse]=await Promise.all([
+        sessionsEnabled?fetch(appUrl("api/codex-sessions?view=cards"),{cache:"no-store"}):null,
+        nativeTasksEnabled?fetch(appUrl("api/adaptation-tasks"),{cache:"no-store"}):null
+      ]);
+      const observed=observedResponse?await observedResponse.json().catch(()=>({})):{};
+      if(observedResponse&&!observedResponse.ok)throw new Error(observed.error||"无法读取子任务状态");
+      const branch = byId("branch-select").value || initialBranch;
+      const tasks=Array.isArray(observed.tasks)?observed.tasks:[];
+      renderObservedTasks(tasks,branch);
+      if(!sessionsEnabled)return;
       const data = await response.json().catch(() => ({}));
       if (!response.ok) throw new Error(errorMessage(data.error) || "无法读取任务");
       const policies = data.backend_task_policies && typeof data.backend_task_policies === "object" ? data.backend_task_policies : {};
@@ -985,13 +1025,13 @@
       const taskChanged = identities(nextSessions) !== identities(taskSessions);
       taskSessions = nextSessions;
       renderMachineProfiles(data.machine_profiles);
-      const branch = byId("branch-select").value || initialBranch;
       if ((policyChanged || taskChanged) && latestBranchSnapshot?.branch === branch) render(latestBranchSnapshot);
-      const sessions = prioritizedSessions(taskSessions.filter(session => session.branch === branch));
+      const replaced=new Set(tasks.filter(task=>task.source==="codex_native"&&task.branch===branch).map(task=>task.backend));
+      const sessions = prioritizedSessions(taskSessions.filter(session => session.branch === branch&&(session.provider==="claude"||!replaced.has(session.backend))));
       const box = byId("task-list"), ids = new Set(sessions.map(session => session.id));
       for (const [id,card] of taskCards) if (!ids.has(id)) { card.root.remove(); taskCards.delete(id); }
       box.querySelectorAll(".empty").forEach(node => node.remove());
-      if (!sessions.length) box.append(el("div", "empty", "此分支尚无适配任务。配置验证机器后，可启动 agent 并在这里跟进。"));
+      if (!sessions.length&&!replaced.size) box.append(el("div", "empty", "此分支尚无适配任务。配置验证机器后，可启动 agent 并在这里跟进。"));
       for (const session of sessions) {
         let card = taskCards.get(session.id);
         if (!card) { card = newTaskCard(session); taskCards.set(session.id,card); }
@@ -1038,6 +1078,7 @@
         }
         readOnly = capabilities.read_only === true;
         sessionsEnabled = !readOnly && capabilities.sessions === true;
+        nativeTasksEnabled = capabilities.adaptation_tasks === true;
         byId("refresh-remote").hidden = capabilities.refresh === false;
         if (!requestedBranch && capabilities.default_branch) initialBranch = capabilities.default_branch;
       }
@@ -1047,14 +1088,17 @@
       document.querySelectorAll('.toplinks a[data-route="/workflow"], .toplinks a[data-route="/sessions"], .toplinks a[href="/workflow"], .toplinks a[href="/sessions"]').forEach(node => { node.hidden = true; });
       document.querySelector(".footnote").textContent = "团队看板每 15 秒读取采集结果；点击“读取最新状态”可触发一次采集（连续点击在 30 秒内合并）。任务控制、机器配置及原始私有记录由维护者在本机管理。";
     }
-    byId("tasks-panel").hidden = !sessionsEnabled;
+    byId("tasks-panel").hidden = !sessionsEnabled&&!nativeTasksEnabled;
+    byId("new-task-link").hidden = !sessionsEnabled;
+    byId("task-list").hidden = !sessionsEnabled;
+    if(readOnly)byId("tasks-title").nextElementSibling.textContent="原生子会话的状态与更新时间；任务控制由维护者在本机管理。";
     await loadBranch(initialBranch);
     setInterval(() => { if (!document.hidden) loadBranch(byId("branch-select").value || initialBranch); }, 15000);
-    if (sessionsEnabled) setInterval(() => { if (!document.hidden) loadTasks(); }, 3000);
+    if (sessionsEnabled||nativeTasksEnabled) setInterval(() => { if (!document.hidden) loadTasks(); }, 3000);
     document.addEventListener("visibilitychange", () => {
       if (document.hidden) return;
       loadBranch(byId("branch-select").value || initialBranch);
-      if (sessionsEnabled) loadTasks();
+      if (sessionsEnabled||nativeTasksEnabled) loadTasks();
     });
   }
   initialize();

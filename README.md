@@ -1,6 +1,6 @@
 # FL 插件适配工作台：vLLM 与 SGLang
 
-这个目录提供分支适配监控、Codex 升级任务页面和本地编排器。监控面板分别显示 backend 的代码合入、CI 和 adaptation gate 状态；任务页面可按验证机器启动独立 Codex 会话并跟进进展。编排器支持先适配 CUDA 公共层，再让其他 backend 并行运行。页面由本地 HTTP 服务提供，可在 Codex 桌面端的内置 Browser 面板打开。
+这个目录提供分支适配监控、agent 升级任务页面和本地编排器。监控面板分别显示 backend 的代码合入、CI 和 adaptation gate 状态；任务页面可按验证机器启动独立 Codex 或 Claude 会话并跟进进展。编排器支持先适配 CUDA 公共层，再让其他 backend 并行运行。页面由本地 HTTP 服务提供，可在 Codex 桌面端的内置 Browser 面板打开。
 
 
 ## 双仓库进展与任务
@@ -31,6 +31,26 @@ python -B share_server.py --projects-config projects.json --host 127.0.0.1 --por
 ```
 
 共享入口保持脱敏和只读，不创建 Codex 执行器、不访问现有会话代理，也不提供机器、控制接口或原始私有证据。单仓库旧命令仍兼容。
+
+### 原生子会话与历史实验记录
+
+Backend 列表固定 NVIDIA 在第一位，其余按显示名称的英文字母顺序排列。天数智芯统一显示 `iluvatar`；旧配置和证据的内部 `corex` 标识继续兼容。
+
+已经在 Codex 桌面端启动的原生子会话可以通过监控配置中的 `external_tasks` 接入，使用 `id`、`title`、`backend`、`branch`、`thread_id`、`rollout_path` 字段；路径填写本机实际 JSONL 存档。观察器增量读取会话的开始、完成与更新事件，不接管或派发任务。同 backend 和分支的旧看板任务作为历史记录保留，新原生任务优先展示。轮次完成与 Gate 通过分别判定；缺少完整生命周期时显示未知，长时间没有更新时标明等待新状态。局域网仅展示 backend、分支、状态、阶段及更新时间，不返回原始消息、会话 ID、计划或本机路径。看板创建的 Codex / Claude 任务同样通过独立的文件观察器读取已保存状态；共享服务不连接任务执行器或 API 配置。
+
+历史实验元数据放在 `<evidence_dir>/<backend>/records/<record-id>.json`，使用 `schema_version: 1`，填写 `id`、`engine`、`backend`、`branch`、`status`、`pr_number`、`title`、`summary`、`scope`。状态可为 `passed`、`partial`、`failed`、`reference`；已核对的版本可增加 `tested_commit`、`tested_tree` 和 `recorded_at`。原件保存为同目录内的 UTF-8 文件，通过 `archive: {"path": "<relative filename>", "sha256": "<64 hex characters>"}` 引用。
+
+本机优先打开哈希验证成功的原件；文件缺失、越界或哈希不匹配时回退到该 PR 的页面。局域网只提供 PR 链接，不开放原始私有存档。历史实验有独立的“实验验收记录”栏，记录范围和版本不会覆盖当前分支的严格 Gate 判定。
+
+### 选择 Codex 或 Claude
+
+新建任务可选择 `Codex` 或 `Claude`。Codex 延续已有 CLI 登录、会话与代理服务；Claude 使用独立的本机 Claude Code CLI、工作树和会话目录，保留跨仓库的机器占用检查。Claude 默认运行目录为 `runs/<project>/claude-sessions`，不会把 Claude 请求转发给旧 Codex 服务。
+
+在本机 `/sessions` 页配置 Anthropic API key、兼容 Anthropic 的 Base URL、模型、最大轮数和工具规则。API key 使用当前 Windows 用户的 DPAPI 加密后保存在忽略的 `runs/agent-settings` 中；页面只返回是否已配置，密钥不会回填到浏览器。更换 Windows 用户后需要重新配置。Base URL 默认使用 Anthropic 官方接口，自定义接口要求 HTTPS，loopback 调试接口可使用 HTTP。
+
+Claude CLI 必须支持 `--bare`、`--output-format stream-json` 和 `--include-partial-messages`。任务以 print 模式运行，不加载已有宿主配置与 hooks。默认允许读取与文件编辑；需要执行命令时，在本机配置具体的 Bash 工具规则。工具被拒绝后，页面显示等待处理，可以修改规则再继续原任务；不会自动绕过权限。Claude 正在运行时须等待结束或先停止，再发送跟进要求。配置页保存及 CLI 检查不会发起模型调用，实际启动任务才使用 API。
+
+本机的设置与任务控制接口仍受 loopback Host/Origin 检查保护；局域网入口不创建设置存储或 agent 执行器，免密码阅读不会开放新建任务或 API key 配置。
 
 ### SGLang 原始结果归档
 

@@ -100,6 +100,14 @@ paths, machine aliases, private IPs, source task IDs, or commands.
         public["pr"] = {**_fields(pr, {"number", "title", "draft", "state", "merged", "selected_by"}), "url": _public_url(pr.get("url"))} if isinstance(pr, dict) else None
         public["gate"] = _fields(backend.get("gate", {}), GATE_FIELDS)
         public["gate"]["detail"] = "共享视图；验收状态与原始证据分开记录"
+        public["acceptance_records"] = []
+        for record in backend.get("acceptance_records", []):
+            if not isinstance(record, dict):
+                continue
+            item = _fields(record, {"id", "status", "pr_number", "title", "summary", "scope", "recorded_at", "tested_commit", "tested_tree", "tree_matches_head", "source", "archive_available"})
+            item["pr_url"] = _public_url(record.get("pr_url"))
+            item["archive_url"] = None
+            public["acceptance_records"].append(item)
         public["results"] = []
         for row in backend.get("results", [])[:1000]:
             if not isinstance(row, dict):
@@ -223,7 +231,7 @@ class ProjectSnapshotCache:
         from concurrent.futures import ThreadPoolExecutor
         def status(project):
             result = _fields(project.metadata(read_only=True), {"id", "label", "engine"})
-            result.update(status=None, error=None)
+            result.update(status=None, error=None, adaptation_tasks=project.adaptation_tasks(read_only=True))
             try:
                 result["status"] = self.get(project=project.id)
             except Exception:
@@ -407,16 +415,19 @@ def make_server(cache, host="127.0.0.1", port=8765, *, username="viewer", passwo
                     self._send(200, cache.statuses())
                 else:
                     result = _fields(project.metadata(read_only=True), {"id", "label", "engine"})
-                    result.update(status=None, error=None)
+                    result.update(status=None, error=None, adaptation_tasks=project.adaptation_tasks(read_only=True))
                     try:
                         result["status"] = cache.get()
                     except Exception:
                         result["error"] = "Project data is temporarily unavailable"
                     self._send(200, {"projects": [result]})
+            elif path == "/api/adaptation-tasks":
+                self._send(200, {"tasks": project.adaptation_tasks(read_only=True), "error": None})
             elif path == "/api/capabilities":
                 self._send(200, {**CAPABILITIES, "refresh": project.monitor is not None, "default_branch": _scalar(project.default_branch),
                                  "project_id": _scalar(project.id), "label": _scalar(project.label), "multi_project": registry.multi_project,
-                                 "engine": _scalar(project.engine_name), "workflow": False})
+                                 "engine": _scalar(project.engine_name), "workflow": False,
+                                 "adaptation_tasks": project.native_tasks is not None or project.readonly_sessions is not None})
             elif path == "/healthz":
                 self._send(200, {"ok": True, "read_only": True})
             elif path == "/api/branch-status":

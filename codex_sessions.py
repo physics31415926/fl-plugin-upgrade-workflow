@@ -1099,6 +1099,8 @@ done
 
     def create(self, payload):
         """Prepare only; callers explicitly invoke start to begin model work."""
+        if payload.get("provider", "codex") != "codex":
+            raise SessionError("This Codex manager cannot run another agent provider")
         profile = None
         if payload.get("profile_id"):
             profile = self._profiles.get(payload["profile_id"])

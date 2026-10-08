@@ -40,7 +40,7 @@ REF = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._/-]*$")
 REPO = re.compile(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")
 PLATFORM = re.compile(r"^[a-z][a-z0-9_-]{0,63}$")
 CASE_DIR = "tools/adaptation-gate-cases"
-LABELS = {"cuda": "NVIDIA", "ascend": "Ascend", "metax": "MetaX", "corex": "CoreX",
+LABELS = {"cuda": "NVIDIA", "ascend": "Ascend", "metax": "MetaX", "corex": "iluvatar",
           "hygon": "Hygon", "musa": "MUSA", "thead": "THead",
           "enflame": "Enflame", "kunlunxin": "Kunlunxin"}
 
@@ -530,6 +530,34 @@ class BranchMonitor:
                 continue
         return found
 
+    def _acceptance_records(self, backend: str, branch: str, sha: str, pr: dict | None) -> list[dict]:
+        from acceptance_records import AcceptanceRecords
+        store = AcceptanceRecords(self.evidence_dir, self.engine, self.github_repo)
+        records = []
+        current_tree = None
+        for entry in store.entries(backend, branch, pr):
+            record = store.public(entry)
+            if record.get("tested_commit") and record.get("tested_tree"):
+                tested_tree = self._tree(record["tested_commit"])
+                if current_tree is None:
+                    current_tree = self._tree(sha)
+                record["tree_matches_head"] = bool(tested_tree and tested_tree == record["tested_tree"] == current_tree)
+            else:
+                record["tree_matches_head"] = False
+            if record.get("archive_available"):
+                record["archive_url"] = "/api/acceptance-record?" + urlencode({"branch": branch, "backend": backend, "record": record["id"]})
+            records.append(record)
+        return records
+
+    def acceptance_record(self, backend: str, record_id: str, branch: str | None = None) -> dict:
+        from acceptance_records import AcceptanceRecords
+        branch = branch or self.branch
+        self._validate_branch(branch)
+        try:
+            return AcceptanceRecords(self.evidence_dir, self.engine, self.github_repo).read_archive(backend, branch, record_id)
+        except (ValueError, UnicodeError) as exc:
+            raise MonitorError(str(exc)) from None
+
     def _audit_record(self, backend: str, branch: str) -> dict[str, Any] | None:
         path = self.evidence_dir / backend / "acceptance.json"
         if not _inside(path, self.evidence_dir) or not path.is_file():
@@ -778,7 +806,9 @@ class BranchMonitor:
             gate, results = self._gate(backend, branch, sha, cases, manifests)
             backends.append({"id": backend, "label": self.backend_labels.get(backend, LABELS.get(backend, backend)),
                              "ci_enabled": registry.get(self._ci_platform(backend), False), "integration": integration,
-                             "ci": ci, "current_ci": current_ci, "pr": pr, "gate": gate, "results": results})
+                             "ci": ci, "current_ci": current_ci, "pr": pr, "gate": gate, "results": results,
+                             "acceptance_records": self._acceptance_records(backend, branch, sha, pr)})
+        backends.sort(key=lambda item: (item["id"] != "cuda", str(item["label"]).casefold(), item["id"]))
         upstream_version = self._version(sha)
         return {"branch": branch, "branch_ref": ref, "head": sha,
                 "head_url": f"https://github.com/{self.github_repo}/commit/{sha}" if self.github_repo else None,

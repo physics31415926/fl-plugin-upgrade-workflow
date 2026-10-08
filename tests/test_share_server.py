@@ -1,5 +1,6 @@
 import base64
 from contextlib import redirect_stderr, redirect_stdout
+from datetime import datetime, timezone
 from http.client import HTTPConnection, HTTPSConnection
 import io
 import json
@@ -10,7 +11,9 @@ import threading
 import unittest
 from unittest.mock import patch
 
-from share_server import BoundedHTTPServer, SnapshotCache, load_tls_context, main, make_server, sanitize_snapshot
+from native_task_observer import NativeTaskObserver
+from project_registry import ProjectContext, ProjectRegistry
+from share_server import BoundedHTTPServer, ProjectSnapshotCache, SnapshotCache, load_tls_context, main, make_server, sanitize_snapshot
 
 
 # Public explicit_dummy credentials created only for tests; never deploy these.
@@ -251,7 +254,7 @@ class ShareServerTests(unittest.TestCase):
         for path in ("/sessions", "/api/codex-machines", "/api/codex-sessions", "/api/logs"):
             self.assertEqual(self.request(path, tls_context=client_context)[0], 404, path)
         self.assertEqual(self.request("/api/codex-sessions", method="POST", tls_context=client_context)[0], 405)
-        self.assertEqual(self.request("/api/branch-refresh", method="POST", body={}, tls_context=client_context,
+        self.assertEqual(self.request("/api/branch-refresh", method="POST", tls_context=client_context,
                                       extra_headers={"Origin": "https://other.example"})[0], 403)
         self.assertEqual(self.monitor.calls, [("status", None)])
 
@@ -350,6 +353,219 @@ class ShareServerTests(unittest.TestCase):
             self.assertEqual(status, 405)
             self.assertEqual(headers["Allow"], "GET, HEAD")
         self.assertEqual(self.monitor.calls, [("status", None)])
+
+    def test_agent_settings_and_provider_routes_are_absent_from_share(self):
+        self.serve(base_path="/fl/dashboard", password="test-long-password")
+        for prefix in ("", "/fl/dashboard"):
+            for route in ("/api/agent-settings", "/api/agent-providers", "/api/agent-settings?project=vllm"):
+                path = prefix + route
+                with self.subTest(path=path):
+                    self.assertEqual(self.request(path, authorization=self.auth())[0], 404)
+                    status, headers, _ = self.request(path, method="POST", authorization=self.auth(),
+                                                      body={"api_key": "explicit_dummy_unaccepted_key"})
+                    self.assertEqual(status, 405)
+                    self.assertEqual(headers["Allow"], "GET, HEAD")
+        self.assertEqual(self.monitor.calls, [("status", None)])
+
+    def test_share_acceptance_records_link_pr_without_exporting_private_archive(self):
+        source = source_snapshot()
+        pr_url = "https://github.com/flagos-ai/vllm-plugin-FL/pull/487"
+        source["backends"][0]["acceptance_records"] = [{
+            "id": "historical-validation", "status": "accepted", "pr_number": 487,
+            "title": "Historical validation", "summary": "Three model and mode groups accepted",
+            "scope": "15 scenarios; graph mode for the larger model skipped", "source": "pr",
+            "pr_url": pr_url, "archive_available": True,
+            "archive_url": "/api/acceptance-record?backend=cuda&record=private-archive-id",
+            "archive_path": "C:/Users/private-owner/validation.md",
+            "archive_content": "explicit_dummy_private_archive_content",
+            "source_thread": "explicit_dummy_private_thread_id",
+            "provenance": {"path": "/data/private/results"},
+        }, {"id": "untrusted-link", "pr_url": "https://viewer:explicit_dummy_password@github.com/owner/repo"}]
+        self.cache.close()
+        self.monitor.status = lambda branch=None: source
+        self.cache = SnapshotCache(self.monitor, refresh_interval=0)
+        self.serve(password="test-long-password")
+        for path in ("/api/branch-status", "/api/projects-status"):
+            status, _, data = self.request(path, authorization=self.auth())
+            self.assertEqual(status, 200)
+            public = json.loads(data)
+            if path.endswith("projects-status"):
+                public = public["projects"][0]["status"]
+            backend = public["backends"][0]
+            self.assertEqual(backend["gate"]["passed"], 20)
+            records = backend["acceptance_records"]
+            self.assertEqual(records[0]["pr_url"], pr_url)
+            self.assertTrue(records[0]["archive_available"])
+            self.assertIsNone(records[0]["archive_url"])
+            self.assertIsNone(records[1]["pr_url"])
+            for private in (b"private-owner", b"private-archive-id", b"private_thread_id",
+                            b"private_archive_content", b"archive_path", b"archive_content",
+                            b"source_thread", b"provenance", b"explicit_dummy_password"):
+                self.assertNotIn(private, data)
+        self.assertEqual(self.request("/api/acceptance-record?backend=cuda&record=historical-validation",
+                                      authorization=self.auth())[0], 404)
+
+    def test_real_native_tasks_export_only_public_lifecycle_in_both_share_endpoints(self):
+        root = Path(self.temp.name)
+        rollout = root / "explicit_dummy_private_rollout.jsonl"
+        thread_id = "11111111-1111-1111-1111-111111111111"
+        private_message = "explicit_dummy_private_message C:/Users/private-owner/model 192.0.2.4"
+        timestamp = datetime.now(timezone.utc).isoformat()
+        events = [
+            {"type": "session_meta", "payload": {"id": thread_id}},
+            {"timestamp": timestamp, "type": "event_msg", "payload": {"type": "task_started", "turn_id": "dummy-turn"}},
+            {"timestamp": timestamp, "type": "event_msg", "payload": {"type": "item_completed",
+                "item": {"type": "AgentMessage", "phase": "commentary", "content": private_message}}},
+            {"timestamp": timestamp, "type": "response_item", "payload": {"type": "function_call",
+                "name": "functions.update_plan", "arguments": json.dumps({"plan": [
+                    {"step": "Gate explicit_dummy_private_plan", "status": "in_progress"}]})}},
+        ]
+        rollout.write_text("".join(json.dumps(event) + "\n" for event in events), encoding="utf-8")
+        observer = NativeTaskObserver([{"id": "native-thead", "thread_id": thread_id, "backend": "thead",
+                                      "branch": self.monitor.branch, "title": "THead adaptation",
+                                      "rollout_path": str(rollout)}], root)
+        private = observer.snapshot()[0]
+        self.assertEqual(private["progress_summary"], private_message)
+        self.assertEqual(private["thread_id"], thread_id)
+
+        class PrivateLocalOwner:
+            def snapshot(self, **kwargs):
+                raise AssertionError("Shared views must not load local control sessions or agent settings")
+
+        owner = PrivateLocalOwner()
+        project = ProjectContext("vllm", "vLLM-Plugin-FL", default_branch=self.monitor.branch,
+                                 monitor=self.monitor, sessions=owner, native_tasks=observer, agent_settings=owner)
+        registry = ProjectRegistry([project])
+        self.cache.close()
+        self.cache = ProjectSnapshotCache(registry, refresh_interval=0)
+        self.serve(password="test-long-password")
+        for path in ("/api/adaptation-tasks?project=vllm", "/api/projects-status"):
+            status, _, data = self.request(path, authorization=self.auth())
+            self.assertEqual(status, 200)
+            result = json.loads(data)
+            tasks = result["tasks"] if "tasks" in result else result["projects"][0]["adaptation_tasks"]
+            self.assertEqual(len(tasks), 1)
+            self.assertEqual(set(tasks[0]), set(NativeTaskObserver.PUBLIC_FIELDS))
+            self.assertEqual(tasks[0]["status"], "running")
+            self.assertEqual(tasks[0]["stage"], "gate")
+            for forbidden in (thread_id, str(rollout), "private_message", "private-owner", "192.0.2.4",
+                              "private_plan", "progress_summary", "last_agent_message", "thread_id", "controllable"):
+                self.assertNotIn(forbidden, data.decode("utf-8"))
+        for path in ("/api/agent-settings?project=vllm", "/api/agent-providers?project=vllm",
+                     "/api/codex-sessions?project=vllm"):
+            self.assertEqual(self.request(path, authorization=self.auth())[0], 404)
+
+    @staticmethod
+    def write_private_persisted_session(directory, session_id, *, backend, status="running"):
+        directory = Path(directory) / session_id
+        directory.mkdir(parents=True, exist_ok=True)
+        private = "explicit_dummy_private_session_content"
+        value = {"id": session_id, "backend": backend, "branch": "0.4.0-dev", "status": status,
+                 "updated_at": datetime.now(timezone.utc).isoformat(), "goal": private,
+                 "title": private, "error": private, "last_agent_message": private,
+                 "progress_summary": private, "thread_id": "22222222-2222-2222-2222-222222222222",
+                 "worktree": "C:/Users/private-owner/worktree", "remote_workspace": "/data/private/results",
+                 "machine": {"ssh_alias": "private-machine", "identity_file": "C:/private/key.pem"},
+                 "api_key": "explicit_dummy_private_api_key",
+                 "pending_requests": [{"command": private}], "plan": [{"step": private}]}
+        (directory / "session.json").write_text(json.dumps(value), encoding="utf-8")
+        (directory / "events.jsonl").write_text(private + " raw_event_message", encoding="utf-8")
+
+    def test_persisted_codex_and_claude_tasks_are_safe_and_discovered_live_on_share(self):
+        from readonly_session_observer import ReadonlySessionObserver
+        root = Path(self.temp.name)
+        codex_root, claude_root = root / "codex store", root / "claude store"
+        codex_id, claude_id, new_id = "0123456789abcdef" * 2, "fedcba9876543210" * 2, "01234567" * 4
+        self.write_private_persisted_session(codex_root, codex_id, backend="cuda")
+        self.write_private_persisted_session(claude_root, claude_id, backend="ascend", status="waiting_input")
+        readonly = ReadonlySessionObserver([{"provider": "codex", "directory": codex_root},
+                                            {"provider": "claude", "directory": claude_root}])
+        rollout = root / "native.jsonl"
+        native_thread = "11111111-1111-1111-1111-111111111111"
+        rollout.write_text(json.dumps({"type": "session_meta", "payload": {"id": native_thread}}) + "\n",
+                           encoding="utf-8")
+        native = NativeTaskObserver([{"id": "native-thead", "thread_id": native_thread, "backend": "thead",
+                                    "branch": self.monitor.branch, "title": "THead adaptation",
+                                    "rollout_path": str(rollout)}], root)
+
+        class PrivateLocalOwner:
+            def snapshot(self, **kwargs):
+                raise AssertionError("Shared persisted observations must not construct or call task owners/settings")
+
+        owner = PrivateLocalOwner()
+        project = ProjectContext("vllm", "vLLM-Plugin-FL", default_branch=self.monitor.branch,
+                                 monitor=self.monitor, sessions=owner, native_tasks=native,
+                                 agent_settings=owner, readonly_sessions=readonly)
+        self.cache.close()
+        self.cache = ProjectSnapshotCache(ProjectRegistry([project]), refresh_interval=0)
+        self.serve(password="test-long-password")
+
+        def observations(path):
+            status, _, data = self.request(path, authorization=self.auth())
+            self.assertEqual(status, 200)
+            value = json.loads(data)
+            tasks = value["tasks"] if "tasks" in value else value["projects"][0]["adaptation_tasks"]
+            for forbidden in (codex_id, claude_id, new_id, native_thread,
+                              "22222222-2222-2222-2222-222222222222", "private_session_content",
+                              "private_api_key", "private-owner", "private/results", "private-machine",
+                              "key.pem", "raw_event_message", "thread_id", "worktree", "pending_requests"):
+                self.assertNotIn(forbidden, data.decode("utf-8"))
+            native_rows = [row for row in tasks if row["source"] == "codex_native"]
+            self.assertEqual(len(native_rows), 1)
+            self.assertEqual(native_rows[0]["id"], "native-thead")
+            dashboard = [row for row in tasks if row["source"] == "dashboard"]
+            safe_fields = {"id", "backend", "branch", "title", "source", "source_label", "provider",
+                           "status", "stale", "updated_at", "observed_at", "stage", "controllable", "historical"}
+            for row in dashboard:
+                self.assertEqual(set(row), safe_fields)
+                self.assertRegex(row["id"], r"^task-[0-9a-f]{20}$")
+                self.assertFalse(row["controllable"])
+                self.assertFalse(row["historical"])
+            return {(row["provider"], row["backend"]): row for row in dashboard}
+
+        for path in ("/api/adaptation-tasks?project=vllm", "/api/projects-status"):
+            rows = observations(path)
+            self.assertEqual(set(rows), {("codex", "cuda"), ("claude", "ascend")})
+            self.assertEqual(rows[("codex", "cuda")]["status"], "running")
+            self.assertEqual(rows[("claude", "ascend")]["status"], "waiting_input")
+        original_id = rows[("codex", "cuda")]["id"]
+        self.write_private_persisted_session(codex_root, codex_id, backend="cuda", status="failed")
+        self.write_private_persisted_session(claude_root, new_id, backend="metax", status="completed")
+        for path in ("/api/adaptation-tasks?project=vllm", "/api/projects-status"):
+            rows = observations(path)
+            self.assertEqual(set(rows), {("codex", "cuda"), ("claude", "ascend"), ("claude", "metax")})
+            self.assertEqual(rows[("codex", "cuda")]["status"], "failed")
+            self.assertEqual(rows[("codex", "cuda")]["id"], original_id)
+            self.assertEqual(rows[("claude", "metax")]["status"], "completed")
+        for session_id in (codex_id, claude_id, new_id):
+            self.assertEqual(self.request("/api/codex-sessions/" + session_id + "/start", method="POST",
+                                          authorization=self.auth(), body={})[0], 405)
+
+    def test_persisted_only_project_advertises_readonly_task_observations(self):
+        from readonly_session_observer import ReadonlySessionObserver
+        directory = Path(self.temp.name) / "not-created-store"
+        readonly = ReadonlySessionObserver([{"provider": "claude", "directory": directory}])
+        project = ProjectContext("vllm", "vLLM-Plugin-FL", default_branch=self.monitor.branch,
+                                 monitor=self.monitor, readonly_sessions=readonly)
+        self.assertTrue(project.metadata(read_only=True)["adaptation_tasks"])
+        self.cache.close()
+        self.cache = ProjectSnapshotCache(ProjectRegistry([project]), refresh_interval=0)
+        self.serve(password="test-long-password")
+        status, _, data = self.request("/api/capabilities?project=vllm", authorization=self.auth())
+        self.assertEqual(status, 200)
+        capabilities = json.loads(data)
+        self.assertTrue(capabilities["adaptation_tasks"])
+        self.assertFalse(capabilities["sessions"])
+        self.assertTrue(capabilities["read_only"])
+        self.assertEqual(json.loads(self.request("/api/adaptation-tasks?project=vllm",
+                                                 authorization=self.auth())[2])["tasks"], [])
+        self.assertFalse(directory.exists())
+        self.write_private_persisted_session(directory, "d" * 32, backend="ascend", status="completed")
+        tasks = json.loads(self.request("/api/adaptation-tasks?project=vllm", authorization=self.auth())[2])["tasks"]
+        self.assertEqual(len(tasks), 1)
+        self.assertEqual(tasks[0]["provider"], "claude")
+        self.assertEqual(tasks[0]["status"], "completed")
+        self.assertFalse(tasks[0]["controllable"])
 
     def test_prefixed_and_proxy_stripped_gets_return_capabilities(self):
         self.serve(base_path="/fl/dashboard")

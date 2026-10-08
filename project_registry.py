@@ -28,12 +28,39 @@ class ProjectContext:
     monitor_error: str | None = None
     sessions_error: str | None = None
     workflow_error: str | None = None
+    native_tasks: object | None = None
+    native_tasks_error: str | None = None
+    agent_settings: object | None = None
+    readonly_sessions: object | None = None
 
     def metadata(self, *, read_only=False):
         return {"id": self.id, "label": self.label, "engine": self.engine_name,
                 "default_branch": self.default_branch, "github_repo": self.github_repo,
                 "sessions": not read_only and self.sessions is not None,
-                "workflow": not read_only and self.workflow is not None}
+                "workflow": not read_only and self.workflow is not None,
+                "agent_settings": not read_only and self.agent_settings is not None,
+                "adaptation_tasks": self.native_tasks is not None or self.readonly_sessions is not None
+                                    or (not read_only and self.sessions is not None)}
+
+    def adaptation_tasks(self, *, read_only=False, session_rows=None):
+        native = self.native_tasks.snapshot(read_only=read_only) if self.native_tasks is not None else []
+        if read_only:
+            persisted = self.readonly_sessions.snapshot() if self.readonly_sessions is not None else []
+            replacements = {(task.get("backend"), task.get("branch")) for task in native}
+            for task in persisted:
+                task["historical"] = (task.get("provider") == "codex"
+                                      and (task.get("backend"), task.get("branch")) in replacements)
+            return native + [task for task in persisted if not task["historical"]] + [task for task in persisted if task["historical"]]
+        if session_rows is None:
+            session_rows = self.sessions.snapshot(compact=True).get("sessions", []) if self.sessions is not None else []
+        replacements = {(task.get("backend"), task.get("branch")) for task in native}
+        dashboard = [{**session, "source": "dashboard", "source_label": "本机任务服务", "controllable": True,
+                      "historical": session.get("provider", "codex") == "codex" and
+                                    (session.get("backend"), session.get("branch")) in replacements}
+                     for session in session_rows]
+        current = [task for task in dashboard if not task["historical"]]
+        historical = [task for task in dashboard if task["historical"]]
+        return native + current + historical
 
     def status(self):
         result = {"id": self.id, "label": self.label, "engine": self.engine_name,
@@ -50,6 +77,9 @@ class ProjectContext:
                 result["error"] = "; ".join(filter(None, (result["error"], f"Sessions unavailable: {exc}")))
         elif self.sessions_error:
             result["error"] = "; ".join(filter(None, (result["error"], self.sessions_error)))
+        result["adaptation_tasks"] = self.adaptation_tasks(session_rows=result["sessions"])
+        if self.native_tasks_error:
+            result["error"] = "; ".join(filter(None, (result["error"], self.native_tasks_error)))
         return result
 
 
@@ -172,6 +202,8 @@ class RemoteSessionManager:
         return self._request("/api/codex-machines/check", body)
 
     def create(self, body):
+        if body.get("provider", "codex") != "codex":
+            self._fail("This existing Codex owner cannot run another agent provider")
         with self.machine_lock:
             machine = dict(body)
             if body.get("profile_id"):
@@ -229,9 +261,10 @@ class ProjectRegistry:
                 raise ProjectError(f"Duplicate project ID: {project.id}")
             self._by_id[project.id] = project
         self.multi_project = multi_project
-        managers = [project.sessions for project in self.projects if project.sessions is not None]
+        composites = [project.sessions for project in self.projects if project.sessions is not None]
+        managers = [owner for manager in composites for owner in getattr(manager, "managers", [manager])]
         machine_lock = threading.RLock()
-        for manager in managers:
+        for manager in composites + managers:
             manager.machine_lock = machine_lock
             manager.peer_managers = managers
 
@@ -245,7 +278,8 @@ class ProjectRegistry:
 
     @classmethod
     def from_config(cls, path, *, read_only=False, monitor_factory=None,
-                    sessions_factory=None, workflow_factory=None):
+                    sessions_factory=None, workflow_factory=None,
+                    claude_sessions_factory=None, settings_factory=None):
         # Imports are lazy: a public share never imports or creates control sessions.
         if monitor_factory is None:
             from branch_monitor import BranchMonitor
@@ -257,6 +291,15 @@ class ProjectRegistry:
             from flflow import Engine
             workflow_factory = Engine
         path = Path(path).expanduser().resolve()
+        settings_store = None
+        if not read_only:
+            if settings_factory is None:
+                from agent_settings import AgentSettingsStore
+                settings_factory = AgentSettingsStore
+            if claude_sessions_factory is None:
+                from claude_agent import ClaudeSessionManager
+                claude_sessions_factory = ClaudeSessionManager
+            settings_store = settings_factory(path.parent / "runs" / "agent-settings")
         try:
             raw = json.loads(path.read_text(encoding="utf-8"))
         except (OSError, ValueError) as exc:
@@ -297,6 +340,12 @@ class ProjectRegistry:
                         default = f"runs/{project_id}/" + default.split("/")[-1]
                     config[key] = str(cls._path(config_path.parent, config.get(key, default), key))
                     directories.append((project_id, key, Path(config[key])))
+                config["claude_sessions_dir"] = str(cls._path(config_path.parent,
+                    config.get("claude_sessions_dir", f"runs/{project_id}/claude-sessions"), "claude_sessions_dir"))
+                claude_directory, codex_directory = Path(config["claude_sessions_dir"]), Path(config["sessions_dir"])
+                if claude_directory.is_relative_to(codex_directory) or codex_directory.is_relative_to(claude_directory):
+                    raise ProjectError("Claude and Codex session directories must be separate")
+                directories.append((project_id, "claude_sessions_dir", claude_directory))
                 prepared.append((project, config, config_path.parent, workflow_path))
             except (OSError, ValueError, TypeError, AttributeError) as exc:
                 project.monitor_error = f"Project monitor unavailable: {exc}"
@@ -309,16 +358,41 @@ class ProjectRegistry:
         try:
             for project, config, base, workflow_path in prepared:
                 if config is not None:
+                    if config.get("external_tasks"):
+                        try:
+                            from native_task_observer import NativeTaskObserver
+                            project.native_tasks = NativeTaskObserver(config["external_tasks"], base)
+                        except (ValueError, OSError) as exc:
+                            project.native_tasks_error = f"Native task observer unavailable: {exc}"
                     try:
                         project.monitor = monitor_factory(config)
                     except Exception as exc:
                         project.monitor_error = f"Project monitor unavailable: {exc}"
+                    if read_only:
+                        from readonly_session_observer import ReadonlySessionObserver
+                        project.readonly_sessions = ReadonlySessionObserver([
+                            {"provider": "codex", "directory": config["sessions_dir"]},
+                            {"provider": "claude", "directory": config["claude_sessions_dir"]}])
+                    else:
+                        project.agent_settings = settings_store
                     if not read_only and project.monitor is not None:
+                        from composite_sessions import CompositeSessionManager
+                        codex, claude, provider_errors = None, None, {}
                         try:
-                            project.sessions = (RemoteSessionManager(config, base) if "sessions_api_url" in config
-                                                else sessions_factory(config, base))
-                        except Exception as exc:
-                            project.sessions_error = f"Project sessions unavailable: {exc}"
+                            codex = (RemoteSessionManager(config, base) if "sessions_api_url" in config
+                                     else sessions_factory(config, base))
+                        except Exception:
+                            provider_errors["codex"] = "The Codex session owner is unavailable"
+                        claude_config = {key: value for key, value in config.items() if key != "sessions_api_url"}
+                        claude_config["sessions_dir"] = config["claude_sessions_dir"]
+                        try:
+                            claude = claude_sessions_factory(claude_config, base, settings_store=settings_store)
+                        except Exception:
+                            provider_errors["claude"] = "The Claude session owner is unavailable"
+                        if codex is not None or claude is not None:
+                            project.sessions = CompositeSessionManager(codex, claude, settings_store, errors=provider_errors)
+                        else:
+                            project.sessions_error = "Project agent session providers are unavailable"
                 if workflow_path is not None and not read_only:
                     try:
                         project.workflow = workflow_factory(workflow_path)

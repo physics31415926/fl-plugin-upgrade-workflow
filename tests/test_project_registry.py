@@ -140,7 +140,8 @@ class ProjectRegistryTests(unittest.TestCase):
         self.assertEqual(vllm.sessions.evidence_dir, vllm.monitor.evidence_dir)
         self.assertNotEqual(vllm.sessions.evidence_dir, sglang.sessions.evidence_dir)
         self.assertIs(vllm.sessions.machine_lock, sglang.sessions.machine_lock)
-        self.assertEqual(vllm.sessions.peer_managers, [vllm.sessions, sglang.sessions])
+        self.assertEqual(vllm.sessions.peer_managers, [vllm.sessions.codex, vllm.sessions.claude,
+                                                     sglang.sessions.codex, sglang.sessions.claude])
         self.assertEqual(sglang.monitor.config["repo"], str(self.root / "repos/sglang"))
 
     def test_invalid_ids_and_overlapping_runtime_paths_are_rejected(self):
@@ -173,7 +174,7 @@ class ProjectRegistryTests(unittest.TestCase):
         self.assertEqual(self.request("/api/branch-status?project=sglang")[1]["engine"], "sglang")
         self.assertEqual(self.request("/api/codex-sessions?project=sglang&view=cards")[1]["sessions"][0]["engine"], "sglang")
         self.assertEqual(self.request("/api/codex-sessions?project=sglang", body={"start": True})[1]["engine"], "sglang")
-        self.assertFalse(any(call[0] == "create" for call in self.registry.projects[0].sessions.calls))
+        self.assertFalse(any(call[0] == "create" for call in self.registry.projects[0].sessions.codex.calls))
         self.assertEqual(self.request("/api/codex-sessions/" + "1" * 32 + "/events?project=sglang&limit=1")[1]["engine"], "sglang")
         self.assertEqual(self.request("/api/branch-refresh?project=sglang", body={})[1]["engine"], "sglang")
         self.assertFalse(any(call[0] == "refresh" for call in self.registry.projects[0].monitor.calls))
@@ -187,7 +188,7 @@ class ProjectRegistryTests(unittest.TestCase):
         for query in ("project=unknown", "project=", "project=vllm&project=sglang"):
             self.assertEqual(self.request("/api/branch-status?" + query)[0], 400)
             self.assertEqual(self.request("/api/codex-sessions?" + query, body={})[0], 400)
-        self.assertFalse(any(call[0] == "create" for project in self.registry.projects for call in project.sessions.calls))
+        self.assertFalse(any(call[0] == "create" for project in self.registry.projects for call in project.sessions.codex.calls))
 
     def test_projects_overview_returns_compact_session_rows_and_capabilities(self):
         self.load()
@@ -204,11 +205,81 @@ class ProjectRegistryTests(unittest.TestCase):
         self.assertEqual(capabilities["default_branch"], "adapt-sglang")
         self.assertFalse(capabilities["workflow"])
 
-    def test_configured_existing_owner_is_proxied_without_constructing_local_manager(self):
+    def configure_native_task(self):
+        thread = "11111111-1111-1111-1111-111111111111"
+        now = "2026-01-02T12:00:00+00:00"
+        rollout = self.root / "native.jsonl"
+        events = [{"type": "session_meta", "payload": {"id": thread}},
+                  {"timestamp": now, "type": "event_msg", "payload": {"type": "task_started", "turn_id": "a"}},
+                  {"timestamp": now, "type": "event_msg", "payload": {"type": "item_completed", "item": {
+                      "type": "AgentMessage", "phase": "commentary", "content": "private native summary"}}}]
+        rollout.write_text("\n".join(json.dumps(event) for event in events) + "\n", encoding="utf-8")
+        self.monitors["vllm"]["external_tasks"] = [{"id": "native-thead", "backend": "thead", "branch": "adapt-vllm",
+            "title": "THead adaptation", "thread_id": thread, "rollout_path": "native.jsonl"}]
+        return thread
+
+    def test_native_task_api_is_separate_from_control_session_api(self):
+        thread = self.configure_native_task()
+        self.load()
+        self.serve()
+        rows = self.request("/api/adaptation-tasks?project=vllm")[1]["tasks"]
+        self.assertEqual(rows[0]["source"], "codex_native")
+        self.assertEqual(rows[0]["thread_id"], thread)
+        self.assertFalse(rows[0]["controllable"])
+        self.assertEqual(self.request("/api/codex-sessions?project=vllm")[1]["sessions"][0]["id"], "1" * 32)
+        self.assertEqual(self.request("/api/codex-sessions/native-thead/start?project=vllm", body={})[0], 400)
+        self.assertFalse(any(call[0] == "start" for call in self.registry.projects[0].sessions.codex.calls))
+        self.assertEqual(self.request("/api/projects-status")[1]["projects"][0]["adaptation_tasks"][0]["source"], "codex_native")
+        self.assertTrue(self.request("/api/projects")[1]["projects"][0]["adaptation_tasks"])
+
+    def test_readonly_native_observation_never_constructs_control_manager_or_exposes_private_fields(self):
+        thread = self.configure_native_task()
+        factory = Mock(side_effect=AssertionError("Must not create sessions"))
+        self.load(read_only=True, sessions_factory=factory)
+        factory.assert_not_called()
+        row = self.registry.projects[0].adaptation_tasks(read_only=True)[0]
+        self.assertEqual(row["status"], "running")
+        self.assertNotIn(thread, json.dumps(row))
+        self.assertNotIn("private", json.dumps(row))
+        self.assertIsNone(self.registry.projects[0].sessions)
+
+    def test_native_observer_invalid_config_does_not_hide_branch_monitor_or_peer(self):
+        self.monitors["vllm"]["external_tasks"] = [{"id": "unsafe"}]
+        self.load()
+        rows = self.registry.statuses()["projects"]
+        self.assertIsNotNone(rows[0]["status"])
+        self.assertIsNotNone(rows[1]["status"])
+        self.assertIn("Native task observer unavailable", rows[0]["error"])
+
+    def test_acceptance_original_is_plain_utf8_text_with_no_cache_and_strict_query(self):
+        self.load()
+        self.registry.projects[0].monitor.acceptance_record = Mock(return_value={"content": "Gate passed\n真实原件", "filename": "result.txt"})
+        self.serve()
+        connection = HTTPConnection("127.0.0.1", self.server.server_port, timeout=3)
+        try:
+            connection.request("GET", "/api/acceptance-record?project=vllm&backend=cuda&record=known&branch=adapt-vllm")
+            response = connection.getresponse()
+            self.assertEqual(response.status, 200)
+            self.assertEqual(response.getheader("Content-Type"), "text/plain; charset=utf-8")
+            self.assertEqual(response.getheader("X-Content-Type-Options"), "nosniff")
+            self.assertEqual(response.getheader("Cache-Control"), "no-store")
+            body = response.read()
+            self.assertEqual(int(response.getheader("Content-Length")), len(body))
+            self.assertEqual(body.decode("utf8"), "Gate passed\n真实原件")
+        finally:
+            connection.close()
+        self.registry.projects[0].monitor.acceptance_record.assert_called_once_with("cuda", "known", branch="adapt-vllm")
+        for suffix in ("&record=duplicate", "&unexpected=1"):
+            self.assertEqual(self.request("/api/acceptance-record?backend=cuda&record=known" + suffix)[0], 400)
+        self.registry.projects[0].monitor.acceptance_record = Mock(side_effect=ValueError("Unknown record"))
+        self.assertEqual(self.request("/api/acceptance-record?backend=cuda&record=unknown")[0], 400)
+
+    def test_existing_codex_owner_is_proxied_with_separate_local_claude_manager(self):
         self.monitors["vllm"]["sessions_api_url"] = "http://127.0.0.1:8765"
         factory = Mock(side_effect=FakeSessions)
         registry = self.load(sessions_factory=factory)
-        self.assertIsInstance(registry.projects[0].sessions, RemoteSessionManager)
+        self.assertIsInstance(registry.projects[0].sessions.codex, RemoteSessionManager)
+        self.assertEqual(registry.projects[0].sessions.claude.root, self.root / "runs/vllm/claude-sessions")
         self.assertEqual(factory.call_count, 1)
         self.assertIs(registry.projects[0].sessions.machine_lock, registry.projects[1].sessions.machine_lock)
         self.assertFalse((self.root / "runs/codex-sessions").exists())

@@ -335,7 +335,7 @@ class FlflowTests(unittest.TestCase):
         class FakeSessions:
             def snapshot(self, **kwargs):
                 snapshot_calls.append(kwargs)
-                row = {"id": "abc", "status": "running", "progress_summary": "Preparing",
+                row = {"id": "a" * 32, "status": "running", "progress_summary": "Preparing",
                        "events": [{"method": "item/outputDelta", "params": {"delta": "x" * 10000}}],
                        "prompt": "initial task instruction"}
                 if kwargs.get("compact"):
@@ -349,7 +349,7 @@ class FlflowTests(unittest.TestCase):
 
             def create(self, payload):
                 calls.append(("create", payload))
-                return {"id": "abc", "status": "prepared"}
+                return {"id": "a" * 32, "status": "prepared"}
 
             def start(self, session_id):
                 calls.append(("start", session_id))
@@ -409,9 +409,9 @@ class FlflowTests(unittest.TestCase):
             self.assertEqual([c[0] for c in calls], ["create"])
             self.assertEqual(request("/api/codex-sessions", {"start": True})[1]["status"], "starting")
             self.assertEqual([c[0] for c in calls], ["create", "create", "start"])
-            self.assertEqual(request("/api/codex-sessions/abc/respond", {
+            self.assertEqual(request("/api/codex-sessions/" + "a" * 32 + "/respond", {
                 "request_id": 7, "response": {"decision": "decline"}})[0], 200)
-            self.assertEqual(calls[-1], ("respond", "abc", 7, {"decision": "decline"}))
+            self.assertEqual(calls[-1], ("respond", "a" * 32, 7, {"decision": "decline"}))
             count = len(calls)
             self.assertEqual(request("/api/codex-sessions", {"start": True}, "http://evil.example")[0], 403)
             self.assertEqual(len(calls), count)
@@ -459,7 +459,8 @@ class FlflowTests(unittest.TestCase):
         paused = wait_for(lambda state: state["status"] == "paused")
         self.assertEqual(paused["platforms"]["nvidia"]["attempts"][0]["commands"][0]["status"], "passed")
         flflow.Engine(self.config_path).request("resume")
-        worker.join(timeout=8)
+        # Resume includes Git preparation and subprocess tests on slower hosts.
+        worker.join(timeout=30)
         self.assertFalse(worker.is_alive())
         self.assertEqual(outcome["status"], "passed")
 

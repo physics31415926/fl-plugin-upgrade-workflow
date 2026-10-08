@@ -4,13 +4,19 @@
   "branch": "0.4.0-dev",
   "github_repo": "flagos-ai/vllm-plugin-FL",
   "evidence_dir": "runs/gate-evidence",
-  "models": ["Qwen3.6-27B", "Qwen3.6-35B-A3B"],
-  "modes": ["eager", "graph"],
+  "models": [
+    "Qwen3.6-27B",
+    "Qwen3.6-35B-A3B"
+  ],
+  "modes": [
+    "eager",
+    "graph"
+  ],
   "backend_labels": {
     "cuda": "NVIDIA",
     "ascend": "Ascend",
     "metax": "MetaX",
-    "corex": "CoreX",
+    "corex": "iluvatar",
     "hygon": "Hygon",
     "musa": "Moore Threads",
     "thead": "THead",
@@ -28,8 +34,12 @@
   },
   "backend_pr_discovery": {
     "corex": {
-      "head_prefixes": ["adapt/iluvatar-corex-"],
-      "title_terms": ["CoreX"]
+      "head_prefixes": [
+        "adapt/iluvatar-corex-"
+      ],
+      "title_terms": [
+        "CoreX"
+      ]
     }
   },
   "merged_commits": {

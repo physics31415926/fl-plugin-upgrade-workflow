@@ -788,6 +788,33 @@ def make_server(engine: Engine | None, host: str, port: int, monitor: object | N
             if target.path == "/api/projects-status":
                 self._json(200, registry.statuses())
                 return
+            if target.path == "/api/agent-settings":
+                if project.agent_settings is None:
+                    self._json(HTTPStatus.SERVICE_UNAVAILABLE, {"error": "Local agent settings are not configured"})
+                    return
+                try:
+                    from composite_sessions import safe_agent_settings
+                    self._json(200, safe_agent_settings(project.agent_settings.snapshot()))
+                except ValueError as exc:
+                    self._json(HTTPStatus.BAD_REQUEST, {"error": str(exc)})
+                except Exception:
+                    self._json(HTTPStatus.INTERNAL_SERVER_ERROR, {"error": "Local agent settings are unavailable"})
+                return
+            if target.path == "/api/agent-providers":
+                if sessions is None:
+                    self._json(HTTPStatus.SERVICE_UNAVAILABLE, {"error": "Agent session providers are not configured"})
+                    return
+                try:
+                    self._json(200, {"providers": sessions.providers()})
+                except Exception:
+                    self._json(HTTPStatus.SERVICE_UNAVAILABLE, {"error": "Local agent providers are unavailable"})
+                return
+            if target.path == "/api/adaptation-tasks":
+                try:
+                    self._json(200, {"tasks": project.adaptation_tasks(), "error": project.native_tasks_error})
+                except Exception:
+                    self._json(HTTPStatus.SERVICE_UNAVAILABLE, {"error": "Adaptation task observations unavailable"})
+                return
             if target.path in ("/api/status", "/api/logs") and engine is None:
                 self._json(HTTPStatus.SERVICE_UNAVAILABLE, {"error": project.workflow_error or "Workflow is not configured for this project"})
                 return
@@ -813,7 +840,8 @@ def make_server(engine: Engine | None, host: str, port: int, monitor: object | N
                 self._json(200, {"read_only": False, "sessions": sessions is not None,
                                  "refresh": monitor is not None, "workflow": engine is not None,
                                  "project_id": project.id, "label": project.label, "multi_project": registry.multi_project,
-                                 "engine": project.engine_name, "default_branch": project.default_branch})
+                                 "engine": project.engine_name, "default_branch": project.default_branch,
+                                 "adaptation_tasks": project.native_tasks is not None or sessions is not None})
                 return
             if target.path in ("/api/codex-sessions", "/api/codex-health"):
                 if sessions is None:
@@ -843,6 +871,36 @@ def make_server(engine: Engine | None, host: str, port: int, monitor: object | N
                     self._json(HTTPStatus.BAD_REQUEST, {"error": str(exc)})
                 except Exception as exc:
                     self._json(HTTPStatus.INTERNAL_SERVER_ERROR, {"error": f"Branch monitor failed: {exc}"})
+                return
+            if target.path == "/api/acceptance-record":
+                if monitor is None:
+                    self._json(HTTPStatus.SERVICE_UNAVAILABLE, {"error": "Branch monitor is not configured"})
+                    return
+                try:
+                    query = parse_qs(target.query, keep_blank_values=True, max_num_fields=10)
+                    if set(query) - {"project", "branch", "backend", "record"} or any(len(values) != 1 for values in query.values()):
+                        raise ValueError("Invalid acceptance record query")
+                    backend, record_id = query.get("backend", [""])[0], query.get("record", [""])[0]
+                    if not backend or not record_id:
+                        raise ValueError("backend and record are required")
+                    result = monitor.acceptance_record(backend, record_id, branch=query.get("branch", [None])[0])
+                    content = result["content"]
+                    if not isinstance(content, str):
+                        raise ValueError("Invalid acceptance record content")
+                    data = content.encode("utf-8")
+                    self.send_response(200)
+                    self.send_header("Content-Type", "text/plain; charset=utf-8")
+                    self.send_header("Content-Length", str(len(data)))
+                    self.send_header("X-Content-Type-Options", "nosniff")
+                    self.send_header("Cache-Control", "no-store")
+                    self.end_headers()
+                    self.wfile.write(data)
+                except (ValueError, MonitorError) as exc:
+                    self._json(HTTPStatus.BAD_REQUEST, {"error": str(exc)})
+                except FileNotFoundError:
+                    self._json(HTTPStatus.NOT_FOUND, {"error": "Acceptance record unavailable"})
+                except Exception:
+                    self._json(HTTPStatus.INTERNAL_SERVER_ERROR, {"error": "Acceptance record unavailable"})
                 return
             if target.path == "/api/branch-evidence":
                 if monitor is None:
@@ -925,7 +983,16 @@ def make_server(engine: Engine | None, host: str, port: int, monitor: object | N
                 body = json.loads(self.rfile.read(length) or b"{}")
                 if not isinstance(body, dict):
                     raise WorkflowError("Request body must be a JSON object")
+                if target == "/api/agent-settings":
+                    if project.agent_settings is None:
+                        self._json(HTTPStatus.SERVICE_UNAVAILABLE, {"error": "Local agent settings are not configured"})
+                        return
+                    from composite_sessions import safe_agent_settings
+                    self._json(200, safe_agent_settings(project.agent_settings.update(body)))
+                    return
                 session_action = re.fullmatch(r"/api/codex-sessions/([A-Za-z0-9_-]+)/(start|message|interrupt|respond)", target)
+                if session_action and not re.fullmatch(r"[0-9a-f]{32}", session_action[1]):
+                    raise WorkflowError("Invalid dashboard session ID; native tasks are observation-only")
                 if target in ("/api/codex-machines", "/api/codex-machines/check", "/api/codex-sessions") or session_action:
                     if sessions is None:
                         self._json(HTTPStatus.SERVICE_UNAVAILABLE, {"error": "Codex sessions are not configured"})
