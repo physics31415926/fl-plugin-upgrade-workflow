@@ -34,3 +34,53 @@ test('SGLang source cases only appear for their own model and runtime mode', () 
   const data={models:['model-a','model-b'],modes:['eager','graph'],cases:[{scenario:'a',models:['model-a'],modes:['eager']},{scenario:'b',models:['model-b'],modes:['eager']} ]};
   const result=context.rows(data,{results:[]});assert.equal(result.find(group=>group.model==='model-a'&&group.mode==='eager').rows.length,1);assert.equal(result.find(group=>group.model==='model-b'&&group.mode==='eager').rows[0].descriptor.scenario,'b');assert.equal(result.find(group=>group.mode==='graph').rows.length,0);
 });
+
+
+function gateDisplayFor(name) {
+  const text=source(name),context={URL,location:{href:'https://example.invalid/dashboard/'}};
+  vm.createContext(context);
+  const implementation=name==='overview.html'
+    ? between(text,'  function appUrl(', '  function badge(')
+    : between(text,'  const labels =', '  const scenarioLabels =')
+      +between(text,'  const isPassed =', '  function prStatusText(')
+      +between(text,'  function effectiveCi(', '  function branchOptions(');
+  vm.runInContext(implementation+'\nglobalThis.gate=effectiveGate;',context);
+  return context.gate;
+}
+for(const page of ['overview.html','index.html']) {
+  test(`${page}: historical passed or partial acceptance displays passed with old or missing raw Gate`, () => {
+    const display=gateDisplayFor(page);
+    for(const acceptanceStatus of ['passed','partial']) {
+      const records=[{status:'reference',source:'pull_request'},{status:'failed'},{status:acceptanceStatus,tested_commit:'historical',scope:'historical subset'}];
+      for(const rawGate of [
+        {status:'passed',latest_commit:'old',tree_matches_head:false,results:[{status:'passed'}]},
+        {status:'missing',passed:0,total:16,results:[]},
+        undefined
+      ]) {
+        const backend={integration:{status:'merged'},acceptance_records:records};
+        if(rawGate)backend.gate=rawGate;
+        const original=JSON.stringify(backend);
+        assert.equal(display(backend,'current'),'passed',`${acceptanceStatus} acceptance, ${rawGate?.status||'no raw Gate'}`);
+        assert.equal(JSON.stringify(backend),original,'display policy must leave raw Gate and per-case evidence unchanged');
+      }
+    }
+  });
+  test(`${page}: PR reference and failed records do not count as passed acceptance`, () => {
+    const display=gateDisplayFor(page);
+    for(const records of [[{status:'reference',source:'pull_request'}],[{status:'failed'}],[{status:'reference'},{status:'failed'}]]) {
+      assert.equal(display({integration:{status:'merged'},gate:{status:'passed',latest_commit:'old'},acceptance_records:records},'current'),'stale');
+      assert.equal(display({gate:{status:'missing'},acceptance_records:records},'current'),'missing');
+      assert.equal(display({gate:{status:'failed'},acceptance_records:records},'current'),'failed');
+    }
+  });
+  test(`${page}: absent acceptance records retain existing stale Gate behavior`, () => {
+    const display=gateDisplayFor(page);
+    for(const records of [undefined,[]]) {
+      const backend={integration:{status:'merged'},gate:{status:'passed',latest_commit:'old',tree_matches_head:false}};
+      if(records)backend.acceptance_records=records;
+      assert.equal(display(backend,'current'),'stale');
+      assert.equal(display({...backend,gate:{status:'passed',latest_commit:'current'}},'current'),'passed');
+      assert.equal(display({...backend,gate:{status:'missing'}},'current'),'missing');
+    }
+  });
+}

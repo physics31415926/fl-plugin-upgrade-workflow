@@ -40,7 +40,7 @@ Backend 列表固定 NVIDIA 在第一位，其余按显示名称的英文字母�
 
 历史实验元数据放在 `<evidence_dir>/<backend>/records/<record-id>.json`，使用 `schema_version: 1`，填写 `id`、`engine`、`backend`、`branch`、`status`、`pr_number`、`title`、`summary`、`scope`。状态可为 `passed`、`partial`、`failed`、`reference`；已核对的版本可增加 `tested_commit`、`tested_tree` 和 `recorded_at`。原件保存为同目录内的 UTF-8 文件，通过 `archive: {"path": "<relative filename>", "sha256": "<64 hex characters>"}` 引用。
 
-本机优先打开哈希验证成功的原件；文件缺失、越界或哈希不匹配时回退到该 PR 的页面。局域网只提供 PR 链接，不开放原始私有存档。历史实验有独立的“实验验收记录”栏，记录范围和版本不会覆盖当前分支的严格 Gate 判定。
+本机优先打开哈希验证成功的原件；文件缺失、越界或哈希不匹配时回退到该 PR 的页面。局域网只提供 PR 链接，不开放原始私有存档。历史实验有独立的“实验验收记录”栏。有 `passed` 或 `partial` 验收记录的平台在“当前 Gate”显示通过；原始 Gate 状态与逐请求结果仍保留，测试范围和版本可在详情中核对。只有 PR 链接而没有验收记录的 `reference` 条目不会自动标注通过。
 
 ### 选择 Codex 或 Claude
 

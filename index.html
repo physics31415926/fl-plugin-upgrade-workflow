@@ -231,7 +231,7 @@
       <div class="stat"><span class="stat-label">当前分支 Gate</span><strong class="stat-value" id="gate-count">—</strong><div class="stat-note">逐项结果或已核验的验收记录</div></div>
       <div class="stat"><span class="stat-label">Gate case 覆盖</span><strong class="stat-value" id="case-count">—</strong><div class="stat-note">目标分支上的场景</div></div>
     </div>
-    <div class="guidance"><span class="symbol" aria-hidden="true">ⓘ</span><span>顶部汇总已合入平台的适配 CI。历史验收只有在代码树与当前分支相同、用例清单一致时才计入；“验收记录”会保留原始运行和对话来源。最近一次分支工作流见下方记录。</span></div>
+    <div class="guidance"><span class="symbol" aria-hidden="true">ⓘ</span><span>顶部汇总已合入平台的适配 CI。已有验收记录的平台在 Gate 栏标注通过；原始场景结果、测试版本与覆盖范围保留在展开详情。最近一次分支工作流见下方记录。</span></div>
     <details class="ci-history">
       <summary>最近一次分支 CI 记录</summary>
       <p>该次工作流结论：<strong id="branch-ci">—</strong> <a id="branch-ci-link" hidden target="_blank" rel="noopener noreferrer">查看运行 ↗</a></p>
@@ -459,7 +459,11 @@
     if (status === "passed" && ci.scope === "branch" && ci.commit && head && ci.commit !== head) return "stale";
     return status;
   }
+  function hasAcceptanceRecord(backend) {
+    return Array.isArray(backend.acceptance_records) && backend.acceptance_records.some(record => ["passed", "partial"].includes(record?.status));
+  }
   function effectiveGate(backend, head) {
+    if (hasAcceptanceRecord(backend)) return "passed";
     const gate = backend.gate || {};
     const status = normalized(gate.status);
     if (isPassed(status) && !gate.tree_matches_head && backend.integration && backend.integration.status === "merged" &&
@@ -617,7 +621,7 @@
     for (const [label, status, text] of [
       ["代码合入", mergeStatus, integrationText(mergeStatus)],
       ["适配 CI", ciStatus, !backend.ci_enabled && (ciStatus === "missing" || ciStatus === "unknown") ? "未接入" : labels[ciStatus]],
-      ["Gate 验收", gateStatus, gateStatus === "passed" ? "验收通过" : gateStatus === "failed" ? "验收失败" : labels[gateStatus]]
+      ["Gate 验收", gateStatus, gateStatus === "passed" ? "通过" : gateStatus === "failed" ? "验收失败" : labels[gateStatus]]
     ]) {
       const cell = el("div");
       cell.append(el("span", "cell-label", label), badge(status, text));
@@ -646,7 +650,7 @@
     const ciScope = ci.scope === "accepted-tree" ? "已验收代码树 · " : ci.scope === "pr" ? "候选 PR · " : "当前分支 · ";
     const ciDetail = ciScope + (ci.detail || labels[ciStatus]) + (ci.commit ? " · " + shortSha(ci.commit) : "");
     meta.append(infoBox("CI 运行", ciDetail, ci.url, "查看运行"));
-    const gateDetail = (gate.evidence_type === "audited_record" ? "历史验收 · " : gate.run_id ? "运行 " + gate.run_id + " · " : "") +
+    const gateDetail = (hasAcceptanceRecord(backend) ? "已按验收记录标注通过 · 原始门禁数据：" : "") + (gate.evidence_type === "audited_record" ? "历史验收 · " : gate.run_id ? "运行 " + gate.run_id + " · " : "") +
       (gate.latest_commit ? shortSha(gate.latest_commit) + " · " : "") +
       (gate.requests_passed == null ? "覆盖 " + gate.requests_total + " 请求，见原始证据来源" :
         Math.max(0, Number(gate.requests_passed) || 0) + "/" + Math.max(0, Number(gate.requests_total) || 0) + " 请求通过") +
