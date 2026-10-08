@@ -63,7 +63,9 @@ class BranchMonitorTests(unittest.TestCase):
         destination.parent.mkdir(parents=True, exist_ok=True)
         destination.write_text(content, encoding="utf-8")
 
-    def _transport(self, url: str) -> dict:
+    def _transport(self, url: str) -> dict | list[dict]:
+        if "/pulls?" in url:
+            return []
         if "/actions/runs?" in url:
             return {"workflow_runs": [{"id": 1, "name": "CI", "head_sha": self.head,
                                        "status": "completed", "conclusion": "failure",
@@ -205,6 +207,147 @@ class BranchMonitorTests(unittest.TestCase):
         self.assertEqual(status["branch_ci"]["status"], "failed")
         self.assertEqual(self._backend(status)["ci"]["status"], "failed")
         self.assertFalse(status["errors"])
+
+    def _adaptation_pr(self, backend, number=901, **changes):
+        value = {"number": number, "state": "open", "merged": False, "draft": True,
+                 "base": {"ref": "0.4.0-dev"}, "head": {"ref": f"codex/backend-{backend}-demo", "sha": "b" * 40},
+                 "title": "Update plugin backend", "html_url": f"https://example.test/pr/{number}"}
+        value.update(changes)
+        return value
+
+    def _discovery_transport(self, open_prs, details=None):
+        calls = []
+        details = details if details is not None else {pr["number"]: pr for pr in open_prs}
+        def transport(url):
+            calls.append(url)
+            if "/pulls?" in url:
+                return open_prs
+            for number, pr in details.items():
+                if url.endswith(f"/pulls/{number}"):
+                    return pr
+            if "/commits/" in url and "/check-runs" in url:
+                return {"check_runs": []}
+            return self._transport(url)
+        return transport, calls
+
+    def test_default_discovery_finds_known_new_backend_drafts_without_selectors(self):
+        candidates = [self._adaptation_pr(backend, number) for backend, number in
+                      (("thead", 901), ("musa", 902), ("hygon", 903))]
+        candidates.append(self._adaptation_pr("unlisted", 904))
+        transport, calls = self._discovery_transport(candidates)
+        config = dict(self.config, backend_labels={"thead": "THead", "musa": "MUSA", "hygon": "Hygon"})
+        monitor = BranchMonitor(config, transport=transport)
+        status = monitor.status()
+        for backend, number in (("thead", 901), ("musa", 902), ("hygon", 903)):
+            row = self._backend(status, backend)
+            self.assertEqual(row["pr"]["number"], number)
+            self.assertEqual(row["pr"]["selected_by"], "discovered")
+            self.assertEqual(row["integration"]["status"], "draft")
+            self.assertEqual(row["gate"]["status"], "missing")
+        self.assertEqual(set(row["id"] for row in status["backends"]), {"cuda", "ascend", "thead", "musa", "hygon"})
+        self.assertEqual(monitor.backend_pr_discovery, {})
+        queries = [url for url in calls if "/pulls?" in url]
+        self.assertEqual(len(queries), 1)
+        self.assertIn("base=0.4.0-dev", queries[0])
+        self.assertFalse(status["errors"])
+
+    def test_default_discovery_can_find_registry_backend_without_label_configuration(self):
+        transport, _ = self._discovery_transport([self._adaptation_pr("ascend")])
+        status = BranchMonitor(self.config, transport=transport).status()
+        self.assertEqual(self._backend(status, "ascend")["pr"]["number"], 901)
+        self.assertFalse(status["errors"])
+
+    def test_default_discovery_rejects_wrong_base_lookalike_title_and_closed_pr(self):
+        candidates = [self._adaptation_pr("thead", 901, base={"ref": "other"}),
+                      self._adaptation_pr("thead", 902, head={"ref": "codex/backend-theadish-demo"}),
+                      self._adaptation_pr("thead", 903, head={"ref": "manual/the-adaptation"}, title="THead backend upgrade"),
+                      self._adaptation_pr("thead", 904, state="closed")]
+        transport, calls = self._discovery_transport(candidates)
+        status = BranchMonitor(dict(self.config, backend_labels={"thead": "THead"}), transport=transport).status()
+        self.assertIsNone(self._backend(status, "thead")["pr"])
+        self.assertEqual(self._backend(status, "thead")["integration"]["status"], "unknown")
+        self.assertFalse(any(url.endswith(f"/pulls/{number}") for url in calls for number in (901, 902, 903, 904)))
+        self.assertFalse(status["errors"])
+        monitor = BranchMonitor(self.config, transport=transport)
+        self.assertIsNone(monitor._pr("thead", "dev/0.5.18", False, [],
+                          [self._adaptation_pr("thead", base={"ref": "exp/0.5.18"})], self.head)[0])
+
+    def test_default_discovery_warns_for_ambiguous_candidates_and_respects_explicit_number(self):
+        candidates = [self._adaptation_pr("thead", 901), self._adaptation_pr("thead", 902)]
+        transport, _ = self._discovery_transport(candidates)
+        config = dict(self.config, backend_labels={"thead": "THead"})
+        status = BranchMonitor(config, transport=transport).status()
+        self.assertIsNone(self._backend(status, "thead")["pr"])
+        self.assertTrue(any("Multiple open thead" in error for error in status["errors"]))
+        config["backend_prs"] = {**config["backend_prs"], "thead": 902}
+        selected = BranchMonitor(config, transport=transport).status()
+        self.assertEqual(self._backend(selected, "thead")["pr"]["number"], 902)
+        self.assertEqual(self._backend(selected, "thead")["pr"]["selected_by"], "configured")
+        self.assertFalse(selected["errors"])
+
+    def test_explicit_discovery_selector_overrides_canonical_defaults(self):
+        custom = self._adaptation_pr("musa", 901, head={"ref": "custom/musa-update", "sha": "b" * 40}, title="MUSA update")
+        transport, _ = self._discovery_transport([custom, self._adaptation_pr("musa", 902)])
+        config = dict(self.config, backend_pr_discovery={"musa": {"head_prefixes": ["custom/musa-"], "title_terms": ["MUSA"]}})
+        status = BranchMonitor(config, transport=transport).status()
+        self.assertEqual(self._backend(status, "musa")["pr"]["number"], 901)
+        self.assertFalse(status["errors"])
+
+    def test_default_discovery_keeps_configured_open_and_current_tree_merged_prs(self):
+        old = self._adaptation_pr("thead", 901, head={"ref": "maintainer/manual-branch", "sha": "b" * 40})
+        candidate = self._adaptation_pr("thead", 902)
+        config = dict(self.config, backend_prs={"cuda": 484, "thead": 901})
+        for merged in (False, True):
+            with self.subTest(merged=merged):
+                details = {901: {**old, "state": "closed" if merged else "open", "merged": merged,
+                                 "merge_commit_sha": self.head if merged else None}, 902: candidate}
+                transport, _ = self._discovery_transport([candidate], details)
+                status = BranchMonitor(config, transport=transport).status()
+                row = self._backend(status, "thead")
+                self.assertEqual(row["pr"]["number"], 901)
+                self.assertEqual(row["pr"]["selected_by"], "configured")
+                self.assertEqual(row["integration"]["status"], "merged" if merged else "draft")
+                self.assertFalse(status["errors"])
+
+    def test_default_discovery_preserves_verified_merged_mapping_without_configured_pr(self):
+        candidate = self._adaptation_pr("thead", 901)
+        transport, _ = self._discovery_transport([candidate])
+        config = dict(self.config, merged_commits={**self.config["merged_commits"], "thead": self.head})
+        status = BranchMonitor(config, transport=transport).status()
+        row = self._backend(status, "thead")
+        self.assertIsNone(row["pr"])
+        self.assertEqual(row["integration"]["status"], "merged")
+        self.assertFalse(status["errors"])
+        config["backend_pr_discovery"] = {"thead": {"head_prefixes": ["codex/backend-thead-"]}}
+        explicit = BranchMonitor(config, transport=transport).status()
+        self.assertEqual(self._backend(explicit, "thead")["pr"]["number"], 901)
+        self.assertEqual(self._backend(explicit, "thead")["integration"]["status"], "draft")
+
+    def test_default_corex_discovery_accepts_only_explicit_iluvatar_alias(self):
+        transport, _ = self._discovery_transport([self._adaptation_pr("iluvatar", 901)])
+        status = BranchMonitor(dict(self.config, backend_labels={"corex": "iluvatar"}), transport=transport).status()
+        self.assertEqual(self._backend(status, "corex")["pr"]["number"], 901)
+        self.assertNotIn("iluvatar", {row["id"] for row in status["backends"]})
+        self.assertFalse(status["errors"])
+
+    def test_default_discovery_failure_is_reported_and_preserves_configured_integration(self):
+        def transport(url):
+            if "/pulls?" in url:
+                raise OSError("offline")
+            return self._transport(url)
+        status = BranchMonitor(self.config, transport=transport).status()
+        self.assertEqual(self._backend(status)["pr"]["number"], 484)
+        self.assertEqual(self._backend(status)["integration"]["status"], "merged")
+        self.assertTrue(any("discovery unavailable" in error for error in status["errors"]))
+
+    def test_discovered_detail_rechecks_branch_and_selector_before_association(self):
+        listed = self._adaptation_pr("thead", 901)
+        for changes in ({"base": {"ref": "other"}}, {"head": {"ref": "codex/backend-musa-demo"}}, {"state": "closed"}):
+            with self.subTest(changes=changes):
+                transport, _ = self._discovery_transport([listed], {901: {**listed, **changes}})
+                status = BranchMonitor(dict(self.config, backend_labels={"thead": "THead"}), transport=transport).status()
+                self.assertIsNone(self._backend(status, "thead")["pr"])
+                self.assertTrue(any("no longer matches" in error for error in status["errors"]))
 
     def _corex_pr(self, number=566, **changes):
         value = {"number": number, "state": "open", "merged": False, "draft": False,

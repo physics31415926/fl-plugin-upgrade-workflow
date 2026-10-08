@@ -72,7 +72,7 @@ python -B <tools>/sglang_evidence.py --repo <clean-candidate> --branch <baseline
 
 监控服务优先通过已登录的 `gh api` 读取 GitHub 状态；若未安装或不可用，则用 GitHub HTTP API（可通过 `GH_TOKEN` 或 `GITHUB_TOKEN` 提高配额）。远端数据缓存 5 分钟；页面每 15 秒读取服务状态，点击“读取最新状态”会触发一次采集并直接显示返回结果。网络故障会明确显示错误，页面保留上次采集时间。
 
-可配置 `backend_pr_discovery`，按目标分支、候选分支前缀和标题词查找替代 PR；关闭的旧 PR 不会掩盖唯一的新候选。如果匹配多个 PR，服务报告歧义并保留明确配置的关联，需维护者指定编号。PR 打开、代码已合入、CI 和 Gate 仍分别判定。
+所有已知 backend 默认自动发现 `codex/backend-<backend>-…` 命名的打开 PR；已知清单来自所选分支的平台注册和显式 backend 配置，不会因为 GitHub 出现其他平台分支就增加平台。`corex` 也接受 `codex/backend-iluvatar-…`。候选必须准确指向当前目标分支，且只能有一个；默认不按标题猜测 backend。已明确配置的打开 PR、当前分支已验证合入的 PR 保持优先，关闭的旧 PR 不会掩盖唯一的新候选。需要自定义命名时可配置 `backend_pr_discovery` 的 `head_prefixes` 和可选 `title_terms`，该 backend 的显式规则覆盖默认规则。如果匹配多个 PR，服务报告歧义并保留明确配置的关联，需维护者指定编号。PR 打开、代码已合入、CI 和 Gate 仍分别判定。
 
 监控清单从**所选分支**的 `.github/configs/platforms.yml` 和 `tools/adaptation-gate-cases/test_*.py` 读取。当前 `0.4.0-dev` 的 gate 包含两个 Qwen3.6 模型、eager/graph 两种模式、每组 5 个 pytest 场景（合计 20 个场景、104 个请求）。代码已合入、CI 成功和 Gate 通过是三个独立状态。直接验收结果由运行清单绑定 backend、实际测试提交、模型、模式和端口，再检查每个 JSON 的逐请求结果。历史验收记录会单独标注来源和接受版本，不会伪装成当前 HEAD 的新一轮测试；本机演示结果也不会计入分支监控。
 

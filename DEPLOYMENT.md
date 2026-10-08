@@ -30,6 +30,8 @@ tmux new-session -d -s flflow-dashboard 'exec python3 -B share_server.py --monit
 tmux capture-pane -t flflow-dashboard -p
 ```
 
+已知 backend 的新适配 PR 使用 `codex/backend-<backend>-…` 分支名即可被自动发现，无需逐次填写 PR 编号；`corex` 另接受 `codex/backend-iluvatar-…`。发现只读取准确目标 base 分支的打开 PR，多个候选会报告歧义，不按标题泛化关联。自定义 `backend_pr_discovery` 会覆盖该 backend 的默认命名规则；手动配置的有效关联和已验证合入结果仍优先。GitHub 查询失败会显示发现错误并保留已有配置，不会被解释为没有 PR。
+
 服务默认定期采集 Git/CI 状态；`--refresh-interval` 设置采集间隔。页面的“读取最新状态”通过同源 JSON 请求触发一次采集并显示新快照；30 秒内重复请求合并，后台和手动采集串行执行。监控状态与进程必须由一个实例管理，持久保存插件仓库和证据目录。
 
 ## 访问入口

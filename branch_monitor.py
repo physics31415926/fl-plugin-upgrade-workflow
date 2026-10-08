@@ -389,6 +389,25 @@ class BranchMonitor:
             errors.append(f"GitHub branch CI unavailable: {exc}")
             return result, []
 
+    def _pr_selector(self, backend: str) -> dict[str, Any] | None:
+        if backend in self.backend_pr_discovery:
+            return self.backend_pr_discovery[backend]
+        if not isinstance(backend, str) or not PLATFORM.fullmatch(backend):
+            return None
+        names = [backend, "iluvatar"] if backend == "corex" else [backend]
+        return {"head_prefixes": [f"codex/backend-{name}-" for name in names]}
+
+    @staticmethod
+    def _matches_pr_selector(pr: dict[str, Any], branch: str, selector: dict[str, Any]) -> bool:
+        base, candidate_head = pr.get("base"), pr.get("head")
+        if (pr.get("state") != "open" or type(pr.get("number")) is not int or pr["number"] <= 0 or
+                not isinstance(base, dict) or base.get("ref") != branch or
+                not isinstance(candidate_head, dict) or not isinstance(candidate_head.get("ref"), str)):
+            return False
+        return (any(candidate_head["ref"].startswith(prefix) for prefix in selector["head_prefixes"]) and
+                (not selector.get("title_terms") or
+                 any(term.casefold() in str(pr.get("title", "")).casefold() for term in selector["title_terms"])))
+
     def _pr(self, backend: str, branch: str, force: bool, errors: list[str],
             open_prs: list[dict[str, Any]] | None = None, head: str | None = None) -> tuple[dict[str, Any] | None, dict[str, Any] | None]:
         value = self.backend_prs.get(backend)
@@ -401,23 +420,30 @@ class BranchMonitor:
                 data = self._api(f"pulls/{number}", force)
             except (OSError, ValueError, MonitorError) as exc:
                 errors.append(f"GitHub PR #{number} unavailable: {exc}")
-        selector = self.backend_pr_discovery.get(backend)
+        selector = self._pr_selector(backend)
         accepted = (data and data.get("merged") and data.get("base", {}).get("ref") == branch and
                     head and self._ancestor(data.get("merge_commit_sha"), head))
-        if selector and open_prs is not None and not accepted:
-            candidates = [pr for pr in open_prs if
-                          any(str(pr.get("head", {}).get("ref", "")).startswith(prefix)
-                              for prefix in selector["head_prefixes"]) and
-                          (not selector.get("title_terms") or
-                           any(term.casefold() in str(pr.get("title", "")).casefold()
-                               for term in selector["title_terms"]))]
+        # An explicitly associated active PR remains authoritative under defaults,
+        # even when its maintainer chose a non-canonical source branch name.
+        configured_open = (backend not in self.backend_pr_discovery and data and
+                           data.get("state") == "open" and data.get("base", {}).get("ref") == branch)
+        mapped_commit = self.merged_commits.get(backend)
+        mapped_merged = (number is None and backend not in self.backend_pr_discovery and
+                         branch == self.branch and head and isinstance(mapped_commit, str) and
+                         self._ancestor(mapped_commit.lower(), head))
+        if selector and open_prs is not None and not accepted and not configured_open and not mapped_merged:
+            candidates = list({pr["number"]: pr for pr in open_prs
+                               if self._matches_pr_selector(pr, branch, selector)}.values())
             configured = next((pr for pr in candidates if pr.get("number") == number), None)
             candidate = configured or (candidates[0] if len(candidates) == 1 else None)
             if candidate and candidate.get("number") != number:
                 try:
                     replacement = self._api(f"pulls/{candidate['number']}", force)
-                    if replacement.get("base", {}).get("ref") == branch:
+                    if (replacement.get("number") == candidate["number"] and
+                            self._matches_pr_selector(replacement, branch, selector)):
                         number, data, selected_by = candidate["number"], replacement, "discovered"
+                    else:
+                        errors.append(f"Discovered {backend} PR no longer matches the target branch or selector")
                 except (KeyError, OSError, ValueError, MonitorError) as exc:
                     errors.append(f"Discovered {backend} PR unavailable: {exc}")
             elif not configured and len(candidates) > 1:
@@ -786,16 +812,17 @@ class BranchMonitor:
         registry = self._registry(sha)
         branch_ci, jobs = self._branch_ci(branch, sha, force, errors)
         manifests = self._manifests()
+        registry_backends = [self._ci_backend_ids.get(platform, platform) for platform in registry]
+        backend_ids = list(dict.fromkeys([*registry_backends, *self.backend_labels, *self.backend_prs,
+                                          *self.merged_commits, *self.backend_pr_discovery]))
         open_prs = None
-        if self.backend_pr_discovery and self.github_repo:
+        if backend_ids and self.github_repo:
             try:
                 open_prs = self._open_prs(branch, force)
             except (OSError, ValueError, MonitorError) as exc:
                 errors.append(f"Backend PR discovery unavailable: {exc}")
         backends = []
-        registry_backends = [self._ci_backend_ids.get(platform, platform) for platform in registry]
-        for backend in dict.fromkeys([*registry_backends, *self.backend_labels, *self.backend_prs,
-                                     *self.merged_commits, *self.backend_pr_discovery]):
+        for backend in backend_ids:
             pr, pr_data = self._pr(backend, branch, force, errors, open_prs, sha)
             integration = self._integration(backend, branch, sha, pr_data)
             ci = self._backend_ci(backend, integration, jobs, branch_ci, pr_data, force, errors)

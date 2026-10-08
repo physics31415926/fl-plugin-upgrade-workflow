@@ -35,10 +35,9 @@
   "backend_pr_discovery": {
     "corex": {
       "head_prefixes": [
+        "codex/backend-corex-",
+        "codex/backend-iluvatar-",
         "adapt/iluvatar-corex-"
-      ],
-      "title_terms": [
-        "CoreX"
       ]
     }
   },

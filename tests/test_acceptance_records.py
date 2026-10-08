@@ -211,6 +211,8 @@ class AcceptanceMonitorIntegrationTests(unittest.TestCase):
         self.requests.append(url)
         if "/actions/runs?" in url:
             return {"workflow_runs": []}
+        if "/pulls?" in url:
+            return []
         if "/pulls/487" in url:
             return {"number": 487, "state": "open", "draft": False, "merged": False,
                     "base": {"ref": BRANCH}, "head": {"sha": self.head},
