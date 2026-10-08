@@ -172,7 +172,7 @@ python flflow.py serve --config workflow.json --host 127.0.0.1 --port 8765
 
 本地控制接口只绑定 loopback。若以后通过反向代理在共享服务器提供控制台，应由代理提供认证和 HTTPS；不要把此服务直接暴露到公网。
 
-团队只查看进展时，可部署独立的 `share_server.py`。它提供经过脱敏的监控数据，并关闭任务控制和原始私有数据接口。部署与访问入口配置见 [DEPLOYMENT.md](DEPLOYMENT.md)。
+团队只查看进展时，可部署独立的 `share_server.py`。它提供经过脱敏的监控数据，并关闭任务控制和原始私有数据接口。局域网可使用 `--anonymous-lan` 免登录阅读，仍保留 HTTPS 与后端只读限制；本机完整控制台使用独立的 loopback 入口。部署与访问入口配置见 [DEPLOYMENT.md](DEPLOYMENT.md)。
 
 ## 长任务运行与异常恢复
 

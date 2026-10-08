@@ -1,5 +1,5 @@
 import base64
-from contextlib import redirect_stderr
+from contextlib import redirect_stderr, redirect_stdout
 from http.client import HTTPConnection, HTTPSConnection
 import io
 import json
@@ -10,7 +10,7 @@ import threading
 import unittest
 from unittest.mock import patch
 
-from share_server import SnapshotCache, load_tls_context, main, make_server, sanitize_snapshot
+from share_server import BoundedHTTPServer, SnapshotCache, load_tls_context, main, make_server, sanitize_snapshot
 
 
 # Public explicit_dummy credentials created only for tests; never deploy these.
@@ -128,6 +128,40 @@ class TLSConfigurationTests(unittest.TestCase):
                     cache.assert_not_called()
 
 
+    def test_anonymous_cli_rejects_invalid_listener_before_cache_start(self):
+        context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+        cases = (("0.0.0.0", context, []), ("8.8.8.8", context, []),
+                 ("127.0.0.1", context, []), ("dashboard.internal", context, []),
+                 ("192.168.201.96", None, []), ("192.168.201.96", context, ["--trusted-ingress"]))
+        for host, tls_context, flags in cases:
+            with self.subTest(host=host, flags=flags, tls=bool(tls_context)), \
+                    patch("share_server.load_tls_context", return_value=tls_context), \
+                    patch("share_server.ProjectRegistry.from_config") as registry, \
+                    patch("share_server.ProjectSnapshotCache") as cache, redirect_stderr(io.StringIO()):
+                with self.assertRaises(SystemExit) as raised:
+                    main(["--projects-config", "unused.json", "--anonymous-lan", "--host", host, *flags])
+                self.assertEqual(raised.exception.code, 2)
+                registry.assert_not_called()
+                cache.assert_not_called()
+
+    def test_anonymous_cli_ignores_inherited_password_environment(self):
+        context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+        with patch.dict("os.environ", {"FLFLOW_SHARE_PASSWORD": "explicit_dummy inherited password"}), \
+                patch("share_server.load_tls_context", return_value=context), \
+                patch("share_server.ProjectRegistry.from_config") as registry, \
+                patch("share_server.ProjectSnapshotCache") as cache, \
+                patch("share_server.make_server") as factory, redirect_stdout(io.StringIO()):
+            main(["--projects-config", "unused.json", "--anonymous-lan", "--host", "192.168.201.96",
+                  "--tls-cert", "dummy-cert.pem", "--tls-key", "dummy-key.pem"])
+            registry.assert_called_once_with(Path("unused.json"), read_only=True)
+            self.assertIsNone(factory.call_args.kwargs["password"])
+            self.assertTrue(factory.call_args.kwargs["anonymous_lan"])
+            self.assertFalse(factory.call_args.kwargs["trusted_ingress"])
+            self.assertIs(factory.call_args.kwargs["tls_context"], context)
+            factory.return_value.server_close.assert_called_once()
+            cache.return_value.close.assert_called_once()
+
+
 class ShareServerTests(unittest.TestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
@@ -146,8 +180,8 @@ class ShareServerTests(unittest.TestCase):
         self.cache.close()
         self.temp.cleanup()
 
-    def serve(self, **kwargs):
-        self.server = make_server(self.cache, "127.0.0.1", 0, index_path=self.index, **kwargs)
+    def serve(self, host="127.0.0.1", **kwargs):
+        self.server = make_server(self.cache, host, 0, index_path=self.index, **kwargs)
         self.worker = threading.Thread(target=self.server.serve_forever, daemon=True)
         self.worker.start()
 
@@ -172,6 +206,54 @@ class ShareServerTests(unittest.TestCase):
     @staticmethod
     def auth(password="test-long-password", username="viewer"):
         return "Basic " + base64.b64encode(f"{username}:{password}".encode()).decode()
+
+    def test_anonymous_factory_rejects_non_rfc1918_no_tls_and_conflicting_auth(self):
+        context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+        with patch("share_server.BoundedHTTPServer") as factory:
+            for host in ("0.0.0.0", "127.0.0.1", "8.8.8.8", "100.64.0.1", "172.15.0.1", "172.32.0.1",
+                         "192.169.0.1", "::1", "fd00::1", "dashboard.internal"):
+                with self.subTest(host=host), self.assertRaisesRegex(ValueError, "RFC1918"):
+                    make_server(self.cache, host, 0, index_path=self.index, anonymous_lan=True, tls_context=context)
+            with self.assertRaisesRegex(ValueError, "requires HTTPS"):
+                make_server(self.cache, "192.168.201.96", 0, index_path=self.index, anonymous_lan=True)
+            with self.assertRaisesRegex(ValueError, "cannot be combined with a password"):
+                make_server(self.cache, "192.168.201.96", 0, index_path=self.index, anonymous_lan=True,
+                            tls_context=context, password="test-long-password")
+            with self.assertRaisesRegex(ValueError, "cannot be combined with --trusted-ingress"):
+                make_server(self.cache, "192.168.201.96", 0, index_path=self.index, anonymous_lan=True,
+                            tls_context=context, trusted_ingress=True)
+            factory.assert_not_called()
+
+    def test_anonymous_rfc1918_https_requires_no_auth_but_preserves_read_only_routes(self):
+        cert_path = Path(self.temp.name) / "explicit_dummy-cert.pem"
+        key_path = Path(self.temp.name) / "explicit_dummy-key.pem"
+        cert_path.write_text(EXPLICIT_DUMMY_TLS_CERT, encoding="ascii")
+        key_path.write_text(EXPLICIT_DUMMY_TLS_KEY, encoding="ascii")
+        context = load_tls_context(cert_path, key_path)
+        # Keep the actual TLS transport portable to CI without a private interface.
+        def loopback_transport(address, handler):
+            return BoundedHTTPServer(("127.0.0.1", address[1]), handler)
+        with patch("share_server.BoundedHTTPServer", side_effect=loopback_transport) as factory:
+            for host in ("10.0.0.1", "172.16.0.1", "172.31.255.254"):
+                server = make_server(self.cache, host, 0, index_path=self.index,
+                                     anonymous_lan=True, tls_context=context)
+                server.server_close()
+            self.serve(host="192.168.201.96", anonymous_lan=True, tls_context=context)
+            self.assertEqual(factory.call_args.args[0], ("192.168.201.96", 0))
+        client_context = ssl.create_default_context(cafile=str(cert_path))
+        for path in ("/", "/healthz", "/api/capabilities", "/api/branch-status"):
+            status, headers, _ = self.request(path, tls_context=client_context)
+            self.assertEqual(status, 200, path)
+            self.assertNotIn("WWW-Authenticate", headers)
+        capabilities = json.loads(self.request("/api/capabilities", tls_context=client_context)[2])
+        self.assertTrue(capabilities["read_only"])
+        self.assertFalse(capabilities["sessions"])
+        for path in ("/sessions", "/api/codex-machines", "/api/codex-sessions", "/api/logs"):
+            self.assertEqual(self.request(path, tls_context=client_context)[0], 404, path)
+        self.assertEqual(self.request("/api/codex-sessions", method="POST", tls_context=client_context)[0], 405)
+        self.assertEqual(self.request("/api/branch-refresh", method="POST", body={}, tls_context=client_context,
+                                      extra_headers={"Origin": "https://other.example"})[0], 403)
+        self.assertEqual(self.monitor.calls, [("status", None)])
 
     def test_direct_https_handshake_authentication_and_read_only_routes(self):
         cert_path = Path(self.temp.name) / "explicit_dummy-cert.pem"

@@ -3,7 +3,8 @@
 
 Non-loopback HTTP requires Basic auth or --trusted-ingress. The latter means
 authentication/TLS is enforced by a trusted reverse proxy or private ingress.
-Set the password in an environment variable; never put it in a config or URL.
+Explicit --anonymous-lan permits direct HTTPS on a specific RFC1918 IPv4 address.
+Set an authentication password in an environment variable, never a config or URL.
 """
 from __future__ import annotations
 
@@ -261,6 +262,24 @@ def load_tls_context(cert_path=None, key_path=None):
     return context
 
 
+def _validate_anonymous_lan(host, *, password=None, tls_context=None, trusted_ingress=False):
+    if password is not None:
+        raise ValueError("--anonymous-lan cannot be combined with a password")
+    if trusted_ingress:
+        raise ValueError("--anonymous-lan cannot be combined with --trusted-ingress")
+    try:
+        address = ipaddress.IPv4Address(host) if isinstance(host, str) else None
+    except ipaddress.AddressValueError:
+        address = None
+    private_networks = (ipaddress.IPv4Network("10.0.0.0/8"),
+                        ipaddress.IPv4Network("172.16.0.0/12"),
+                        ipaddress.IPv4Network("192.168.0.0/16"))
+    if address is None or not any(address in network for network in private_networks):
+        raise ValueError("--anonymous-lan requires a specific RFC1918 IPv4 address")
+    if tls_context is None:
+        raise ValueError("--anonymous-lan requires HTTPS with --tls-cert and --tls-key")
+
+
 class BoundedHTTPServer(ThreadingHTTPServer):
     daemon_threads = True
     request_queue_size = 16
@@ -285,12 +304,14 @@ class BoundedHTTPServer(ThreadingHTTPServer):
 
 
 def make_server(cache, host="127.0.0.1", port=8765, *, username="viewer", password=None,
-                trusted_ingress=False, base_path="", index_path=None, tls_context=None):
+                trusted_ingress=False, base_path="", index_path=None, tls_context=None, anonymous_lan=False):
     if password is not None and (not isinstance(password, str) or not password or len(password.encode("utf-8")) > 1024 or any(c in password for c in "\r\n\x00")):
         raise ValueError("Password must be nonempty, at most 1024 UTF-8 bytes, and contain no control newline")
     if not isinstance(username, str) or not username or len(username.encode("utf-8")) > 128 or any(c in username for c in ":\r\n\x00"):
         raise ValueError("Invalid Basic auth username")
-    if not _loopback(host) and password is None and not trusted_ingress:
+    if anonymous_lan:
+        _validate_anonymous_lan(host, password=password, tls_context=tls_context, trusted_ingress=trusted_ingress)
+    elif not _loopback(host) and password is None and not trusted_ingress:
         raise ValueError("Non-loopback binding requires an environment password or --trusted-ingress with external ingress authentication")
     prefix = "/" + base_path.strip("/") if base_path.strip("/") else ""
     if prefix and not re.fullmatch(r"(?:/[A-Za-z0-9_-]+)+", prefix):
@@ -486,6 +507,7 @@ def main(argv=None):
     parser.add_argument("--username", default="viewer")
     parser.add_argument("--password-env", default="FLFLOW_SHARE_PASSWORD")
     parser.add_argument("--trusted-ingress", action="store_true", help="Trust a private/reverse-proxy ingress that provides access control and TLS")
+    parser.add_argument("--anonymous-lan", action="store_true", help="Serve without login only on a specific RFC1918 IPv4 address using direct HTTPS")
     parser.add_argument("--base-path", default="")
     parser.add_argument("--tls-cert", type=Path, help="PEM certificate chain for direct HTTPS")
     parser.add_argument("--tls-key", type=Path, help="Unencrypted PEM private key for direct HTTPS")
@@ -493,8 +515,12 @@ def main(argv=None):
     args = parser.parse_args(argv)
     if not args.monitor_config and not args.projects_config:
         parser.error("--monitor-config or --projects-config is required")
+    password = None if args.anonymous_lan else os.environ.get(args.password_env)
     try:
         tls_context = load_tls_context(args.tls_cert, args.tls_key)
+        if args.anonymous_lan:
+            _validate_anonymous_lan(args.host, password=password, tls_context=tls_context,
+                                    trusted_ingress=args.trusted_ingress)
     except ValueError as exc:
         parser.error(str(exc))
     cache = None
@@ -505,8 +531,9 @@ def main(argv=None):
             cache = ProjectSnapshotCache(registry, args.refresh_interval)
         else:
             cache = SnapshotCache(BranchMonitor(args.monitor_config), args.refresh_interval)
-        server = make_server(cache, args.host, args.port, username=args.username, password=os.environ.get(args.password_env),
-                             trusted_ingress=args.trusted_ingress, base_path=args.base_path, tls_context=tls_context)
+        server = make_server(cache, args.host, args.port, username=args.username, password=password,
+                             trusted_ingress=args.trusted_ingress, base_path=args.base_path, tls_context=tls_context,
+                             anonymous_lan=args.anonymous_lan)
         print(f"Read-only dashboard listening via {'HTTPS' if tls_context else 'HTTP'} on port {server.server_port}", flush=True)
         server.serve_forever(poll_interval=0.5)
     except KeyboardInterrupt:

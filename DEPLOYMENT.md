@@ -66,17 +66,26 @@ New-NetFirewallRule -DisplayName "FL dashboard LAN HTTPS" -Direction Inbound -Ac
 
 可将 `LocalSubnet` 换成团队使用的明确内网 CIDR。访问者使用 `https://<LAN-host>:8767/`；服务监听 `0.0.0.0` 只表示绑定所有 IPv4 接口，实际可达性还受 Windows 防火墙、路由和网络隔离规则影响。配置服务或计划任务开机启动时，沿用同一运行目录和环境变量，并将输出保存在本地日志中。
 
+### 局域网免登录阅读
+
+团队只需要免登录查看进度时，使用 `--anonymous-lan`；绑定地址填写主机的具体 RFC1918 内网 IPv4 地址：
+
+```sh
+python -B share_server.py --projects-config projects.json --host <LAN-IPv4> --port 8767 --anonymous-lan --tls-cert runs/tls/dashboard-cert.pem --tls-key runs/tls/dashboard-key.pem
+```
+
+此模式不读取登录密码环境变量，不返回登录提示，仅提供原有只读监控路由。它要求直接 HTTPS、具体内网地址，不接受 `0.0.0.0`、公网地址或主机名。防火墙仍限定允许访问的内网网段。本机完整控制台继续绑定 loopback；共享入口不连接任务执行器，新建、跟进、审批、停止任务与机器管理请求均返回 `405`。
+
 ### Windows 登录后常驻
 
-`start_lan_dashboard.ps1` 读取忽略的 `runs/lan/deployment.json`，从当前 Windows 用户的 DPAPI 加密文件读取密码，将它短暂注入服务进程的环境，并将服务输出写入本地日志。配置字段如下；路径均填写部署机器上的实际值：
+`start_lan_dashboard.ps1` 读取忽略的 `runs/lan/deployment.json`。设置 `anonymous_lan: true` 时无需密码文件；其余模式从当前 Windows 用户的 DPAPI 加密文件读取密码并短暂注入服务进程环境。服务输出与标准错误分别写入本地日志。免登录配置示例如下；路径均填写部署机器上的实际值：
 
 ```json
 {
   "python": "<python executable>",
   "host": "<LAN IPv4>",
   "port": 8767,
-  "username": "viewer",
-  "password_file": "<DPAPI password file>",
+  "anonymous_lan": true,
   "projects_config": "<projects.json>",
   "tls_cert": "<PEM certificate>",
   "tls_key": "<PEM private key>",
@@ -85,7 +94,7 @@ New-NetFirewallRule -DisplayName "FL dashboard LAN HTTPS" -Direction Inbound -Ac
 }
 ```
 
-使用 `ConvertFrom-SecureString` 保存由安全提示或部署流程提供的 SecureString；运行目录和密码文件仅授予部署用户及 SYSTEM 访问权限。DPAPI 密码文件只能由创建它的 Windows 用户解密，不可直接迁移到另一台机器。
+需要登录认证时，省略 `anonymous_lan` 或设置为 `false`，增加 `username` 和 `password_file`。使用 `ConvertFrom-SecureString` 保存由安全提示或部署流程提供的 SecureString。运行目录仅授予部署用户及 SYSTEM 访问权限；DPAPI 密码文件只能由创建它的 Windows 用户解密，不可直接迁移到另一台机器。
 
 验证 `powershell.exe -NoProfile -File .\start_lan_dashboard.ps1` 后，可注册以当前用户、最低权限、登录时触发的 Windows 计划任务，启动命令增加 `-WindowStyle Hidden`。计划任务的执行时限设为零，避免长时间运行后被默认时限停止。重新配置监听地址或证书后，重启该共享服务；本机任务控制台独立运行。
 
@@ -103,7 +112,7 @@ ssh -N -L 127.0.0.1:8765:127.0.0.1:8765 <development-host>
 
 - 在服务器检查 `/healthz` 和 `/api/capabilities`，确认 `read_only: true`。
 - 从实际团队入口检查首页、CI/Gate 数据以及带前缀的 API 请求。
-- 确认任务、机器、日志和原始证据接口不可访问。仅 `/api/branch-refresh` 接受经过认证和同源检查的 JSON POST；任务控制 POST 及其他写请求仍拒绝访问。
+- 确认任务、机器、日志和原始证据接口不可访问。仅 `/api/branch-refresh` 接受符合当前认证策略和同源检查的 JSON POST；任务控制 POST 及其他写请求仍拒绝访问。
 - 查看 `tmux capture-pane -t flflow-dashboard -p` 排查启动或采集错误。
 - 页面保留最后采集时间；采集失败不会把未知状态伪装成通过。
 
