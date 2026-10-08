@@ -990,9 +990,12 @@
     card.send.disabled = monitor || approvalEnding || card.messageBusy || waiting || claudeRunning || ["prepared","starting","interrupting"].includes(session.status);
     card.send.title = monitor ? "已有 PR · 仅监控" : claudeRunning ? "Claude 执行中；请等待本轮结束或先中断再跟进。" : denied ? "请在任务详情核对 Claude 工具规则，随后继续原任务。" : approvalEnding ? "本轮正在结束；状态更新后可发送修订要求，继续原任务。远端 tmux 不会自动停止。" : "";
   }
+  function isActiveTask(task) {
+    return !!task && !task.historical && ["prepared","starting","running","waiting_approval","waiting_input","interrupting"].includes(task.status);
+  }
   function renderObservedTasks(tasks,branch) {
     const box=byId("observed-task-list");box.replaceChildren();
-    const rows=tasks.filter(task=>task.branch===branch&&!task.historical&&(readOnly||task.source==="codex_native"));
+    const rows=tasks.filter(task=>task.branch===branch&&isActiveTask(task)&&(readOnly||task.source==="codex_native"));
     for(const task of rows){
       const card=el("article","task-card"),label=machineLabels[task.backend]||task.backend;
       card.append(el("h3","",label+" · "+(taskLabels[task.status]||"状态未知")),el("p","task-note",task.source==="codex_native"?"Codex 原生子会话 · 只读跟踪":(task.provider==="claude"?"Claude":"Codex")+" 看板任务 · 只读状态"));
@@ -1031,11 +1034,11 @@
       renderMachineProfiles(data.machine_profiles);
       if ((policyChanged || taskChanged) && latestBranchSnapshot?.branch === branch) render(latestBranchSnapshot);
       const replaced=new Set(tasks.filter(task=>task.source==="codex_native"&&task.branch===branch).map(task=>task.backend));
-      const sessions = prioritizedSessions(taskSessions.filter(session => session.branch === branch&&(session.provider==="claude"||!replaced.has(session.backend))));
+      const sessions = prioritizedSessions(taskSessions.filter(session => session.branch === branch&&isActiveTask(session)&&(session.provider==="claude"||!replaced.has(session.backend))));
       const box = byId("task-list"), ids = new Set(sessions.map(session => session.id));
       for (const [id,card] of taskCards) if (!ids.has(id)) { card.root.remove(); taskCards.delete(id); }
       box.querySelectorAll(".empty").forEach(node => node.remove());
-      if (!sessions.length&&!replaced.size) box.append(el("div", "empty", "此分支尚无适配任务。配置验证机器后，可启动 agent 并在这里跟进。"));
+      if (!sessions.length&&!replaced.size) box.append(el("div", "empty", "此分支暂无活跃任务。可在任务页新建任务或查看历史记录。"));
       for (const session of sessions) {
         let card = taskCards.get(session.id);
         if (!card) { card = newTaskCard(session); taskCards.set(session.id,card); }

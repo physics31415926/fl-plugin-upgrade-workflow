@@ -62,10 +62,13 @@
     }
     return githubLink(record.pr_url,'PR #'+record.pr_number+' 记录');
   }
+  function isActiveTask(task) {
+    return !!task && !task.historical && ["prepared","starting","running","waiting_approval","waiting_input","interrupting"].includes(task.status);
+  }
   function renderTasks(card,sessions){
-    card.tasks.replaceChildren();const matching=(sessions||[]).filter(session=>session.branch===card.branch&&!session.historical);
+    card.tasks.replaceChildren();const matching=(sessions||[]).filter(session=>session.branch===card.branch&&isActiveTask(session));
     if(readOnly&&!matching.length)return;card.tasks.append(el('h3','','适配任务'));
-    if(!matching.length){card.tasks.append(el('div','empty','此分支暂无已接入的任务记录'));return;}
+    if(!matching.length){card.tasks.append(el('div','empty','此分支暂无活跃任务'));return;}
     for(const session of matching.slice(0,6)){
       const box=el('div','task'),copy=el('div','task-copy'),backend=card.snapshot?.backends?.find(item=>item.id===session.backend)?.label||({corex:'iluvatar',iluvatar:'iluvatar'}[session.backend])||session.backend;
       const title=backend+' · '+(taskLabels[session.status]||session.status||'状态未知');
