@@ -135,7 +135,7 @@ class TLSConfigurationTests(unittest.TestCase):
         context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
         cases = (("0.0.0.0", context, []), ("8.8.8.8", context, []),
                  ("127.0.0.1", context, []), ("dashboard.internal", context, []),
-                 ("192.168.201.96", None, []), ("192.168.201.96", context, ["--trusted-ingress"]))
+                 ("192.168.10.20", None, []), ("192.168.10.20", context, ["--trusted-ingress"]))
         for host, tls_context, flags in cases:
             with self.subTest(host=host, flags=flags, tls=bool(tls_context)), \
                     patch("share_server.load_tls_context", return_value=tls_context), \
@@ -154,7 +154,7 @@ class TLSConfigurationTests(unittest.TestCase):
                 patch("share_server.ProjectRegistry.from_config") as registry, \
                 patch("share_server.ProjectSnapshotCache") as cache, \
                 patch("share_server.make_server") as factory, redirect_stdout(io.StringIO()):
-            main(["--projects-config", "unused.json", "--anonymous-lan", "--host", "192.168.201.96",
+            main(["--projects-config", "unused.json", "--anonymous-lan", "--host", "192.168.10.20",
                   "--tls-cert", "dummy-cert.pem", "--tls-key", "dummy-key.pem"])
             registry.assert_called_once_with(Path("unused.json"), read_only=True)
             self.assertIsNone(factory.call_args.kwargs["password"])
@@ -218,12 +218,12 @@ class ShareServerTests(unittest.TestCase):
                 with self.subTest(host=host), self.assertRaisesRegex(ValueError, "RFC1918"):
                     make_server(self.cache, host, 0, index_path=self.index, anonymous_lan=True, tls_context=context)
             with self.assertRaisesRegex(ValueError, "requires HTTPS"):
-                make_server(self.cache, "192.168.201.96", 0, index_path=self.index, anonymous_lan=True)
+                make_server(self.cache, "192.168.10.20", 0, index_path=self.index, anonymous_lan=True)
             with self.assertRaisesRegex(ValueError, "cannot be combined with a password"):
-                make_server(self.cache, "192.168.201.96", 0, index_path=self.index, anonymous_lan=True,
+                make_server(self.cache, "192.168.10.20", 0, index_path=self.index, anonymous_lan=True,
                             tls_context=context, password="test-long-password")
             with self.assertRaisesRegex(ValueError, "cannot be combined with --trusted-ingress"):
-                make_server(self.cache, "192.168.201.96", 0, index_path=self.index, anonymous_lan=True,
+                make_server(self.cache, "192.168.10.20", 0, index_path=self.index, anonymous_lan=True,
                             tls_context=context, trusted_ingress=True)
             factory.assert_not_called()
 
@@ -241,8 +241,8 @@ class ShareServerTests(unittest.TestCase):
                 server = make_server(self.cache, host, 0, index_path=self.index,
                                      anonymous_lan=True, tls_context=context)
                 server.server_close()
-            self.serve(host="192.168.201.96", anonymous_lan=True, tls_context=context)
-            self.assertEqual(factory.call_args.args[0], ("192.168.201.96", 0))
+            self.serve(host="192.168.10.20", anonymous_lan=True, tls_context=context)
+            self.assertEqual(factory.call_args.args[0], ("192.168.10.20", 0))
         client_context = ssl.create_default_context(cafile=str(cert_path))
         for path in ("/", "/healthz", "/api/capabilities", "/api/branch-status"):
             status, headers, _ = self.request(path, tls_context=client_context)
