@@ -117,6 +117,8 @@ python -B share_server.py --projects-config projects.json --host <LAN-IPv4> --po
 powershell.exe -NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -File "<repository directory>\start_local_dashboard.ps1" -ConfigPath "<repository directory>\runs\local\dashboard.json"
 ```
 
+Windows 计划任务环境中的 `PATH` 可能与交互终端不同。可在监控配置的 `codex_executable` 指定本机 Codex CLI 的完整路径；CLI 安装路径变化时同步更新该配置。实际路径仅保存在忽略的本机配置中。
+
 ### 临时 SSH 访问
 
 有开发机 SSH 权限的维护者可转发端口：
