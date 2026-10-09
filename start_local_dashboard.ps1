@@ -12,6 +12,53 @@ function ConvertTo-WindowsArgument([string]$Value) {
     return '"' + $escaped + '"'
 }
 
+function Assert-DashboardPortAvailable([string[]]$Arguments, [int]$StartIndex) {
+    $dashboardHost = '127.0.0.1'
+    $dashboardPortText = '8765'
+    for ($index = $StartIndex; $index -lt $Arguments.Count; $index++) {
+        $argument = $Arguments[$index]
+        $option = ($argument -split '=', 2)[0]
+        # argparse permits these unambiguous abbreviations. Repeated options
+        # use their last value, as the original flflow serve parser does.
+        if ($option -notin @('--host', '--hos', '--ho', '--port', '--por', '--po')) { continue }
+        if ($argument.Contains('=')) {
+            $value = $argument.Substring($argument.IndexOf('=') + 1)
+        } else {
+            $index++
+            if ($index -ge $Arguments.Count) { throw "Missing value for $option" }
+            $value = $Arguments[$index]
+        }
+        if ($option -in @('--host', '--hos', '--ho')) { $dashboardHost = $value }
+        else { $dashboardPortText = $value }
+    }
+    $dashboardPort = 0
+    # Preserve port 0: the original Python server supports a random free port.
+    if (-not [int]::TryParse($dashboardPortText, [ref]$dashboardPort) -or $dashboardPort -lt 0 -or $dashboardPort -gt 65535) {
+        throw 'Dashboard port must be an integer from 0 to 65535'
+    }
+    $dashboardAddress = $null
+    if ($dashboardHost -eq '') {
+        $dashboardAddress = [Net.IPAddress]::Any
+    } elseif (-not [Net.IPAddress]::TryParse($dashboardHost, [ref]$dashboardAddress)) {
+        $addresses = @([Net.Dns]::GetHostAddresses($dashboardHost) | Where-Object { $_.AddressFamily -eq [Net.Sockets.AddressFamily]::InterNetwork })
+        if ($addresses.Count -eq 0) { throw 'Dashboard host must resolve to an IPv4 address for flflow serve' }
+        $dashboardAddress = $addresses[0]
+    }
+    if ($dashboardAddress.AddressFamily -ne [Net.Sockets.AddressFamily]::InterNetwork) {
+        throw 'Dashboard host must use IPv4 for flflow serve'
+    }
+    $portProbe = $null
+    try {
+        $portProbe = [Net.Sockets.TcpListener]::new($dashboardAddress, $dashboardPort)
+        $portProbe.ExclusiveAddressUse = $true
+        $portProbe.Start()
+    } catch {
+        throw "Cannot bind dashboard endpoint ${dashboardHost}:$dashboardPort; choose an unused port or check the local address. Existing services were not changed."
+    } finally {
+        if ($null -ne $portProbe) { $portProbe.Stop() }
+    }
+}
+
 $launcherLog = Join-Path $PSScriptRoot 'runs\local\launcher-errors.log'
 try {
     $config = Get-Content -LiteralPath $ConfigPath -Raw -Encoding UTF8 | ConvertFrom-Json
@@ -47,6 +94,8 @@ try {
     if (-not [IO.Path]::IsPathRooted($logFile)) { $logFile = Join-Path $workingDirectory $logFile }
     $logFile = [IO.Path]::GetFullPath($logFile)
     if ($logFile -eq $argv[$programIndex] -or $logFile -eq $python -or $logFile -eq [IO.Path]::GetFullPath($ConfigPath)) { throw 'Log path must not overwrite program or configuration' }
+    # Check before creating/truncating service logs or starting another owner.
+    Assert-DashboardPortAvailable -Arguments $argv -StartIndex ($programIndex + 2)
     New-Item -ItemType Directory -Path ([IO.Path]::GetDirectoryName($logFile)) -Force | Out-Null
     $launcherLog = $logFile + '.launcher.log'
     $argumentLine = ($argv | ForEach-Object { ConvertTo-WindowsArgument $_ }) -join ' '

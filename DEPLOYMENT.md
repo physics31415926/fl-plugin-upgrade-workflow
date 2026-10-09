@@ -1,108 +1,237 @@
-# 团队只读看板部署
+# 部署与局域网访问
 
-`share_server.py` 提供团队只读入口，独立于本机任务控制台。它不创建 Codex 执行器，不提供机器配置、会话控制、原始验收文件或本地日志接口。浏览器仅获取已脱敏的分支监控结果。
+本机控制台提供双仓库监控与 agent 任务管理；局域网入口提供免登录的只读进度页面。首次部署先运行配置向导和本机页面，再按需增加 LAN 入口。
 
-## 运行环境
+以下多行命令使用 PowerShell 续行符。Linux / macOS 使用 `python3`，将参数写成一行或用 `\` 续行；Windows 常驻步骤仅适用于 Windows。
 
-- Python 3.11+、Git、tmux。
-- 一份插件仓库，用于读取目标分支的用例和完整 Git tree；仓库需要包含验收提交。
-- `branch-monitor.json`：从示例复制并填写服务器上的仓库路径、remote、目标分支和证据目录。
-- 可选：服务器自己的 GitHub 只读凭据，用于提高 API 配额。凭据通过部署环境提供。
+## 首次配置
 
-源码通过 Git 或发布归档部署。机器档案、SSH 配置、私钥、个人 Codex 登录目录均不随源码迁移。验收结果应由维护者单独导入配置的证据目录；原始文件仍由维护者管理。
+准备 Python 3.11+、Git、工作台源码，以及要监控的 vLLM-Plugin-FL / SGLang-Plugin-FL 本地 Git checkout。看板使用 Python 标准库，不需要安装 vLLM、SGLang 或 GPU 运行包；Linux 常驻时可选用 tmux，Windows 使用下文的计划任务。
 
-## 双仓库部署
-
-使用 `projects.example.json` 准备服务器自己的 `projects.json`，分别配置两个插件 checkout、目标分支和证据目录。启动时改用 `--projects-config projects.json`，首页显示两个仓库；详情为 `/monitor?project=vllm` 和 `/monitor?project=sglang`。两边缓存、采集时间和失败状态独立；原有认证、路径前缀及脱敏规则同样适用。共享服务不连接本机配置中的 `sessions_api_url`，也不提供会话控制。
-
-## 启动
-
-在部署目录中先以前台运行验证配置：
-
-```sh
-python3 -B share_server.py --monitor-config branch-monitor.json --host 127.0.0.1 --port 8765
-```
-
-确认成功后，在 tmux 中启动常驻服务：
-
-```sh
-tmux new-session -d -s flflow-dashboard 'exec python3 -B share_server.py --monitor-config branch-monitor.json --host 127.0.0.1 --port 8765'
-tmux capture-pane -t flflow-dashboard -p
-```
-
-已知 backend 的新适配 PR 使用 `codex/backend-<backend>-…` 分支名即可被自动发现，无需逐次填写 PR 编号；`corex` 另接受 `codex/backend-iluvatar-…`。发现只读取准确目标 base 分支的打开 PR，多个候选会报告歧义，不按标题泛化关联。自定义 `backend_pr_discovery` 会覆盖该 backend 的默认命名规则；手动配置的有效关联和已验证合入结果仍优先。GitHub 查询失败会显示发现错误并保留已有配置，不会被解释为没有 PR。
-
-服务默认定期采集 Git/CI 状态；`--refresh-interval` 设置采集间隔。页面的“读取最新状态”通过同源 JSON 请求触发一次采集并显示新快照；30 秒内重复请求合并，后台和手动采集串行执行。监控状态与进程必须由一个实例管理，持久保存插件仓库和证据目录。
-
-## 访问入口
-
-### 已有带登录认证的开发平台入口
-
-将平台端口代理连接到本机服务，配置 HTTPS 和团队访问权限。若平台网关通过容器网络访问服务，需要绑定容器可达地址；只有确认网关负责访问认证时才使用 `--trusted-ingress`。这一参数声明外部网关已经配置好，不会自动创建认证。
-
-平台使用路径前缀时，启动服务指定 `--base-path /your-prefix/`，并让浏览器通过带末尾 `/` 的入口访问。页面 API 使用相对 URL。网关应只转发看板服务端口。
-
-### 独立 HTTPS 反向代理
-
-在同一主机用 Nginx 等入口提供 HTTPS。可接入团队登录系统；也可给看板设置独立 HTTP Basic 登录，密码通过 `FLFLOW_SHARE_PASSWORD` 环境变量注入，用户名通过 `--username` 设置。Basic 登录需要由 HTTPS 入口保护。不要将密码写入命令参数、源码或 PR。
-
-服务保持监听 loopback，反向代理将请求转发到 `http://127.0.0.1:8765`。共享服务具有独立只读路由，不依赖放宽本机任务控制台的 Host/Origin 检查。
-
-### 局域网直接 HTTPS
-
-没有反向代理时，共享服务可直接提供 HTTPS：
-
-```sh
-python -B share_server.py --projects-config projects.json --host 0.0.0.0 --port 8767 --tls-cert runs/tls/dashboard-cert.pem --tls-key runs/tls/dashboard-key.pem
-```
-
-启动前通过部署环境设置 `FLFLOW_SHARE_PASSWORD`，访问者使用 `--username` 指定的用户名（默认 `viewer`）及该密码登录。`--tls-cert` 与 `--tls-key` 必须一起提供，证书链及未加密 PEM 私钥会在采集缓存和后台线程启动前加载；参数缺失、文件不可读或 PEM 无效会明确报错。服务要求 TLS 1.2 或以上；既有 loopback HTTP 和反向代理部署方式仍可使用。
-
-证书的 Subject Alternative Name 应包含访问者使用的内网域名或 IP。优先使用内部 CA 签发的证书，并在访问者设备上信任该 CA。临时自签名证书需要先核对证书指纹，再将对应证书加入访问者设备的信任库；未经信任时浏览器会显示证书警告。证书及私钥保存在忽略的本地运行目录，限制私钥的文件访问权限；测试代码中的 `explicit_dummy` 证书仅供自动化测试。
-
-常驻主机需要固定内网地址、保持开机并关闭休眠。只对需要访问的内网网段开放共享服务端口，本机任务控制台继续监听 loopback。Windows 可在管理员 PowerShell 中建立限定局域网和网络类型的规则：
+插件 checkout 必须有目标分支的远端引用及要验收的提交。配置向导只读取本地 Git 信息，不执行 clone、fetch、GPU 命令或 agent 任务。缺少分支时，先自行检查 remote 并 fetch，例如：
 
 ```powershell
-New-NetFirewallRule -DisplayName "FL dashboard LAN HTTPS" -Direction Inbound -Action Allow -Protocol TCP -LocalPort 8767 -Profile Private,Domain -RemoteAddress LocalSubnet
+git -C 'C:\work\vllm-plugin-FL' remote
+git -C 'C:\work\vllm-plugin-FL' fetch upstream
+git -C 'C:\work\sglang-plugin-FL' fetch upstream
 ```
 
-可将 `LocalSubnet` 换成团队使用的明确内网 CIDR。访问者使用 `https://<LAN-host>:8767/`；服务监听 `0.0.0.0` 只表示绑定所有 IPv4 接口，实际可达性还受 Windows 防火墙、路由和网络隔离规则影响。配置服务或计划任务开机启动时，沿用同一运行目录和环境变量，并将输出保存在本地日志中。
+将示例路径和 `upstream` 换成自己 checkout 的实际值。可选安装并以部署用户登录 `gh`，提高 GitHub PR / CI 查询配额；没有 `gh` 时仍可查询公开 API。创建 agent 任务时，另准备对应的 Codex / Claude CLI、登录和 SSH 环境。只读 LAN 不需要 agent CLI 或 API key。
 
-### 局域网免登录阅读
+在工作台目录打开终端，运行向导：
 
-团队只需要免登录查看进度时，使用 `--anonymous-lan`；绑定地址填写主机的具体 RFC1918 内网 IPv4 地址：
-
-```sh
-python -B share_server.py --projects-config projects.json --host <LAN-IPv4> --port 8767 --anonymous-lan --tls-cert runs/tls/dashboard-cert.pem --tls-key runs/tls/dashboard-key.pem
+```powershell
+python -B configure.py
 ```
 
-此模式不读取登录密码环境变量，不返回登录提示，仅提供原有只读监控路由。它要求直接 HTTPS、具体内网地址，不接受 `0.0.0.0`、公网地址或主机名。防火墙仍限定允许访问的内网网段。本机完整控制台继续绑定 loopback；共享入口不连接任务执行器，新建、跟进、审批、停止任务与机器管理请求均返回 `405`。
+依次选择项目、插件路径、remote、目标分支、私有输出目录和本机端口。默认选择两个项目，输出到 `runs/configured/`，端口为 `8766`。生成内容包括 `projects.json`、所选项目的 `branch-monitor*.json` 和 `launch.json`；两边会话与验收目录独立，生成文件由 Git 忽略。
 
-### Windows 登录后常驻
+只监控一个项目也可以，例如：
 
-`start_lan_dashboard.ps1` 读取忽略的 `runs/lan/deployment.json`。设置 `anonymous_lan: true` 时无需密码文件；其余模式从当前 Windows 用户的 DPAPI 加密文件读取密码并短暂注入服务进程环境。服务输出与标准错误分别写入本地日志。免登录配置示例如下；路径均填写部署机器上的实际值：
+```powershell
+python -B configure.py --projects sglang
+```
 
-```json
-{
-  "python": "<python executable>",
-  "host": "<LAN IPv4>",
-  "port": 8767,
-  "anonymous_lan": true,
-  "projects_config": "<projects.json>",
-  "tls_cert": "<PEM certificate>",
-  "tls_key": "<PEM private key>",
-  "refresh_interval": 300,
-  "log_file": "<local service log>"
+批量或重复部署时使用非交互参数；以下路径和分支仅为示例：
+
+```powershell
+python -B configure.py --non-interactive --projects vllm sglang `
+  --vllm-repo 'C:\work\vllm-plugin-FL' --vllm-remote upstream --vllm-branch '0.4.0-dev' `
+  --sglang-repo 'C:\work\sglang-plugin-FL' --sglang-remote upstream --sglang-branch 'dev/0.5.18' `
+  --output-dir runs/configured --port 8766
+```
+
+生成的配置只保留模型、模式和 backend 等通用默认值，不带入示例里的历史 PR、Gate 通过记录或会话服务连接。模型和模式可用 `--vllm-models` / `--sglang-models`、`--vllm-modes` / `--sglang-modes` 覆盖，或在生成的监控 JSON 中修改。
+
+配置向导默认拒绝覆盖已有文件。已有配置可直接继续使用；需要另一套配置时选择不同的 `--output-dir`。只有确认要替换生成文件并自行备份后才使用 `--overwrite`，它不会保留手工修改。重新配置不会重启正在运行的服务；旧 owner、会话目录和已有私有配置应由维护者单独管理。
+
+源码可通过 Git 或发布归档迁移。机器档案、SSH 私钥、个人 Codex 登录目录及 DPAPI 密文不随源码迁移；在新机器上以部署用户重新配置。已有验收文件由维护者单独导入对应证据目录，未导入的记录会显示缺失。
+
+## 启动本机页面
+
+先检查生成配置，再启动前台服务：
+
+```powershell
+python -B start_dashboard.py --check-only
+python -B start_dashboard.py
+```
+
+默认读取 `runs/configured/launch.json`，打开 [本机看板](http://127.0.0.1:8766/)。启动器使用配置中的 Python 和 projects 文件；完整控制台只监听 `127.0.0.1`。终端保持运行，`Ctrl+C` 结束这次前台服务。
+
+使用其他输出目录或临时端口时：
+
+```powershell
+python -B start_dashboard.py --config runs/configured-alt/launch.json --port 8876 --check-only
+python -B start_dashboard.py --config runs/configured-alt/launch.json --port 8876
+```
+
+`--port` 只覆盖本次启动参数，不修改配置文件。需要长期使用新端口时更新对应 `launch.json`。
+
+双仓库首页分别显示两个项目；详情为 `/monitor?project=vllm` 和 `/monitor?project=sglang`。各项目的缓存、采集时间和错误状态独立。任务控制只通过本机入口使用。
+
+## 局域网免登录阅读
+
+准备主机的固定 RFC1918 IPv4 地址，以及包含该地址的 HTTPS PEM 证书和未加密 PEM 私钥。以下用 `192.168.10.20` 示意，替换为这台主机真实的内网地址；该地址应固定或设置 DHCP 保留。
+
+先检查，再在另一个终端启动独立的只读服务：
+
+```powershell
+python -B start_dashboard.py --lan --lan-ip 192.168.10.20 --lan-port 8767 `
+  --tls-cert runs/tls/dashboard-cert.pem --tls-key runs/tls/dashboard-key.pem `
+  --refresh-interval 300 --check-only
+
+python -B start_dashboard.py --lan --lan-ip 192.168.10.20 --lan-port 8767 `
+  --tls-cert runs/tls/dashboard-cert.pem --tls-key runs/tls/dashboard-key.pem `
+  --refresh-interval 300
+```
+
+另一个配置目录可增加 `--config <launch.json>`。LAN 模式使用同一 projects 配置，直接提供 HTTPS 与免登录只读路由，不创建任务执行器。它仅接受具体的 `10.x.x.x`、`172.16.x.x–172.31.x.x` 或 `192.168.x.x` 地址，拒绝 `0.0.0.0`、主机名、loopback 和公网地址。
+
+访问者打开 `https://192.168.10.20:8767/`。本机完整控制台继续使用 `http://127.0.0.1:8766/`。LAN 入口不读取登录密码环境变量，新建、跟进、审批、停止任务与机器管理请求均返回 `405`，私有配置和原始日志接口不开放。启动器不会自动生成或信任证书、修改防火墙、注册计划任务。
+
+### 证书准备
+
+优先使用内部 CA 签发的证书，Subject Alternative Name（SAN）应包含访问者使用的内网 IP 或域名，并让访问者设备信任该 CA。服务读取 PEM 证书链和未加密 PEM 私钥，不直接读取 PFX 或 Windows 证书库。
+
+若已安装 OpenSSL，可手动生成临时自签名证书。以下命令在工作台目录执行，仅用于新建证书；文件已存在时停止，避免覆盖现有私钥：
+
+```powershell
+$lanIp = '192.168.10.20'
+$tlsDirectory = Join-Path (Get-Location).ProviderPath 'runs\tls'
+$certPath = Join-Path $tlsDirectory 'dashboard-cert.pem'
+$keyPath = Join-Path $tlsDirectory 'dashboard-key.pem'
+if ((Test-Path -LiteralPath $certPath) -or (Test-Path -LiteralPath $keyPath)) {
+    throw 'Certificate or key already exists; reuse it or choose a new directory.'
+}
+New-Item -ItemType Directory -Path $tlsDirectory -Force | Out-Null
+$deploymentUser = [Security.Principal.WindowsIdentity]::GetCurrent().Name
+icacls $tlsDirectory /inheritance:r /grant:r "${deploymentUser}:(OI)(CI)F" 'SYSTEM:(OI)(CI)F'
+if ($LASTEXITCODE -ne 0) { throw 'Unable to restrict the TLS directory permissions.' }
+openssl req -x509 -newkey rsa:3072 -nodes -sha256 -days 365 `
+  -subj '/CN=FL dashboard' -addext "subjectAltName=IP:$lanIp" `
+  -addext 'extendedKeyUsage=serverAuth' -addext 'basicConstraints=critical,CA:FALSE' `
+  -keyout $keyPath -out $certPath
+if ($LASTEXITCODE -ne 0) { throw 'Certificate generation failed; inspect the output before retrying.' }
+openssl x509 -in $certPath -noout -fingerprint -sha256
+```
+
+OpenSSL 仅用于这个可选步骤，不是看板依赖；参数见 [OpenSSL req 文档](https://docs.openssl.org/3.0/man1/openssl-req/)。核对证书 SHA-256 指纹后，将公开证书交给访问者，并按团队要求加入其设备的信任库。未经信任时浏览器会显示证书警告。不要分发私钥或使用测试代码中的 `explicit_dummy` 证书。
+
+证书及私钥放在忽略的本地运行目录，私钥目录仅授权部署用户和 SYSTEM。证书到期或内网 IP 变化后重新签发，并由维护者重启该 LAN 服务。
+
+### Windows 防火墙
+
+只有开放入站端口需要管理员 PowerShell。将 IP、端口和允许网段改为实际值后，单独执行：
+
+```powershell
+$ruleName = 'FLFlow-LAN-HTTPS-8767'
+if (Get-NetFirewallRule -Name $ruleName -ErrorAction SilentlyContinue) {
+    throw 'Firewall rule already exists; inspect it before changing it.'
+}
+New-NetFirewallRule -Name $ruleName -DisplayName 'FL dashboard LAN HTTPS' `
+  -Direction Inbound -Action Allow -Protocol TCP -LocalAddress 192.168.10.20 `
+  -LocalPort 8767 -Profile Private,Domain -RemoteAddress LocalSubnet
+```
+
+可将 `LocalSubnet` 换成团队使用的明确 CIDR，例如 `192.168.10.0/24`。不要为本机控制台的 `8766` 开放入站规则。规则仅适用于 Private / Domain 网络；路由、无线客户端隔离和企业策略也会影响访问。
+
+常驻主机需保持开机并关闭休眠。从另一台设备验证 HTTPS 首页及 `/healthz`，再交付入口地址；主机监听成功不代表其他设备已能访问。
+
+## Windows 登录后常驻
+
+### 使用生成的本机配置
+
+先完成前台验证并结束这次新部署的前台服务。手动后台启动与下面的计划任务选择一种；手动启动可运行：
+
+```powershell
+powershell.exe -NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass `
+  -File .\start_local_dashboard.ps1 -ConfigPath .\runs\configured\launch.json
+```
+
+启动器以隐藏窗口等待 Python，stdout / stderr 分别写入配置的日志；正常 stderr 不会使 Windows PowerShell 5.1 异常退出。默认生成日志为 `runs/configured/runs/local/dashboard.log`、同名 `.stderr` 和 `.launcher.log`。每次启动会重建 stdout / stderr 文件，需要保留时先归档。
+
+需要登录后自动启动时，在工作台目录以部署用户执行以下代码。任务名称要与其他部署区分；示例检测到同名任务时拒绝覆盖，也不会停止现有 owner：
+
+```powershell
+$dashboardRoot = (Get-Location).ProviderPath
+$launchPath = (Resolve-Path -LiteralPath '.\runs\configured\launch.json').ProviderPath
+$launcherPath = (Resolve-Path -LiteralPath '.\start_local_dashboard.ps1').ProviderPath
+$deploymentUser = [Security.Principal.WindowsIdentity]::GetCurrent().Name
+$taskName = 'FLFlow-Configured-Local-8766'
+python -B start_dashboard.py --config $launchPath --check-only
+if ($LASTEXITCODE -ne 0) { throw 'Configuration or port check failed; do not register another owner.' }
+if (Get-ScheduledTask -TaskName $taskName -ErrorAction SilentlyContinue) {
+    throw 'Task already exists; choose a distinct name or review it before updating.'
+}
+$powerShellPath = Join-Path $env:WINDIR 'System32\WindowsPowerShell\v1.0\powershell.exe'
+$actionArguments = '-NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -File "{0}" -ConfigPath "{1}"' -f $launcherPath, $launchPath
+$action = New-ScheduledTaskAction -Execute $powerShellPath -Argument $actionArguments -WorkingDirectory $dashboardRoot
+$trigger = New-ScheduledTaskTrigger -AtLogOn -User $deploymentUser
+$principal = New-ScheduledTaskPrincipal -UserId $deploymentUser -LogonType Interactive -RunLevel Limited
+$settings = New-ScheduledTaskSettingsSet -ExecutionTimeLimit ([TimeSpan]::Zero) `
+  -RestartCount 3 -RestartInterval (New-TimeSpan -Minutes 1) -MultipleInstances IgnoreNew
+Register-ScheduledTask -TaskName $taskName -Action $action -Trigger $trigger `
+  -Principal $principal -Settings $settings | Out-Null
+Start-ScheduledTask -TaskName $taskName
+Get-ScheduledTaskInfo -TaskName $taskName
+```
+
+任务使用当前登录用户、最低权限，运行时限为零，异常退出最多重试三次、间隔一分钟，并忽略重复启动。该方式需要用户保持登录；不表示登录前就可访问。参数参见 Microsoft 的 [任务运行身份](https://learn.microsoft.com/en-us/powershell/module/scheduledtasks/new-scheduledtaskprincipal) 和 [任务设置](https://learn.microsoft.com/en-us/powershell/module/scheduledtasks/new-scheduledtasksettingsset) 文档。
+
+日志可按生成配置读取：
+
+```powershell
+$launchSettings = Get-Content -LiteralPath .\runs\configured\launch.json -Raw -Encoding UTF8 | ConvertFrom-Json
+Get-Content -LiteralPath $launchSettings.log_file -Tail 30
+Get-Content -LiteralPath ($launchSettings.log_file + '.stderr') -Tail 30
+if (Test-Path -LiteralPath ($launchSettings.log_file + '.launcher.log')) {
+    Get-Content -LiteralPath ($launchSettings.log_file + '.launcher.log') -Tail 30
 }
 ```
 
-需要登录认证时，省略 `anonymous_lan` 或设置为 `false`，增加 `username` 和 `password_file`。使用 `ConvertFrom-SecureString` 保存由安全提示或部署流程提供的 SecureString。运行目录仅授予部署用户及 SYSTEM 访问权限；DPAPI 密码文件只能由创建它的 Windows 用户解密，不可直接迁移到另一台机器。
+计划任务环境的 PATH 可能与终端不同。配置向导可通过 `--codex-executable` 记录 CLI 完整路径；安装路径变化时同步更新忽略的监控配置。使用同一部署用户保留 Codex 登录和 DPAPI 配置。
 
-验证 `powershell.exe -NoProfile -File .\start_lan_dashboard.ps1` 后，可注册以当前用户、最低权限、登录时触发的 Windows 计划任务，启动命令增加 `-WindowStyle Hidden`。计划任务的执行时限设为零，避免长时间运行后被默认时限停止。重新配置监听地址或证书后，重启该共享服务；本机任务控制台独立运行。
+更新计划任务 Action 只影响下次启动；维护运行中的旧 owner 时，不通过重启加载启动器变更，以免中断任务。每个会话目录只由一个 owner 管理。
 
-### Windows 本机任务控制台常驻
+### LAN 服务常驻
 
-`start_local_dashboard.ps1 -ConfigPath <config>` 读取受信任、忽略的 `runs/local/<config>.json`，用于运行 `flflow.py serve`。`python` 填本机 Python `.exe`，`working_directory` 填仓库目录，`arguments` 是完整 argv 数组，包含 `-u`、`-B`、`flflow.py` 路径及 `serve` 参数；可另填 `program` 指定 `flflow.py`，此时 `arguments` 从 `serve` 开始。默认配置为 `runs/local/dashboard.json`；旧 owner 可使用独立配置，分别保持各自端口及会话目录。标准输出写入 `log_file`，标准错误写入同名 `.stderr`，启动或退出诊断追加到 `.launcher.log`。每次启动会重建标准输出/错误日志，需要长期保留时先归档旧日志。配置仅由本机维护者编辑，不接受网页提供的命令字符串。
+LAN 可继续使用 `start_lan_dashboard.ps1`，手动准备忽略的 `runs/lan/deployment.json`。目录及日志父目录需提前创建；路径填写这台机器上的绝对路径，`projects_config` 指向生成的 projects 文件：
+
+```json
+{
+  "python": "<absolute Python executable>",
+  "host": "192.168.10.20",
+  "port": 8767,
+  "anonymous_lan": true,
+  "projects_config": "<absolute runs/configured/projects.json>",
+  "tls_cert": "<absolute PEM certificate>",
+  "tls_key": "<absolute PEM private key>",
+  "refresh_interval": 300,
+  "log_file": "<absolute local LAN log>"
+}
+```
+
+`anonymous_lan: true` 无需密码文件。先验证：
+
+```powershell
+powershell.exe -NoProfile -File .\start_lan_dashboard.ps1 -ConfigPath .\runs\lan\deployment.json
+```
+
+注册 LAN 任务时复用上面的计划任务代码，将 `$launchPath` 改为这个 deployment 文件、`$launcherPath` 改为 `start_lan_dashboard.ps1`，并将 `$taskName` 改为独立名称，例如 `FLFlow-Configured-LAN-8767`。其中 `--check-only` 检查改用上文 LAN 快捷启动命令及对应的 `launch.json`、地址和证书参数；deployment JSON 不传给 `start_dashboard.py`。先结束这次新部署的前台 LAN 服务，避免端口冲突；本机控制台继续独立运行。输出和错误分别写入 `log_file` 及同名 `.stderr`，启动异常记录在 `runs/lan/launcher-errors.log`。
+
+需要登录认证时，省略 `anonymous_lan` 或设为 `false`，增加 `username` 与 `password_file`。使用 `ConvertFrom-SecureString` 保存由安全提示提供的 SecureString；DPAPI 密码文件只能由创建它的 Windows 用户解密，不能直接迁移到另一台机器。启动器只在进程环境中短暂提供密码。
+
+## 高级部署
+
+### 沿用已有配置
+
+已有 `projects.json` 可直接启动本机控制台：
+
+```powershell
+python -B flflow.py serve --projects-config projects.json --host 127.0.0.1 --port 8766
+```
+
+要接入快捷启动器，可手动准备兼容的 launch JSON，再通过 `--config` 指定。Windows 的 `start_local_dashboard.ps1` 同样读取此格式：
 
 ```json
 {
@@ -113,36 +242,67 @@ python -B share_server.py --projects-config projects.json --host <LAN-IPv4> --po
 }
 ```
 
-计划任务使用当前登录用户、`Interactive` 登录类型、最低权限 `Limited`，登录时触发；保留同一用户的 Codex 登录及 DPAPI 配置。Action 使用下面的独立 PowerShell 进程；设置 `ExecutionTimeLimit = 0`、`RestartCount = 3`、`RestartInterval = 1 分钟`、`MultipleInstances = IgnoreNew`，使 Python 异常退出后可自动重启且不会重复运行 owner。启动器以隐藏窗口等待 Python，直接分别重定向 stdout/stderr；Windows PowerShell 5.1 不使用 `& python 2>&1`，正常 stderr 不会触发 `ErrorActionPreference = Stop` 退出。更新计划任务 Action 只影响下次启动；维护已运行的旧 owner 时，不通过重启加载启动器变更，以免中断现有任务。
+`python` 指向真实 Python 可执行文件；Windows 启动器要求 `.exe`，不接受 shell shim。`arguments` 是 argv 数组，不是 shell 命令。旧 Windows 启动器还支持单独的 `program` 字段指定 `flflow.py`，此时 `arguments` 从 `serve` 开始。私有启动配置放在 `runs/` 下，并仅由本机维护者编辑。
 
-```powershell
-powershell.exe -NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -File "<repository directory>\start_local_dashboard.ps1" -ConfigPath "<repository directory>\runs\local\dashboard.json"
+双仓库可参照 `projects.example.json` 配置各自的监控文件。共享服务不连接配置中的 `sessions_api_url`，不提供会话控制；原生任务和已落盘 agent 任务只投影脱敏状态。
+
+### 只读服务与 Linux 常驻
+
+`share_server.py` 提供独立只读入口，不创建 Codex 执行器，不开放机器配置、会话控制、原始验收文件或本地日志。可先以前台运行单项目配置：
+
+```sh
+python3 -B share_server.py --monitor-config branch-monitor.json --host 127.0.0.1 --port 8765
 ```
 
-Windows 计划任务环境中的 `PATH` 可能与交互终端不同。可在监控配置的 `codex_executable` 指定本机 Codex CLI 的完整路径；CLI 安装路径变化时同步更新该配置。实际路径仅保存在忽略的本机配置中。
+Linux 上确认配置后可在 tmux 中常驻：
+
+```sh
+tmux new-session -d -s flflow-dashboard 'exec python3 -B share_server.py --monitor-config branch-monitor.json --host 127.0.0.1 --port 8765'
+tmux capture-pane -t flflow-dashboard -p
+```
+
+双仓库改用 `--projects-config projects.json`。服务默认定期采集，`--refresh-interval` 指定秒数；页面“读取最新状态”通过同源 JSON 请求触发采集，30 秒内重复请求合并，后台和手动采集串行执行。
+
+已知 backend 的新适配 PR 使用 `codex/backend-<backend>-…` 分支名即可被自动发现；`corex` 另接受 `codex/backend-iluvatar-…`。发现只读取准确目标 base 分支的打开 PR，多个候选报告歧义。自定义 `backend_pr_discovery` 覆盖该 backend 的默认命名规则；手动有效关联和已验证合入结果优先。GitHub 查询失败会显示发现错误并保留已有配置。
+
+### 已有开发平台或 HTTPS 反向代理
+
+将平台端口代理连接到共享服务，配置 HTTPS 和团队访问权限。只有确认网关负责访问认证时才使用 `--trusted-ingress`；该参数不会创建认证。平台通过容器网络访问时，绑定容器可达的地址。
+
+平台使用路径前缀时指定 `--base-path /your-prefix/`，通过带末尾 `/` 的入口访问。页面 API 使用相对 URL，网关应只转发看板服务端口。
+
+独立反向代理可接入团队登录系统，也可设置 HTTP Basic 登录，密码通过 `FLFLOW_SHARE_PASSWORD` 环境变量注入，用户名通过 `--username` 设置。Basic 登录必须由 HTTPS 入口保护，密码不写入命令、源码、URL 或 PR。服务监听 loopback，由 Nginx 等代理转发到 `http://127.0.0.1:8765`。
+
+### 需要密码的 LAN 直接 HTTPS
+
+保留密码保护时，直接运行共享服务：
+
+```sh
+python -B share_server.py --projects-config projects.json --host 0.0.0.0 --port 8767 --tls-cert runs/tls/dashboard-cert.pem --tls-key runs/tls/dashboard-key.pem
+```
+
+部署环境先设置 `FLFLOW_SHARE_PASSWORD`，访问者使用默认用户名 `viewer` 或 `--username` 指定的用户名登录。`0.0.0.0` 表示所有 IPv4 接口，仍需限定防火墙允许的网段；免登录模式必须绑定具体 RFC1918 地址。
+
+`--tls-cert` 和 `--tls-key` 必须成对提供，证书加载发生在采集缓存和后台线程启动之前；缺失、不可读或 PEM 无效会明确报错。直连 HTTPS 要求 TLS 1.2 或以上，原有 loopback HTTP 与反向代理部署兼容。
 
 ### 临时 SSH 访问
 
-有开发机 SSH 权限的维护者可转发端口：
+有开发机 SSH 权限的维护者可自行转发只读服务端口：
 
 ```sh
 ssh -N -L 127.0.0.1:8765:127.0.0.1:8765 <development-host>
 ```
 
-然后访问 `http://127.0.0.1:8765/`。各访问者需自行建立隧道；这不是一个可直接转发给团队的公共网址。
+然后访问 `http://127.0.0.1:8765/`。各访问者需要自己的 SSH 隧道。
 
 ## 验证与维护
 
-- 在服务器检查 `/healthz` 和 `/api/capabilities`，确认 `read_only: true`。
-- 从实际团队入口检查首页、CI/Gate 数据以及带前缀的 API 请求。
-- 确认任务、机器、日志和原始证据接口不可访问。仅 `/api/branch-refresh` 接受符合当前认证策略和同源检查的 JSON POST；任务控制 POST 及其他写请求仍拒绝访问。
-- 查看 `tmux capture-pane -t flflow-dashboard -p` 排查启动或采集错误。
-- 页面保留最后采集时间；采集失败不会把未知状态伪装成通过。
+- 检查共享入口的 `/healthz` 和 `/api/capabilities`，确认 `read_only: true`。
+- 从访问者网络检查首页、CI / Gate 数据以及带前缀的 API。
+- 任务、机器、日志和原始证据接口不可访问；仅 `/api/branch-refresh` 接受符合认证和同源检查的 JSON POST。
+- Windows 查看配置的 stdout、`.stderr` 和启动器日志；Linux 查看 tmux 输出。
+- 采集失败显示最后采集时间和错误，不把未知状态当作通过。
 
-公网或团队入口尚未创建时，仅在服务器看到监听端口并不代表其他用户已经能够访问。交付地址前应从访问者网络验证。
+Codex / Claude 的创建、启动、跟进和配置只通过本机完整控制台使用。Claude API key 使用当前 Windows 用户的 DPAPI 加密保存在忽略目录；服务或计划任务使用同一 Windows 用户。LAN 不初始化 agent 设置或执行器，`/api/agent-settings`、`/api/agent-providers` 及私有原件接口均不开放。
 
-### 本机 agent 配置与只读任务状态
-
-Codex / Claude 的新建、启动、跟进和配置只通过 loopback 完整控制台使用。Claude API key 由当前 Windows 用户 DPAPI 加密保存在忽略的运行目录；服务或计划任务必须使用同一 Windows 用户。局域网入口不初始化 agent 设置或执行器，`/api/agent-settings`、`/api/agent-providers` 及私有原件接口均不开放。
-
-原生子会话的脱敏状态可在共享首页和详情页读取，内容仅包含配置的 backend、分支、状态、阶段与时间。历史实验记录在共享页面指向 GitHub PR，本机入口可读取经哈希验证的 UTF-8 存档。
+原生子会话和已落盘任务的共享状态仅包含安全的 backend、分支、状态、阶段和时间。历史实验记录在 LAN 页面指向 GitHub PR，本机入口可读取经哈希验证的 UTF-8 存档。更多配置见 [高级配置与验收参考](docs/REFERENCE.md)。
