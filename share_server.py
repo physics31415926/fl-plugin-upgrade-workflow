@@ -25,6 +25,7 @@ from urllib.parse import parse_qs, urlsplit
 
 from branch_monitor import BranchMonitor
 from project_registry import ProjectRegistry
+from pr_acceptance import detail_text
 
 
 CAPABILITIES = {"read_only": True, "sessions": False, "refresh": True, "evidence": False}
@@ -123,6 +124,19 @@ paths, machine aliases, private IPs, source task IDs, or commands.
                 item["source"] = None
             item["pr_url"] = _public_pr_url(acceptance.get("pr_url"))
             item["archive_url"] = None
+            item["rows"] = []
+            rows = acceptance.get("rows")
+            for row in rows[:100] if isinstance(rows, list) else []:
+                if not isinstance(row, dict):
+                    continue
+                item["rows"].append({
+                    "label": detail_text(row.get("label"), 160) or "测试结果",
+                    "configuration": detail_text(row.get("configuration"), 300),
+                    "result": detail_text(row.get("result"), 400),
+                    "status": row.get("status") if row.get("status") in ("passed", "partial", "failed", "pending") else "unknown"})
+            total = acceptance.get("rows_total")
+            item["rows_total"] = total if type(total) is int and 0 <= total <= 1_000_000 else len(item["rows"])
+            item["rows_truncated"] = acceptance.get("rows_truncated") is True or item["rows_total"] > len(item["rows"])
             public["acceptance"] = item
         public["acceptance_records"] = []
         for record in backend.get("acceptance_records", []):

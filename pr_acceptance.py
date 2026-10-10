@@ -1,6 +1,7 @@
-"""Summarize explicit PR test results without copying untrusted PR prose."""
+"""Summarize PR test results and expose bounded, sanitized table details."""
 from __future__ import annotations
 
+import html
 import re
 
 TEST_CONTEXT = re.compile(r"(?i)\b(?:tests?|testing|validation|acceptance|verification|gate|e2e|smoke|benchmark|pytest|offline|concurrent|inference|mtp)\b|验收|验证|测试|并发|离线|推理|运行结果")
@@ -17,6 +18,35 @@ NON_REQUIRED = re.compile(r"(?i)non[- ]blocking|not\s+counted|diagnostic|non[- ]
 RESULT_HEADER = re.compile(r"(?i)^(?:result(?:s)?|status|outcome|结果|状态)(?:\b|\s|$)")
 NEGATED_FAILURE = re.compile(r"(?i)\b(?:no|without|zero|nonfatal|non-fatal|not)\s+(?:[\w-]+\s+){0,4}(?:failures?|errors?)\b")
 HISTORICAL_FAILURE = re.compile(r"(?i)\b(?:prior|previous|historical)\s+(?:(?!(?:but|however|current|now|succeeded|passed|successful)\b)[\w-]+\s+){0,4}(?:failed|failures?|errors?)\b")
+DETAIL_LIMIT = 100
+SECRET = re.compile(r"\b(?:sk-(?:[A-Za-z0-9_-]{8,})|gh[pousr]_[A-Za-z0-9]{8,}|github_pat_[A-Za-z0-9_]{8,}|hf_[A-Za-z0-9]{8,}|AKIA[A-Z0-9]{12,}|xox[baprs]-[A-Za-z0-9-]{8,})\b")
+PRIVATE_MARKER = re.compile(r"\b(?:[A-Z0-9]+_)*(?:PRIVATE|SECRET)(?:_[A-Z0-9]+)+\b")
+SENSITIVE_ASSIGNMENT = re.compile(r"(?i)\b(?:api[_-]?key|access[_-]?token|password|passwd|secret|authorization|bearer)\b\s*(?:[:=]\s*|\s+)(?:[\"']?)[^\s;,\"']+")
+ABSOLUTE_PATH = re.compile(r"[A-Za-z]:[\\/][^\s;,<>\]\)\"']*|\\\\[^\s;,<>\]\)\"']+|(?<![\w.])(?:~?/[A-Za-z0-9_.-]+){2,}[^\s;,<>\]\)\"']*")
+ADDRESS = re.compile(r"\b(?:\d{1,3}\.){3}\d{1,3}\b|\[[0-9A-Fa-f:]*:[0-9A-Fa-f:]+\]|(?<![\w:])(?:[0-9A-Fa-f]{0,4}:){2,}[0-9A-Fa-f:.]{0,39}(?!\w)")
+
+
+def detail_text(value, limit=400):
+    """Plain text only; strip targets, private paths, credentials and commands."""
+    if not isinstance(value, str):
+        return ""
+    value = html.unescape(value[:4000])
+    value = re.sub(r"!?(\[([^\]]*)\])\([^)]*\)", lambda match: match[2], value)
+    value = re.sub(r"<[^>]*>", "", value)
+    command = re.compile(r"(?i)^(?:python(?:\d(?:\.\d+)?)?|pytest|bash|sh|pwsh|powershell|ssh|tmux|curl|wget|pip|git|rm|export)\s")
+    value = re.sub(r"`([^`]+)`", lambda match: "测试命令（见原 PR）" if command.search(match[1].strip()) else match[1], value)
+    value = re.sub(r"https?://[^\s<>]+|ssh://[^\s<>]+", "[地址已隐藏]", value)
+    value = SENSITIVE_ASSIGNMENT.sub("[凭据已隐藏]", value)
+    value = SECRET.sub("[凭据已隐藏]", PRIVATE_MARKER.sub("[私有信息已隐藏]", value))
+    value = ABSOLUTE_PATH.sub("[路径已隐藏]", ADDRESS.sub("[地址已隐藏]", value))
+    value = re.sub(r"(?<!\w)~/[^\s;,<>\]\)\"']+", "[路径已隐藏]", value)
+    value = re.sub(r"^\s*[-*+]\s*(?:\[[ xX]\]\s*)?", "", value)
+    value = value.replace("**", "").replace("__", "").replace("`", "")
+    value = re.sub(r"[\x00-\x1f\x7f]", " ", value)
+    value = re.sub(r"\s+", " ", value).strip()
+    if command.search(value):
+        value = "测试命令（见原 PR）"
+    return value if len(value) <= limit else value[:limit - 1] + "…"
 
 
 def _without_ci_clauses(line: str) -> str:
@@ -52,7 +82,7 @@ def _row_status(line: str, *, table_result: bool = False) -> str | None:
 
 
 def parse_pr_description(body) -> dict | None:
-    """Return a bounded aggregate of explicit results, never body text or commands.
+    """Return an aggregate and sanitized rows, never full Markdown or commands.
 
     Read result lines in validation sections/tables, plus self-contained test
     statements. CI-only badges, fenced commands and commented templates do not
@@ -67,6 +97,7 @@ def parse_pr_description(body) -> dict | None:
     table_validation = False
     excluded_level = None
     counts = {"passed": 0, "partial": 0, "failed": 0, "pending": 0}
+    rows = []
     seen = set()
     for raw in body.splitlines()[:4000]:
         line = raw.strip()
@@ -136,6 +167,16 @@ def parse_pr_description(body) -> dict | None:
             continue
         seen.add(identity)
         counts[status] += 1
+        if len(rows) < DETAIL_LIMIT:
+            if is_table:
+                label = cells[0] if result_index != 0 else "测试结果"
+                configuration = " · ".join(cell for i, cell in enumerate(cells) if i not in (0, result_index))
+                result = _without_ci_clauses(cells[result_index])
+            else:
+                label, configuration, result = "测试说明", "", candidate
+            rows.append({"label": detail_text(label, 160) or "测试结果",
+                         "configuration": detail_text(configuration, 300),
+                         "result": detail_text(result), "status": status})
     if not sum(counts.values()):
         return None
     positive = counts["passed"] + counts["partial"]
@@ -151,19 +192,21 @@ def parse_pr_description(body) -> dict | None:
                                                    ("failed", "失败"), ("pending", "未完成"))
              if (count := counts[key])]
     return {"status": status, "source": "pr_description", "title": "PR 验收结果",
-            "summary": "PR 描述报告：" + "，".join(parts) + "；测试范围见 PR 明细", "counts": counts}
+            "summary": "PR 描述报告：" + "，".join(parts) + "；测试范围见验收表格", "counts": counts,
+            "rows": rows, "rows_total": sum(counts.values()), "rows_truncated": sum(counts.values()) > len(rows)}
 
 
 def acceptance_summary(pr, pr_data, records, gate, *, branch: str, head: str) -> dict:
     """Choose one display result while preserving independent raw Gate evidence."""
     pr = pr if isinstance(pr, dict) else {}
     number, url = pr.get("number"), pr.get("url")
-    base = {"pr_number": number, "pr_url": url, "archive_available": False, "archive_url": None}
+    base = {"pr_number": number, "pr_url": url, "archive_available": False, "archive_url": None,
+            "rows": [], "rows_total": 0, "rows_truncated": False}
     data = pr_data if isinstance(pr_data, dict) else {}
     if number is not None and data.get("base", {}).get("ref") == branch and data.get("number") == number:
         description = parse_pr_description(data.get("body"))
         if description:
-            # No raw Markdown, headings, commands or other free text survive.
+            # The parser only exports bounded and sanitized result cells.
             return {**base, **description}
     eligible = [record for record in records if isinstance(record, dict)
                 and record.get("status") in ("passed", "partial", "failed")
@@ -175,13 +218,19 @@ def acceptance_summary(pr, pr_data, records, gate, *, branch: str, head: str) ->
         return {**base, "status": status, "source": "local_record", "title": "本地验收记录",
                 "summary": f"本地验收记录：{label}；测试版本和范围见明细",
                 "pr_number": record.get("pr_number") or number, "pr_url": record.get("pr_url") or url,
-                "archive_available": bool(record.get("archive_available")), "archive_url": record.get("archive_url")}
+                "archive_available": bool(record.get("archive_available")), "archive_url": record.get("archive_url"),
+                "rows": [{"label": detail_text(record.get("title") or "本地验收", 160),
+                          "configuration": detail_text(record.get("scope") or "记录的测试范围", 300),
+                          "result": detail_text(record.get("summary") or label), "status": status}], "rows_total": 1}
     raw = gate if isinstance(gate, dict) else {}
     status = raw.get("status", "missing")
     if status in ("passed", "recorded_pass") and not raw.get("tree_matches_head") and raw.get("latest_commit") and raw["latest_commit"] != head:
         status = "stale"
     if status in ("passed", "recorded_pass", "partial", "failed"):
         return {**base, "status": "passed" if status == "recorded_pass" else status, "source": "current_gate",
-                "title": "本地逐项验收", "summary": f"逐项结果 {int(raw.get('passed') or 0)}/{int(raw.get('total') or 0)}；展开分支详情查看"}
+                "title": "本地逐项验收", "summary": f"逐项结果 {int(raw.get('passed') or 0)}/{int(raw.get('total') or 0)}；展开分支详情查看",
+                "rows": [{"label": "逐项验收", "configuration": "原始场景与版本见分支详情",
+                          "result": f"{int(raw.get('passed') or 0)}/{int(raw.get('total') or 0)} 场景通过",
+                          "status": "passed" if status == "recorded_pass" else status}], "rows_total": 1}
     return {**base, "status": "reference" if number else "missing", "source": "pr_reference" if number else "current_gate",
             "title": "PR 验收说明" if number else "验收结果", "summary": "PR 描述尚无可识别的测试结果；点击查看明细" if number else "暂无验收结果"}

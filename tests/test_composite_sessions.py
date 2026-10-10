@@ -31,6 +31,17 @@ class FakeSettings:
         return dict(self.value)
 
 
+class FakeFlagScaleSettings(FakeSettings):
+    def __init__(self, directory=None):
+        super().__init__(directory)
+        self.value = {"provider": "flagscale", "llm_provider": "openai",
+                      "base_url": "https://api.example.test", "model": "test-model",
+                      "max_iterations": 100, "max_continuations": 10, "max_output_tokens": 8192,
+                      "thinking_budget": 0, "time_budget_sec": 60.0, "max_context_tokens": 128000,
+                      "configured": True, "key_storage": "protected", "api_protocol": "openai",
+                      "api_key": "explicit_dummy_flagscale_key", "private_config": "never expose"}
+
+
 class FakeOwner:
     def __init__(self, provider, root):
         self.provider = provider
@@ -54,7 +65,7 @@ class FakeOwner:
     def create(self, payload):
         self.calls.append(("create", copy.deepcopy(payload)))
         require_free_machine(payload, self.peer_managers)
-        row = {"id": ("a" if self.provider == "codex" else "b") * 32, "provider": self.provider,
+        row = {"id": {"codex": "a", "claude": "b", "flagscale": "c"}[self.provider] * 32, "provider": self.provider,
                "status": "prepared", "backend": payload["backend"], "branch": payload.get("branch", "upgrade"),
                "ssh_alias": payload["ssh_alias"], "ssh_connection": None, "created_at": "2026-01-02T00:00:00Z"}
         self.rows.append(row)
@@ -252,12 +263,17 @@ class CompositeSessionsTests(unittest.TestCase):
         config = self.root / "projects.json"
         config.write_text(json.dumps({"projects": [{"id": "vllm", "label": "vLLM", "monitor_config": "monitor.json"}]}), encoding="utf8")
         (self.root / "monitor.json").write_text(json.dumps({"repo": ".", "branch": "upgrade"}), encoding="utf8")
-        settings, codex, claude = Mock(), Mock(), Mock()
+        settings, codex, claude, flagscale, flagscale_settings = Mock(), Mock(), Mock(), Mock(), Mock()
         registry = ProjectRegistry.from_config(config, read_only=True, monitor_factory=lambda cfg: Mock(config=cfg),
-                    sessions_factory=codex, claude_sessions_factory=claude, settings_factory=settings)
+                    sessions_factory=codex, claude_sessions_factory=claude, settings_factory=settings,
+                    flagscale_sessions_factory=flagscale, flagscale_settings_factory=flagscale_settings)
         settings.assert_not_called()
         codex.assert_not_called()
         claude.assert_not_called()
+        flagscale.assert_not_called()
+        flagscale_settings.assert_not_called()
+        self.assertIsNone(registry.projects[0].flagscale_settings)
+        self.assertFalse((self.root / "runs").exists())
         self.assertIsNone(registry.projects[0].agent_settings)
         self.assertIsNone(registry.projects[0].sessions)
 
@@ -266,15 +282,26 @@ class CompositeSessionsTests(unittest.TestCase):
         config.write_text(json.dumps({"projects": [{"id": "vllm", "label": "vLLM", "monitor_config": "monitor.json"}]}), encoding="utf8")
         (self.root / "monitor.json").write_text(json.dumps({"repo": ".", "branch": "upgrade", "sessions_api_url": "http://127.0.0.1:8765"}), encoding="utf8")
         factory = Mock(return_value=self.claude)
+        flagscale = FakeOwner("flagscale", self.root)
+        flagscale_settings = FakeFlagScaleSettings()
+        flagscale_factory = Mock(return_value=flagscale)
         registry = ProjectRegistry.from_config(config, monitor_factory=lambda cfg: Mock(config=cfg),
-                    claude_sessions_factory=factory, settings_factory=lambda directory: self.settings)
+                    claude_sessions_factory=factory, settings_factory=lambda directory: self.settings,
+                    flagscale_sessions_factory=flagscale_factory,
+                    flagscale_settings_factory=lambda directory: flagscale_settings)
         composite = registry.projects[0].sessions
         self.assertIsInstance(composite.codex, RemoteSessionManager)
         clause_config = factory.call_args.args[0]
         self.assertNotIn("sessions_api_url", clause_config)
         self.assertEqual(Path(clause_config["sessions_dir"]), self.root / "runs/vllm/claude-sessions")
         self.assertIs(composite.codex.machine_lock, self.claude.machine_lock)
-        self.assertEqual(composite.codex.peer_managers, [composite.codex, self.claude])
+        self.assertEqual(composite.codex.peer_managers, [composite.codex, self.claude, flagscale])
+        self.assertIs(registry.projects[0].flagscale_settings, flagscale_settings)
+        flagscale_config = flagscale_factory.call_args.args[0]
+        self.assertNotIn("sessions_api_url", flagscale_config)
+        self.assertEqual(Path(flagscale_config["sessions_dir"]), self.root / "runs/vllm/flagscale-sessions")
+        self.assertIs(flagscale_factory.call_args.kwargs["settings_store"], flagscale_settings)
+        self.assertIs(flagscale.machine_lock, composite.codex.machine_lock)
         self.assertIs(registry.projects[0].agent_settings, self.settings)
 
     def test_remote_codex_directly_rejects_other_provider_before_http(self):
@@ -284,6 +311,195 @@ class CompositeSessionsTests(unittest.TestCase):
         with self.assertRaisesRegex(SessionError, "another"):
             owner.create({**self.payload, "provider": "claude"})
         owner._request.assert_not_called()
+
+
+
+    def enable_flagscale(self):
+        self.flagscale = FakeOwner("flagscale", self.root)
+        self.flagscale_settings = FakeFlagScaleSettings()
+        self.manager = CompositeSessionManager(self.codex, self.claude, self.settings,
+                    flagscale=self.flagscale, flagscale_settings=self.flagscale_settings)
+
+    def test_flagscale_create_and_controls_are_owned_only_by_flagscale(self):
+        self.enable_flagscale()
+        row = self.manager.create({**self.payload, "provider": "flagscale"})
+        ident = row["id"]
+        self.assertEqual(row["provider"], "flagscale")
+        self.assertEqual(self.flagscale.calls[0][1]["provider"], "flagscale")
+        self.manager.start(ident)
+        self.manager.message(ident, "continue with saved context")
+        self.manager.respond(ident, 4, {"decision": "decline"})
+        self.manager.interrupt(ident)
+        self.assertEqual(self.manager.event_history(ident, cursor="next", limit=1)["provider"], "flagscale")
+        self.assertEqual([call[0] for call in self.flagscale.calls],
+                         ["create", "start", "message", "respond", "interrupt", "event_history"])
+        self.assertFalse(self.codex.calls or self.claude.calls)
+
+    def test_unavailable_flagscale_never_falls_back_to_existing_executors(self):
+        with self.assertRaisesRegex(SessionError, "flagscale.*unavailable"):
+            self.manager.create({**self.payload, "provider": "flagscale"})
+        self.assertFalse(self.codex.calls or self.claude.calls)
+        manager = CompositeSessionManager(self.codex, self.claude, self.settings,
+                    errors={"flagscale": "The FlagScale session owner is unavailable"})
+        self.assertFalse(manager.snapshot()["providers"]["flagscale"]["available"])
+
+    def test_flagscale_settings_are_independent_and_all_public_fields_are_filtered(self):
+        self.enable_flagscale()
+        self.manager.update_settings({"provider": "flagscale", "llm_provider": "anthropic",
+                                      "api_key": "explicit_dummy_updated_key", "model": "other-model"})
+        self.assertFalse(self.settings.calls)
+        self.assertEqual(self.flagscale_settings.calls[0]["provider"], "flagscale")
+        self.assertEqual(self.manager.settings()["provider"], "claude")
+        snapshot = self.manager.snapshot()
+        self.assertEqual(snapshot["agent_settings"]["provider"], "claude")
+        public = snapshot["agent_settings_by_provider"]["flagscale"]
+        for field in ("llm_provider", "max_iterations", "max_continuations", "max_output_tokens",
+                      "thinking_budget", "time_budget_sec", "max_context_tokens"):
+            self.assertIn(field, public)
+        self.assertEqual(public["model"], "other-model")
+        self.assertEqual(public["llm_provider"], "anthropic")
+        self.assertNotIn("api_key", public)
+        self.assertNotIn("private_config", public)
+        self.assertNotIn("explicit_dummy", json.dumps(snapshot))
+        with self.assertRaisesRegex(SessionError, "settings provider"):
+            self.manager.update_settings({"provider": "codex", "api_key": "explicit_dummy"})
+        self.assertEqual(len(self.flagscale_settings.calls), 1)
+
+    def test_flagscale_health_reports_fresh_turn_capabilities_without_native_resume(self):
+        self.enable_flagscale()
+        self.flagscale.health = Mock(return_value={"available": True, "capabilities": {
+            "supports_resume": True, "supports_mid_turn_steer": True, "unrelated": True}})
+        health = self.manager.health()["providers"]["flagscale"]
+        self.assertEqual(health["follow_up_mode"], "fresh_turn_with_context")
+        self.assertFalse(health["supports_resume"])
+        self.assertFalse(health["supports_mid_turn_steer"])
+        self.assertFalse(health["capabilities"]["supports_resume"])
+        self.assertTrue(health["capabilities"]["unrelated"])
+        snapshot = self.manager.snapshot()["providers"]["flagscale"]
+        self.assertTrue(snapshot["configured"])
+        self.assertFalse(snapshot["capabilities"]["supports_mid_turn_steer"])
+
+    def test_flagscale_leases_and_profile_configuration_share_all_three_owners(self):
+        self.enable_flagscale()
+        self.codex.profiles = [{"id": "gpu", "backend": "cuda", "ssh_alias": "first-gpu",
+                                "ssh_connection": None, "private_key": "never copy",
+                                "last_check": {"ok": True}}]
+        self.manager.create({**self.payload, "provider": "flagscale", "profile_id": "gpu"})
+        self.assertEqual(self.flagscale.profiles[0]["id"], "gpu")
+        self.assertNotIn("private_key", self.flagscale.profiles[0])
+        self.assertNotIn("last_check", self.flagscale.profiles[0])
+        with self.assertRaisesRegex(SessionError, "machine"):
+            self.manager.create(self.payload)
+        with self.assertRaisesRegex(SessionError, "machine"):
+            self.manager.create({**self.payload, "provider": "claude"})
+        self.assertFalse(self.codex.rows or self.claude.rows)
+        self.assertEqual({row["provider"] for row in self.manager.allocation_sessions()}, {"flagscale"})
+        self.assertIs(self.flagscale.machine_lock, self.codex.machine_lock)
+        self.assertEqual(self.flagscale.peer_managers, [self.codex, self.claude, self.flagscale])
+
+    def test_flagscale_owner_lookup_remains_unique_and_allocation_fails_closed(self):
+        self.enable_flagscale()
+        self.flagscale.rows = [{"id": "c" * 32, "status": "running"}]
+        self.codex.allocation_sessions = Mock(side_effect=SessionError("offline"))
+        self.claude.allocation_sessions = Mock(side_effect=SessionError("offline"))
+        self.assertEqual(self.manager.interrupt("c" * 32)["provider"], "flagscale")
+        with self.assertRaisesRegex(SessionError, "offline"):
+            self.manager.allocation_sessions()
+        self.codex.allocation_sessions = Mock(return_value=self.flagscale.rows)
+        with self.assertRaisesRegex(SessionError, "ambiguous"):
+            self.manager.start("c" * 32)
+        self.assertEqual([call[0] for call in self.flagscale.calls], ["interrupt"])
+
+    def test_flagscale_only_composite_has_no_implicit_codex_or_claude_owner(self):
+        flagscale = FakeOwner("flagscale", self.root)
+        manager = CompositeSessionManager(None, None, None, flagscale=flagscale,
+                                          flagscale_settings=FakeFlagScaleSettings())
+        self.assertEqual(manager.create({**self.payload, "provider": "flagscale"})["provider"], "flagscale")
+        self.assertEqual(manager.snapshot()["sessions"][0]["provider"], "flagscale")
+        manager.save_profile({"id": "gpu", "provider": "codex"})
+        self.assertEqual(flagscale.calls[-1][0], "save_profile")
+        manager.close()
+        self.assertTrue(flagscale.closed)
+        with self.assertRaisesRegex(SessionError, "codex.*unavailable"):
+            manager.create(self.payload)
+
+    def test_registry_shares_leases_across_flagscale_and_another_project(self):
+        self.enable_flagscale()
+        other_codex, other_claude = FakeOwner("codex", self.root / "other"), FakeOwner("claude", self.root / "other")
+        other_flagscale = FakeOwner("flagscale", self.root / "other")
+        other = CompositeSessionManager(other_codex, other_claude, FakeSettings(),
+                  flagscale=other_flagscale, flagscale_settings=FakeFlagScaleSettings())
+        registry = ProjectRegistry([ProjectContext("vllm", "vLLM", sessions=self.manager),
+                                    ProjectContext("sglang", "SGLang", sessions=other)])
+        self.manager.create(self.payload)
+        with self.assertRaisesRegex(SessionError, "machine"):
+            other.create({**self.payload, "provider": "flagscale"})
+        self.assertFalse(other_flagscale.rows)
+        self.assertIs(other_flagscale.machine_lock, self.codex.machine_lock)
+        self.assertEqual(len(other_flagscale.peer_managers), 6)
+        registry.close()
+        self.assertTrue(all(manager.closed for manager in other_flagscale.peer_managers))
+
+    def test_registry_keeps_settings_stores_separate_in_one_existing_directory(self):
+        config = self.root / "projects.json"
+        config.write_text(json.dumps({"projects": [{"id": "vllm", "label": "vLLM",
+                                                   "monitor_config": "monitor.json"}]}), encoding="utf8")
+        (self.root / "monitor.json").write_text(json.dumps({"repo": ".", "branch": "upgrade",
+            "sessions_api_url": "http://127.0.0.1:8765", "sessions_api_project": "legacy"}), encoding="utf8")
+        settings_factory, flagscale_settings_factory = Mock(side_effect=FakeSettings), Mock(side_effect=FakeFlagScaleSettings)
+        flagscale_factory = Mock(return_value=FakeOwner("flagscale", self.root))
+        registry = ProjectRegistry.from_config(config, monitor_factory=lambda cfg: Mock(config=cfg),
+                    claude_sessions_factory=lambda *args, **kwargs: self.claude,
+                    settings_factory=settings_factory, flagscale_settings_factory=flagscale_settings_factory,
+                    flagscale_sessions_factory=flagscale_factory)
+        project = registry.projects[0]
+        self.assertIsNot(project.agent_settings, project.flagscale_settings)
+        self.assertEqual(settings_factory.call_args.args[0], self.root / "runs/agent-settings")
+        self.assertEqual(flagscale_settings_factory.call_args.args[0], settings_factory.call_args.args[0])
+        local = flagscale_factory.call_args.args[0]
+        self.assertFalse(any(key.startswith("sessions_api_") for key in local))
+        self.assertEqual(Path(local["sessions_dir"]), self.root / "runs/vllm/flagscale-sessions")
+        self.assertIs(flagscale_factory.call_args.kwargs["settings_store"], project.flagscale_settings)
+        registry.close()
+
+
+    def test_registry_overlapping_flagscale_store_never_constructs_a_provider(self):
+        config = self.root / "projects.json"
+        config.write_text(json.dumps({"projects": [{"id": "vllm", "label": "vLLM",
+                                                   "monitor_config": "monitor.json"}]}), encoding="utf8")
+        (self.root / "monitor.json").write_text(json.dumps({"repo": ".", "branch": "upgrade",
+            "flagscale_sessions_dir": "runs/codex-sessions/inside"}), encoding="utf8")
+        codex, claude, flagscale = Mock(), Mock(), Mock()
+        registry = ProjectRegistry.from_config(config, monitor_factory=lambda cfg: Mock(config=cfg),
+                    sessions_factory=codex, claude_sessions_factory=claude,
+                    settings_factory=FakeSettings, flagscale_settings_factory=FakeFlagScaleSettings,
+                    flagscale_sessions_factory=flagscale)
+        self.assertIn("FlagScale session directory", registry.projects[0].monitor_error)
+        self.assertIsNone(registry.projects[0].sessions)
+        codex.assert_not_called()
+        claude.assert_not_called()
+        flagscale.assert_not_called()
+        registry.close()
+
+    def test_registry_failed_flagscale_provider_does_not_hide_healthy_existing_owners(self):
+        config = self.root / "projects.json"
+        config.write_text(json.dumps({"projects": [{"id": "vllm", "label": "vLLM",
+                                                   "monitor_config": "monitor.json"}]}), encoding="utf8")
+        (self.root / "monitor.json").write_text(json.dumps({"repo": ".", "branch": "upgrade"}), encoding="utf8")
+        factory = Mock(side_effect=RuntimeError("private provider config"))
+        registry = ProjectRegistry.from_config(config, monitor_factory=lambda cfg: Mock(config=cfg),
+                    sessions_factory=lambda *args: self.codex, claude_sessions_factory=lambda *args, **kwargs: self.claude,
+                    settings_factory=FakeSettings, flagscale_settings_factory=FakeFlagScaleSettings,
+                    flagscale_sessions_factory=factory)
+        snapshot = registry.projects[0].sessions.snapshot()
+        self.assertTrue(snapshot["providers"]["codex"]["available"])
+        self.assertTrue(snapshot["providers"]["claude"]["available"])
+        self.assertFalse(snapshot["providers"]["flagscale"]["available"])
+        self.assertNotIn("private provider config", json.dumps(snapshot))
+        with self.assertRaisesRegex(SessionError, "flagscale.*unavailable"):
+            registry.projects[0].sessions.create({**self.payload, "provider": "flagscale"})
+        self.assertFalse(self.codex.calls or self.claude.calls)
+        registry.close()
 
 
 if __name__ == "__main__": unittest.main()

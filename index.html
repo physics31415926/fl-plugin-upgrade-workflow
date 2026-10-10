@@ -188,6 +188,8 @@
       .backend-detail { padding: 14px; }
     }
   .acceptance-primary{border:1px solid var(--line);border-radius:10px;padding:14px 16px;background:#fff}.acceptance-primary p{font-size:13px;white-space:pre-wrap;overflow-wrap:anywhere;margin:9px 0}.acceptance-heading{display:flex;align-items:center;gap:10px;flex-wrap:wrap;font-size:13px;font-weight:650}.acceptance-evidence{margin:14px 0 20px}.acceptance-evidence>summary{cursor:pointer;color:var(--muted);font-size:12px}.record-entry>strong{margin-right:8px}.record-entry{padding:12px 0;border-bottom:1px solid var(--line);overflow-wrap:anywhere}.record-entry p{margin:6px 0}
+.acceptance-open{display:inline-flex;align-items:center;gap:7px;border:0;padding:0;background:transparent;color:inherit;cursor:pointer;text-align:left;font:inherit}.acceptance-open:focus-visible{outline:3px solid #95b5ff;outline-offset:4px}.acceptance-dialog{width:min(1000px,92vw);max-height:85vh;overflow:auto;border:1px solid var(--line);border-radius:14px;padding:22px;color:var(--ink);background:#fff;box-shadow:0 24px 80px #18243a33}.acceptance-dialog::backdrop{background:#18243a66}.acceptance-dialog-head{display:flex;justify-content:space-between;align-items:center;gap:18px}.acceptance-dialog h2{font-size:20px;margin:0}.acceptance-dialog p{font-size:13px;white-space:pre-wrap;overflow-wrap:anywhere}.acceptance-dialog .acceptance-table-wrap{overflow-x:auto}.acceptance-dialog table{width:100%;border-collapse:collapse;font-size:13px}.acceptance-dialog th,.acceptance-dialog td{padding:10px 12px;text-align:left;vertical-align:top;border-bottom:1px solid var(--line);overflow-wrap:anywhere;white-space:pre-wrap}.acceptance-dialog th{white-space:nowrap;color:var(--muted)}.acceptance-dialog caption{text-align:left;font-size:12px;color:var(--muted);padding:8px 0}.acceptance-dialog td:last-child{white-space:nowrap}.acceptance-dialog .dialog-close{padding:6px 11px;cursor:pointer;border:1px solid var(--line);border-radius:7px;background:#fff;color:var(--ink);font:inherit}.acceptance-dialog .original-pr{display:inline-block;margin-top:14px;font-size:13px}
+.backend-row{padding:17px}.backend-row .backend-toggle{padding:0}.backend-expand{border:0;background:transparent;color:var(--muted);cursor:pointer;font-size:21px;padding:0}.backend-expand[aria-expanded="true"]{transform:rotate(90deg)}
   </style>
 </head>
 <body>
@@ -620,14 +622,40 @@
     }
     return githubPrLink(result.pr_url, result.pr_number ? "PR #" + result.pr_number + " 测试明细 ↗" : "查看 PR 测试明细 ↗");
   }
+  function openAcceptance(result, label, opener) {
+    const dialog = el("dialog", "acceptance-dialog"), heading = el("div", "acceptance-dialog-head");
+    dialog.setAttribute("aria-label", label + " · 验收明细");
+    const close = el("button", "dialog-close", "关闭");close.type = "button";close.autofocus = true;
+    heading.append(el("h2", "", label + " · 验收明细"), close);dialog.append(heading);
+    dialog.append(el("p", "", result.summary || "尚无验收摘要"));
+    dialog.append(el("p", "", result.source === "pr_description" ? "来源：PR 作者报告，测试版本与覆盖范围以原 PR 为准。" : "来源：" + acceptanceSource(result) + "，测试版本与范围见原始记录。"));
+    const rows = (Array.isArray(result.rows) ? result.rows : []).filter(row => row && typeof row === "object").slice(0, 100);
+    if (rows.length) {
+      const wrap = el("div", "acceptance-table-wrap"), table = el("table"), head = el("thead"), header = el("tr"), body = el("tbody");
+      table.append(el("caption", "", result.source === "pr_description" ? "PR 作者报告的验收明细" : "已有验收记录"));
+      for (const name of ["验收项", "配置 / 场景", "结果说明", "状态"]) {const cell = el("th", "", name);cell.scope = "col";header.append(cell);}head.append(header);
+      for (const row of rows) {
+        const item = el("tr");item.append(el("td", "", row.label || "验收项"), el("td", "", row.configuration || "—"), el("td", "", row.result || "—"));
+        const status = el("td");status.append(badge(row.status, acceptanceText(row.status)));item.append(status);body.append(item);
+      }
+      table.append(head, body);wrap.append(table);dialog.append(wrap);
+      if (result.rows_truncated || Number(result.rows_total) > rows.length) dialog.append(el("p", "", "当前展示 " + rows.length + " 条" + (Number.isInteger(result.rows_total) && result.rows_total > rows.length ? " / 共 " + result.rows_total + " 条" : "") + "；完整范围请查看原 PR。"));
+    } else dialog.append(el("p", "empty", "暂无可识别的验收表格。可查看原 PR，或在分支详情中查看本地记录与逐项结果。"));
+    const original = githubPrLink(result.pr_url, "查看原 PR ↗");
+    if (original) {original.className = "original-pr";original.textContent = result.pr_number ? "查看原 PR #" + result.pr_number + " ↗" : "查看原 PR ↗";dialog.append(original);}
+    close.addEventListener("click", () => dialog.close());
+    dialog.addEventListener("cancel", event => {event.preventDefault();dialog.close();});
+    dialog.addEventListener("close", () => {dialog.remove();if (opener?.isConnected) opener.focus();});
+    document.body.append(dialog);dialog.showModal();return dialog;
+  }
   function renderAcceptance(data, backend) {
     const result = acceptanceResult(backend, data.head), section = el("section", "acceptance-results");
     section.append(el("h3", "matrix-heading", "验收结果"));
     const primary = el("div", "acceptance-primary"), heading = el("div", "acceptance-heading");
-    heading.append(badge(result.status, acceptanceText(result.status)), el("span", "", result.title || acceptanceSource(result)));
+    const view = el("button", "acceptance-open");view.type = "button";view.setAttribute("aria-haspopup", "dialog");view.setAttribute("aria-label", (backend.label || backend.id || "平台") + " 验收结果：" + acceptanceText(result.status) + "，查看表格");
+    view.append(badge(result.status, acceptanceText(result.status)), el("span", "", "查看表格"));view.addEventListener("click", () => openAcceptance(result, backend.label || backend.id || "平台", view));
+    heading.append(view, el("span", "", result.title || acceptanceSource(result)));
     primary.append(heading, el("p", "", result.summary || "尚无可用的验收结论，可查看 PR 或补充本地记录。"));
-    const anchor = acceptanceLink(result);
-    if (anchor) primary.append(anchor);
     if (result.source === "pr_description") primary.append(el("p", "matrix-help", "PR 作者报告的测试结果；模型、执行模式、测试版本和覆盖范围以 PR 中的说明为准。"));
     section.append(primary);
     const auxiliary = el("details", "acceptance-evidence");
@@ -662,7 +690,7 @@
     const ciStatus = effectiveCi(backend, data.head);
     const gateStatus = effectiveGate(backend, data.head);
     const card = el("article", "backend");
-    const toggle = el("button", "backend-toggle columns");
+    const header = el("div", "backend-row columns"), toggle = el("button", "backend-toggle");
     toggle.type = "button";
     const open = expanded.has(id);
     toggle.setAttribute("aria-expanded", String(open));
@@ -675,16 +703,18 @@
     nameCell.append(nameLine);
     const subtitle = pr.number ? "PR #" + pr.number + " · " + prStatusText(pr, mergeStatus) : (backend.ci_enabled ? "CI 已接入" : "CI 尚未接入");
     nameCell.append(el("div", "backend-sub", subtitle));
-    toggle.append(nameCell);
+    toggle.setAttribute("aria-label", (backend.label || id) + "，展开辅助详情");header.append(toggle);toggle.append(nameCell);
     for (const [label, status, text] of [
       ["代码合入", mergeStatus, integrationText(mergeStatus)],
-      ["适配 CI", ciStatus, !backend.ci_enabled && (ciStatus === "missing" || ciStatus === "unknown") ? "未接入" : labels[ciStatus]],
-      ["验收结果", gateStatus, acceptanceText(gateStatus)]
+      ["适配 CI", ciStatus, !backend.ci_enabled && (ciStatus === "missing" || ciStatus === "unknown") ? "未接入" : labels[ciStatus]]
     ]) {
       const cell = el("div");
       cell.append(el("span", "cell-label", label), badge(status, text));
-      toggle.append(cell);
+      header.append(cell);
     }
+    const acceptance = acceptanceResult(backend, data.head), acceptanceButton = el("button", "acceptance-open");
+    acceptanceButton.type = "button";acceptanceButton.setAttribute("aria-haspopup", "dialog");acceptanceButton.setAttribute("aria-label", (backend.label || id) + " 验收结果：" + acceptanceText(gateStatus) + "，查看表格");
+    acceptanceButton.append(badge(gateStatus, acceptanceText(gateStatus)), el("span", "", "查看表格"));acceptanceButton.addEventListener("click", () => openAcceptance(acceptance, backend.label || id, acceptanceButton));header.append(acceptanceButton);
     const countCell = el("div", "meter");
     countCell.append(el("span", "cell-label", "逐项场景"));
     const track = el("span", "meter-track");
@@ -694,9 +724,8 @@
     fill.style.width = (total ? Math.min(100, passed / total * 100) : 0) + "%";
     track.append(fill);
     countCell.append(track, el("span", "mono", passed + "/" + total));
-    toggle.append(countCell);
-    toggle.append(el("span", "chevron", "›"));
-    card.append(toggle);
+    header.append(countCell);
+    const expand = el("button", "backend-expand", "›");expand.type = "button";expand.setAttribute("aria-label", (backend.label || id) + "，展开辅助详情");expand.setAttribute("aria-controls", detailId);expand.setAttribute("aria-expanded", String(open));header.append(expand);card.append(header);
     const detail = el("div", "backend-detail");
     detail.id = detailId;
     detail.hidden = !open;
@@ -736,10 +765,12 @@
     card.append(detail);
     toggle.addEventListener("click", () => {
       const next = toggle.getAttribute("aria-expanded") !== "true";
-      toggle.setAttribute("aria-expanded", String(next));
+      toggle.setAttribute("aria-expanded", String(next));expand.setAttribute("aria-expanded", String(next));
+      toggle.setAttribute("aria-label", (backend.label || id) + (next ? "，收起辅助详情" : "，展开辅助详情"));expand.setAttribute("aria-label", toggle.getAttribute("aria-label"));
       detail.hidden = !next;
       if (next) expanded.add(id); else expanded.delete(id);
     });
+    expand.addEventListener("click", () => toggle.click());
     return card;
   }
   function render(data) {
@@ -989,10 +1020,10 @@
     card.workBranch.textContent = "任务工作分支：" + (session.work_branch || "待核对");
     const identityKey=JSON.stringify([session.branch,session.commit,session.work_branch,session.worktree,session.remote_workspace,session.reported_provenance]);
     if(card.identityKey!==identityKey){card.identityKey=identityKey;renderProvenance(card,session);}
-    card.title.textContent = (machineLabels[session.backend] || session.backend || "Backend") + " · " + (session.provider==="claude"?"Claude":"Codex") + " 适配任务";
+    card.title.textContent = (machineLabels[session.backend] || session.backend || "Backend") + " · " + ({claude:"Claude",flagscale:"FlagScale Agent"}[session.provider]||"Codex") + " 适配任务";
     card.goal.hidden = !session.goal; card.goalText.textContent = session.goal || "";
     const denied=session.provider==="claude"&&session.status==="waiting_input"&&session.claude_permission_denials?.length;
-    const claudeRunning=session.provider==="claude"&&session.status==="running";
+    const claudeRunning=["claude","flagscale"].includes(session.provider)&&session.status==="running";
     const waiting = (session.status === "waiting_input"&&!denied) || session.status === "waiting_approval";
     card.status.className = "pill " + (waiting ? "partial" : session.status === "failed" ? "failed" : activeTasks.has(session.status) ? "running" : "unknown");
     const approvalEnding = session.approval_cancel_pending && activeTasks.has(session.status);
@@ -1028,7 +1059,7 @@
     }
     card.text.disabled = monitor;
     card.send.disabled = monitor || approvalEnding || card.messageBusy || waiting || claudeRunning || ["prepared","starting","interrupting"].includes(session.status);
-    card.send.title = monitor ? "已有 PR · 仅监控" : claudeRunning ? "Claude 执行中；请等待本轮结束或先中断再跟进。" : denied ? "请在任务详情核对 Claude 工具规则，随后继续原任务。" : approvalEnding ? "本轮正在结束；状态更新后可发送修订要求，继续原任务。远端 tmux 不会自动停止。" : "";
+    card.send.title = monitor ? "已有 PR · 仅监控" : claudeRunning ? "Agent 执行中；请等待本轮结束或先中断再跟进。" : denied ? "请在任务详情核对 Claude 工具规则，随后继续原任务。" : approvalEnding ? "本轮正在结束；状态更新后可发送修订要求，继续原任务。远端 tmux 不会自动停止。" : "";
   }
   function isActiveTask(task) {
     return !!task && !task.historical && ["prepared","starting","running","waiting_approval","waiting_input","interrupting"].includes(task.status);
@@ -1038,7 +1069,7 @@
     const rows=tasks.filter(task=>task.branch===branch&&isActiveTask(task)&&(readOnly||task.source==="codex_native"));
     for(const task of rows){
       const card=el("article","task-card"),label=machineLabels[task.backend]||task.backend;
-      card.append(el("h3","",label+" · "+(taskLabels[task.status]||"状态未知")),el("p","task-note",task.source==="codex_native"?"Codex 原生子会话 · 只读跟踪":(task.provider==="claude"?"Claude":"Codex")+" 看板任务 · 只读状态"));
+      card.append(el("h3","",label+" · "+(taskLabels[task.status]||"状态未知")),el("p","task-note",task.source==="codex_native"?"Codex 原生子会话 · 只读跟踪":({claude:"Claude",flagscale:"FlagScale Agent"}[task.provider]||"Codex")+" 看板任务 · 只读状态"));
       if(task.updated_at)card.append(el("p","task-note","任务更新 "+dateText(task.updated_at)));
       if(task.stale)card.append(el("p","task-note","等待新的会话状态"));
       if(!readOnly){
@@ -1074,7 +1105,7 @@
       renderMachineProfiles(data.machine_profiles);
       if ((policyChanged || taskChanged) && latestBranchSnapshot?.branch === branch) render(latestBranchSnapshot);
       const replaced=new Set(tasks.filter(task=>task.source==="codex_native"&&task.branch===branch).map(task=>task.backend));
-      const sessions = prioritizedSessions(taskSessions.filter(session => session.branch === branch&&isActiveTask(session)&&(session.provider==="claude"||!replaced.has(session.backend))));
+      const sessions = prioritizedSessions(taskSessions.filter(session => session.branch === branch&&isActiveTask(session)&&(["claude","flagscale"].includes(session.provider)||!replaced.has(session.backend))));
       const box = byId("task-list"), ids = new Set(sessions.map(session => session.id));
       for (const [id,card] of taskCards) if (!ids.has(id)) { card.root.remove(); taskCards.delete(id); }
       box.querySelectorAll(".empty").forEach(node => node.remove());

@@ -32,6 +32,7 @@ class ProjectContext:
     native_tasks_error: str | None = None
     agent_settings: object | None = None
     readonly_sessions: object | None = None
+    flagscale_settings: object | None = None
 
     def metadata(self, *, read_only=False):
         return {"id": self.id, "label": self.label, "engine": self.engine_name,
@@ -39,6 +40,7 @@ class ProjectContext:
                 "sessions": not read_only and self.sessions is not None,
                 "workflow": not read_only and self.workflow is not None,
                 "agent_settings": not read_only and self.agent_settings is not None,
+                "flagscale_settings": not read_only and self.flagscale_settings is not None,
                 "adaptation_tasks": self.native_tasks is not None or self.readonly_sessions is not None
                                     or (not read_only and self.sessions is not None)}
 
@@ -279,7 +281,8 @@ class ProjectRegistry:
     @classmethod
     def from_config(cls, path, *, read_only=False, monitor_factory=None,
                     sessions_factory=None, workflow_factory=None,
-                    claude_sessions_factory=None, settings_factory=None):
+                    claude_sessions_factory=None, settings_factory=None,
+                    flagscale_sessions_factory=None, flagscale_settings_factory=None):
         # Imports are lazy: a public share never imports or creates control sessions.
         if monitor_factory is None:
             from branch_monitor import BranchMonitor
@@ -291,7 +294,7 @@ class ProjectRegistry:
             from flflow import Engine
             workflow_factory = Engine
         path = Path(path).expanduser().resolve()
-        settings_store = None
+        settings_store = flagscale_settings_store = None
         if not read_only:
             if settings_factory is None:
                 from agent_settings import AgentSettingsStore
@@ -299,7 +302,15 @@ class ProjectRegistry:
             if claude_sessions_factory is None:
                 from claude_agent import ClaudeSessionManager
                 claude_sessions_factory = ClaudeSessionManager
-            settings_store = settings_factory(path.parent / "runs" / "agent-settings")
+            if flagscale_settings_factory is None:
+                from agent_settings import FlagScaleSettingsStore
+                flagscale_settings_factory = FlagScaleSettingsStore
+            if flagscale_sessions_factory is None:
+                from flagscale_adapter import FlagScaleSessionManager
+                flagscale_sessions_factory = FlagScaleSessionManager
+            settings_directory = path.parent / "runs" / "agent-settings"
+            settings_store = settings_factory(settings_directory)
+            flagscale_settings_store = flagscale_settings_factory(settings_directory)
         try:
             raw = json.loads(path.read_text(encoding="utf-8"))
         except (OSError, ValueError) as exc:
@@ -346,6 +357,14 @@ class ProjectRegistry:
                 if claude_directory.is_relative_to(codex_directory) or codex_directory.is_relative_to(claude_directory):
                     raise ProjectError("Claude and Codex session directories must be separate")
                 directories.append((project_id, "claude_sessions_dir", claude_directory))
+                config["flagscale_sessions_dir"] = str(cls._path(config_path.parent,
+                    config.get("flagscale_sessions_dir", f"runs/{project_id}/flagscale-sessions"),
+                    "flagscale_sessions_dir"))
+                flagscale_directory = Path(config["flagscale_sessions_dir"])
+                if any(flagscale_directory.is_relative_to(other) or other.is_relative_to(flagscale_directory)
+                       for other in (codex_directory, claude_directory)):
+                    raise ProjectError("FlagScale session directory must be separate from Claude and Codex")
+                directories.append((project_id, "flagscale_sessions_dir", flagscale_directory))
                 prepared.append((project, config, config_path.parent, workflow_path))
             except (OSError, ValueError, TypeError, AttributeError) as exc:
                 project.monitor_error = f"Project monitor unavailable: {exc}"
@@ -372,25 +391,39 @@ class ProjectRegistry:
                         from readonly_session_observer import ReadonlySessionObserver
                         project.readonly_sessions = ReadonlySessionObserver([
                             {"provider": "codex", "directory": config["sessions_dir"]},
-                            {"provider": "claude", "directory": config["claude_sessions_dir"]}])
+                            {"provider": "claude", "directory": config["claude_sessions_dir"]},
+                            {"provider": "flagscale", "directory": config["flagscale_sessions_dir"]}])
                     else:
                         project.agent_settings = settings_store
+                        project.flagscale_settings = flagscale_settings_store
                     if not read_only and project.monitor is not None:
                         from composite_sessions import CompositeSessionManager
-                        codex, claude, provider_errors = None, None, {}
+                        codex, claude, flagscale, provider_errors = None, None, None, {}
                         try:
                             codex = (RemoteSessionManager(config, base) if "sessions_api_url" in config
                                      else sessions_factory(config, base))
                         except Exception:
                             provider_errors["codex"] = "The Codex session owner is unavailable"
-                        claude_config = {key: value for key, value in config.items() if key != "sessions_api_url"}
+                        # Every added executor is local; existing owner routing is Codex-only.
+                        local_config = {key: value for key, value in config.items()
+                                        if not key.startswith("sessions_api_")}
+                        claude_config = dict(local_config)
                         claude_config["sessions_dir"] = config["claude_sessions_dir"]
                         try:
                             claude = claude_sessions_factory(claude_config, base, settings_store=settings_store)
                         except Exception:
                             provider_errors["claude"] = "The Claude session owner is unavailable"
-                        if codex is not None or claude is not None:
-                            project.sessions = CompositeSessionManager(codex, claude, settings_store, errors=provider_errors)
+                        flagscale_config = dict(local_config)
+                        flagscale_config["sessions_dir"] = config["flagscale_sessions_dir"]
+                        try:
+                            flagscale = flagscale_sessions_factory(
+                                flagscale_config, base, settings_store=flagscale_settings_store)
+                        except Exception:
+                            provider_errors["flagscale"] = "The FlagScale session owner is unavailable"
+                        if codex is not None or claude is not None or flagscale is not None:
+                            project.sessions = CompositeSessionManager(
+                                codex, claude, settings_store, flagscale=flagscale,
+                                flagscale_settings=flagscale_settings_store, errors=provider_errors)
                         else:
                             project.sessions_error = "Project agent session providers are unavailable"
                 if workflow_path is not None and not read_only:

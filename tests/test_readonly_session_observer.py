@@ -15,15 +15,17 @@ class ReadonlySessionObserverTests(unittest.TestCase):
         self.root = Path(self.temp.name)
         self.now = datetime(2026, 1, 2, 12, tzinfo=timezone.utc)
         self.codex, self.claude = self.root / "old codex", self.root / "new claude"
+        self.flagscale = self.root / "independent flagscale"
         self.observer = ReadonlySessionObserver([
-            {"provider": "codex", "directory": self.codex}, {"provider": "claude", "directory": self.claude}],
+            {"provider": "codex", "directory": self.codex}, {"provider": "claude", "directory": self.claude},
+            {"provider": "flagscale", "directory": self.flagscale}],
             clock=lambda: self.now)
 
     def tearDown(self):
         self.temp.cleanup()
 
     def save(self, provider="codex", identity="a" * 32, **changes):
-        directory = self.codex if provider == "codex" else self.claude
+        directory = {"codex":self.codex,"claude":self.claude,"flagscale":self.flagscale}[provider]
         path = directory / identity / "session.json"
         path.parent.mkdir(parents=True, exist_ok=True)
         record = {"id": identity, "status": "running", "backend": "thead", "branch": "upgrade",
@@ -39,6 +41,7 @@ class ReadonlySessionObserverTests(unittest.TestCase):
         self.assertEqual(self.observer.snapshot(), [])
         self.assertFalse(self.codex.exists())
         self.assertFalse(self.claude.exists())
+        self.assertFalse(self.flagscale.exists())
         self.save("claude", "b" * 32)
         self.assertEqual(self.observer.snapshot()[0]["provider"], "claude")
 
@@ -94,6 +97,29 @@ class ReadonlySessionObserverTests(unittest.TestCase):
         self.assertEqual(row["backend"], "corex")
         self.assertTrue(row["title"].startswith("iluvatar"))
         self.assertNotIn("COREX", row["title"])
+
+    def test_flagscale_is_safe_metadata_only_and_has_no_native_controller_identity(self):
+        self.save("flagscale", "c"*32, backend="cuda", status="waiting_input",
+                  flagscale_session_id="1234abcd", flagscale_result={"text":"private output"},
+                  agent_settings={"api_key":"dummy-flagscale-key"}, follow_up_mode="fresh_turn_with_context")
+        row=self.observer.snapshot()[0]
+        self.assertEqual(row["provider"],"flagscale")
+        self.assertEqual(row["title"],"NVIDIA · FlagScale Agent 适配")
+        self.assertEqual(row["status"],"waiting_input")
+        self.assertEqual(set(row),ReadonlySessionObserver.PUBLIC_FIELDS)
+        self.assertFalse(row["controllable"])
+        for secret in ("c"*32,"1234abcd","private","dummy-flagscale-key","agent_settings","flagscale_result",str(self.root)):
+            self.assertNotIn(secret,json.dumps(row))
+        self.now+=timedelta(minutes=31)
+        self.assertTrue(self.observer.snapshot()[0]["stale"])
+
+    def test_flagscale_tasks_stay_current_alongside_native_codex_history(self):
+        self.save("flagscale","c"*32)
+        native=Mock(snapshot=Mock(return_value=[{"id":"native-thead","backend":"thead","branch":"upgrade"}]))
+        project=ProjectContext("vllm","vLLM",native_tasks=native,readonly_sessions=self.observer)
+        rows=project.adaptation_tasks(read_only=True)
+        self.assertEqual(rows[1]["provider"],"flagscale")
+        self.assertFalse(rows[1]["historical"])
 
     def test_size_bound_rejects_large_file_instead_of_publishing_cached_old_status(self):
         path = self.save()

@@ -92,6 +92,8 @@ test('overview hides branch-wide CI while preserving backend CI and coverage', (
     append(...nodes) { this.childNodes.push(...nodes); }
     replaceChildren(...nodes) { this.textContent='';this.childNodes=[...nodes]; }
     get options() { return this.childNodes; }
+    setAttribute(name,value) { this[name]=String(value); }
+    addEventListener(name,listener) { (this.listeners||={})[name]=listener; }
   }
   const textOf=node=>node.textContent+node.childNodes.map(textOf).join('');
   const text=source('overview.html'),context={URL,location:{href:'https://example.invalid/dashboard/'},document:{createElement:tag=>new Node(tag)}};

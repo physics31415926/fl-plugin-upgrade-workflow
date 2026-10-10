@@ -1113,6 +1113,10 @@ done
         branch = self._text(payload.get("branch", self.default_branch), "branch", 200, True)
         if branch.startswith("-") or any(c.isspace() for c in branch):
             raise SessionError("Invalid branch")
+        # Only this process can issue a successful read-only bootstrap proof.
+        # Consume it once, before preflight/Git, and never persist the token.
+        from automatic_tasks import consume_automatic_task
+        payload, automatic_context = consume_automatic_task(payload, self)
         with self._lock:
             self._require_new_session(machine["backend"], branch)
             self._require_adapt(machine["backend"], branch)
@@ -1121,7 +1125,15 @@ done
                 raise SessionError("Save this SSH connection before creating a task")
             machine["ssh_config_path"] = profile["ssh_config_path"]
         preflight_required = bool(payload.get("require_preflight", False) or machine["ssh_connection"])
-        preflight = self._check_connection(machine) if preflight_required else None
+        if automatic_context is not None:
+            # This directory is intentionally future work for the agent. The
+            # creation probe verified HOME and optional source, not a ready Git
+            # workspace. Retain manual SSH metadata and its task-local config.
+            preflight_required = False
+            preflight = {"ok": True, "scope": "home_and_optional_source_only",
+                         "workspace_exists": False, **automatic_context["probe"]}
+        else:
+            preflight = self._check_connection(machine) if preflight_required else None
         if preflight and not preflight["ok"]:
             raise SessionError("连接预检未通过：" + preflight["error"])
         for profile in self._profiles.values():
@@ -1149,6 +1161,8 @@ done
             "preflight_required": preflight_required, "preflight": preflight, "profile_id": payload.get("profile_id"),
             "plan": [], "last_agent_message": None,
         }
+        if automatic_context is not None:
+            session["automatic_context"] = automatic_context
         with self.machine_lock, self._lock:
             self._require_new_session(machine["backend"], branch)
             self._require_adapt(machine["backend"], branch)

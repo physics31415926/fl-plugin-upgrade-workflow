@@ -315,7 +315,7 @@ class ShareServerTests(unittest.TestCase):
                 }
                 source["backends"][0]["acceptance"] = acceptance
                 backend = sanitize_snapshot(source)["backends"][0]
-                expected = dict(acceptance, archive_url=None)
+                expected = dict(acceptance, archive_url=None, rows=[], rows_total=0, rows_truncated=False)
                 self.assertEqual(backend["acceptance"], expected)
                 self.assertEqual(backend["gate"]["passed"], 20)
                 self.assertEqual(backend["results"][0]["status"], "recorded_pass")
@@ -344,7 +344,7 @@ class ShareServerTests(unittest.TestCase):
         source["backends"][0]["acceptance"] = acceptance
         public = sanitize_snapshot(source)["backends"][0]["acceptance"]
         self.assertEqual(set(public), {"status", "source", "title", "summary", "pr_number",
-                                       "pr_url", "archive_available", "archive_url"})
+                                       "pr_url", "archive_available", "archive_url", "rows", "rows_total", "rows_truncated"})
         self.assertIsNone(public["archive_url"])
         self.assertNotIn("explicit_dummy_private", json.dumps(public))
         private_values = (

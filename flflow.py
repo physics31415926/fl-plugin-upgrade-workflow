@@ -725,6 +725,14 @@ def make_server(engine: Engine | None, host: str, port: int, monitor: object | N
         raise WorkflowError("HTTP control must bind to loopback only")
     registry = registry or ProjectRegistry.single(engine, monitor, sessions)
 
+    from ssh_profile_sync import SSHProfileSync
+    ssh_syncs = {}
+    for project in registry.projects:
+        config = getattr(project.monitor, "config", {})
+        state_root = config.get("sessions_dir")
+        state_path = Path(state_root) / "ssh-config-sync.json" if state_root else None
+        ssh_syncs[project.id] = SSHProfileSync(config.get("ssh_import_config"), state_path)
+
     class Handler(BaseHTTPRequestHandler):
         def _json(self, status: int, body: dict) -> None:
             data = json.dumps(body, indent=2).encode("utf-8")
@@ -789,12 +797,16 @@ def make_server(engine: Engine | None, host: str, port: int, monitor: object | N
                 self._json(200, registry.statuses())
                 return
             if target.path == "/api/agent-settings":
-                if project.agent_settings is None:
-                    self._json(HTTPStatus.SERVICE_UNAVAILABLE, {"error": "Local agent settings are not configured"})
-                    return
                 try:
+                    values = parse_qs(target.query, keep_blank_values=True).get("provider", ["claude"])
+                    if len(values) != 1 or values[0] not in ("claude", "flagscale"):
+                        raise ValueError("Choose Claude or FlagScale Agent settings")
+                    store = project.flagscale_settings if values[0] == "flagscale" else project.agent_settings
+                    if store is None:
+                        self._json(HTTPStatus.SERVICE_UNAVAILABLE, {"error": "Local agent settings are not configured"})
+                        return
                     from composite_sessions import safe_agent_settings
-                    self._json(200, safe_agent_settings(project.agent_settings.snapshot()))
+                    self._json(200, safe_agent_settings(store.snapshot()))
                 except ValueError as exc:
                     self._json(HTTPStatus.BAD_REQUEST, {"error": str(exc)})
                 except Exception:
@@ -854,6 +866,8 @@ def make_server(engine: Engine | None, host: str, port: int, monitor: object | N
                         result = sessions.snapshot(compact=True)
                     else:
                         result = sessions.snapshot()
+                    if target.path == "/api/codex-sessions":
+                        result = ssh_syncs[project.id].synchronize(sessions, result)
                     self._json(200, result)
                 except ValueError as exc:
                     self._json(HTTPStatus.BAD_REQUEST, {"error": str(exc)})
@@ -984,11 +998,25 @@ def make_server(engine: Engine | None, host: str, port: int, monitor: object | N
                 if not isinstance(body, dict):
                     raise WorkflowError("Request body must be a JSON object")
                 if target == "/api/agent-settings":
-                    if project.agent_settings is None:
+                    provider = body.get("provider", "claude")
+                    if provider not in ("claude", "flagscale"):
+                        raise WorkflowError("Choose Claude or FlagScale Agent settings")
+                    store = project.flagscale_settings if provider == "flagscale" else project.agent_settings
+                    if store is None:
                         self._json(HTTPStatus.SERVICE_UNAVAILABLE, {"error": "Local agent settings are not configured"})
                         return
                     from composite_sessions import safe_agent_settings
-                    self._json(200, safe_agent_settings(project.agent_settings.update(body)))
+                    self._json(200, safe_agent_settings(store.update(body)))
+                    return
+                if target == "/api/codex-machines/sync-ssh":
+                    if sessions is None:
+                        self._json(HTTPStatus.SERVICE_UNAVAILABLE, {"error": "Agent sessions are not configured"})
+                        return
+                    if body:
+                        raise WorkflowError("SSH sync does not accept client paths or connection fields")
+                    result = ssh_syncs[project.id].synchronize(sessions, sessions.snapshot(compact=True))
+                    self._json(200, {"profiles": result.get("machine_profiles", []),
+                                     "ssh_config_sync": result.get("ssh_config_sync")})
                     return
                 session_action = re.fullmatch(r"/api/codex-sessions/([A-Za-z0-9_-]+)/(start|message|interrupt|respond)", target)
                 if session_action and not re.fullmatch(r"[0-9a-f]{32}", session_action[1]):
@@ -1001,8 +1029,14 @@ def make_server(engine: Engine | None, host: str, port: int, monitor: object | N
                         result = sessions.save_profile(body)
                     elif target == "/api/codex-machines/check":
                         result = sessions.check_machine(body)
+                        if isinstance(result, dict):
+                            alias = result.get("ssh_alias")
+                            if isinstance(alias, str):
+                                ssh_syncs[project.id].checked(alias)
                     elif target == "/api/codex-sessions":
-                        result = sessions.create(body)
+                        from automatic_tasks import normalize_automatic_task
+                        task_body = normalize_automatic_task(project, body)
+                        result = sessions.create(task_body)
                         if body.get("start") is True:
                             result = sessions.start(result["id"])
                     else:

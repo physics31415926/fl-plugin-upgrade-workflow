@@ -31,8 +31,8 @@ class ReadonlySessionObserver:
             raise ValueError("Read-only session stores must be a bounded array")
         self.stores = []
         for store in stores:
-            if not isinstance(store, dict) or store.get("provider") not in ("codex", "claude"):
-                raise ValueError("Read-only session provider must be codex or claude")
+            if not isinstance(store, dict) or store.get("provider") not in ("codex", "claude", "flagscale"):
+                raise ValueError("Read-only session provider must be codex, claude or flagscale")
             directory = store.get("directory")
             if not isinstance(directory, (str, Path)) or not str(directory):
                 raise ValueError("Read-only session store requires a directory")
@@ -64,8 +64,9 @@ class ReadonlySessionObserver:
             return None
         fingerprint = hashlib.sha256((provider + "\0" + str(directory.absolute()) + "\0" + controller_id).encode("utf8")).hexdigest()[:20]
         label = "NVIDIA" if backend == "cuda" else "iluvatar" if backend in ("corex", "iluvatar") else backend.upper()
+        provider_label = {"codex": "Codex", "claude": "Claude", "flagscale": "FlagScale Agent"}[provider]
         return {"id": "task-" + fingerprint, "backend": backend, "branch": branch,
-                "title": label + " · " + ("Claude" if provider == "claude" else "Codex") + " 适配",
+                "title": label + " · " + provider_label + " 适配",
                 "source": "dashboard", "source_label": "看板持久化状态", "provider": provider,
                 "status": value["status"], "updated_at": updated.isoformat(), "stale": False,
                 "stage": None, "controllable": False, "historical": False}

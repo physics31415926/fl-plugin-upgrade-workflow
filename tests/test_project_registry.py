@@ -4,7 +4,7 @@ from pathlib import Path
 import tempfile
 import threading
 import unittest
-from unittest.mock import Mock
+from unittest.mock import Mock, patch
 
 import flflow
 from project_registry import ProjectContext, ProjectError, ProjectRegistry, RemoteSessionManager
@@ -66,6 +66,17 @@ class FakeSessions:
         self.closed = True
 
 
+class FakeFlagScaleSessions(FakeSessions):
+    def __init__(self, config, base, *, settings_store=None):
+        super().__init__(config, base)
+        self.settings_store = settings_store
+
+    def snapshot(self, **kwargs):
+        value = super().snapshot(**kwargs)
+        value["sessions"][0].update(id="3" * 32, provider="flagscale")
+        return value
+
+
 class FakeWorkflow:
     def __init__(self, path):
         self.path = path
@@ -107,7 +118,9 @@ class ProjectRegistryTests(unittest.TestCase):
             (self.root / (project + ".json")).write_text(json.dumps(config), encoding="utf-8")
         self.registry = ProjectRegistry.from_config(self.config_path, read_only=read_only,
                                                    monitor_factory=FakeMonitor, sessions_factory=sessions_factory,
-                                                   workflow_factory=FakeWorkflow)
+                                                   workflow_factory=FakeWorkflow,
+                                                   flagscale_sessions_factory=FakeFlagScaleSessions,
+                                                   flagscale_settings_factory=lambda directory: Mock(snapshot=Mock(return_value={"provider": "flagscale", "configured": False})))
         return self.registry
 
     def serve(self, *, shared=False):
@@ -141,7 +154,12 @@ class ProjectRegistryTests(unittest.TestCase):
         self.assertNotEqual(vllm.sessions.evidence_dir, sglang.sessions.evidence_dir)
         self.assertIs(vllm.sessions.machine_lock, sglang.sessions.machine_lock)
         self.assertEqual(vllm.sessions.peer_managers, [vllm.sessions.codex, vllm.sessions.claude,
-                                                     sglang.sessions.codex, sglang.sessions.claude])
+                                                     vllm.sessions.flagscale, sglang.sessions.codex,
+                                                     sglang.sessions.claude, sglang.sessions.flagscale])
+        self.assertEqual(vllm.sessions.flagscale.root, self.root / "runs/vllm/flagscale-sessions")
+        self.assertEqual(sglang.sessions.flagscale.root, self.root / "runs/sglang/flagscale-sessions")
+        self.assertIs(vllm.sessions.flagscale.machine_lock, sglang.sessions.codex.machine_lock)
+        self.assertIs(vllm.flagscale_settings, sglang.flagscale_settings)
         self.assertEqual(sglang.monitor.config["repo"], str(self.root / "repos/sglang"))
 
     def test_invalid_ids_and_overlapping_runtime_paths_are_rejected(self):
@@ -150,6 +168,10 @@ class ProjectRegistryTests(unittest.TestCase):
             self.load()
         self.config["projects"][1]["id"] = "sglang"
         self.monitors["sglang"]["evidence_dir"] = "runs/codex-sessions/inside"
+        with self.assertRaisesRegex(ProjectError, "overlap"):
+            self.load()
+        del self.monitors["sglang"]["evidence_dir"]
+        self.monitors["sglang"]["flagscale_sessions_dir"] = "runs/vllm/claude-sessions/inside"
         with self.assertRaisesRegex(ProjectError, "overlap"):
             self.load()
 
@@ -242,6 +264,42 @@ class ProjectRegistryTests(unittest.TestCase):
         self.assertNotIn(thread, json.dumps(row))
         self.assertNotIn("private", json.dumps(row))
         self.assertIsNone(self.registry.projects[0].sessions)
+
+    def test_readonly_flagscale_store_uses_configured_directory_without_importing_or_reading_settings(self):
+        import builtins
+        from datetime import datetime, timezone
+        identity="4"*32
+        store=self.root/"archives"/"flagscale"
+        path=store/identity/"session.json"
+        path.parent.mkdir(parents=True)
+        path.write_text(json.dumps({"id":identity,"provider":"flagscale","status":"waiting_input",
+            "backend":"cuda","branch":"adapt-vllm","updated_at":datetime.now(timezone.utc).isoformat(),
+            "thread_id":"private-controller","flagscale_session_id":"private-native-id",
+            "api_key":"private-dummy-key","worktree":"C:/private/path","events":[{"text":"private output"}]}),encoding="utf-8")
+        self.monitors["vllm"]["flagscale_sessions_dir"]="archives/flagscale"
+        self.config_path.write_text(json.dumps(self.config),encoding="utf-8")
+        for project,config in self.monitors.items():
+            (self.root/(project+".json")).write_text(json.dumps(config),encoding="utf-8")
+        forbidden=Mock(side_effect=AssertionError("No executor or credential store may be constructed"))
+        original_import=builtins.__import__
+        def safe_import(name,*args,**kwargs):
+            if name.split(".")[0] in {"flagscale_adapter","flagscale_worker","claude_agent","codex_sessions","agent_settings","composite_sessions"}:
+                raise AssertionError("Readonly imported an executor or credential module")
+            return original_import(name,*args,**kwargs)
+        with patch("builtins.__import__",side_effect=safe_import):
+            self.registry=ProjectRegistry.from_config(self.config_path,read_only=True,monitor_factory=FakeMonitor,
+                sessions_factory=forbidden,claude_sessions_factory=forbidden,flagscale_sessions_factory=forbidden,
+                workflow_factory=forbidden,settings_factory=forbidden,flagscale_settings_factory=forbidden)
+            rows=self.registry.projects[0].adaptation_tasks(read_only=True)
+        forbidden.assert_not_called()
+        self.assertEqual(len(rows),1)
+        self.assertEqual(rows[0]["provider"],"flagscale")
+        self.assertFalse(rows[0]["controllable"])
+        self.assertNotIn("private",json.dumps(rows))
+        self.assertNotIn(identity,json.dumps(rows))
+        self.assertFalse((self.root/"runs").exists())
+        self.assertIsNone(self.registry.projects[0].flagscale_settings)
+        self.assertFalse(self.registry.projects[0].metadata(read_only=True)["flagscale_settings"])
 
     def test_native_observer_invalid_config_does_not_hide_branch_monitor_or_peer(self):
         self.monitors["vllm"]["external_tasks"] = [{"id": "unsafe"}]

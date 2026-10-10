@@ -16,7 +16,7 @@ git -C 'C:\work\vllm-plugin-FL' fetch upstream
 git -C 'C:\work\sglang-plugin-FL' fetch upstream
 ```
 
-将示例路径和 `upstream` 换成自己 checkout 的实际值。可选安装并以部署用户登录 `gh`，提高 GitHub PR / CI 查询配额；没有 `gh` 时仍可查询公开 API。创建 agent 任务时，另准备对应的 Codex / Claude CLI、登录和 SSH 环境。只读 LAN 不需要 agent CLI 或 API key。
+将示例路径和 `upstream` 换成自己 checkout 的实际值。可选安装并以部署用户登录 `gh`，提高 GitHub PR / CI 查询配额；没有 `gh` 时仍可查询公开 API。创建 agent 任务时，另准备对应的 Codex / Claude CLI 或 FlagScale Agent Python 环境、认证和 SSH 环境。只读 LAN 不需要 agent CLI 或 API key。
 
 在工作台目录打开终端，运行向导：
 
@@ -67,7 +67,7 @@ python -B start_dashboard.py --config runs/configured-alt/launch.json --port 887
 
 `--port` 只覆盖本次启动参数，不修改配置文件。需要长期使用新端口时更新对应 `launch.json`。
 
-双仓库首页分别显示两个项目；详情为 `/monitor?project=vllm` 和 `/monitor?project=sglang`。各项目的缓存、采集时间和错误状态独立。任务控制只通过本机入口使用。
+双仓库首页分别显示两个项目；详情为 `/monitor?project=vllm` 和 `/monitor?project=sglang`。各项目的缓存、采集时间和错误状态独立。任务控制只通过本机入口使用。首次完成 Agent 登录或 API 配置及 SSH 非交互连接后，在任务页选择设备和 Agent 即可创建；补充说明可选，远端目录自动分配。自定义连接和验收参数放在高级设置中。
 
 ## 局域网免登录阅读
 
@@ -303,6 +303,6 @@ ssh -N -L 127.0.0.1:8765:127.0.0.1:8765 <development-host>
 - Windows 查看配置的 stdout、`.stderr` 和启动器日志；Linux 查看 tmux 输出。
 - 采集失败显示最后采集时间和错误，不把未知状态当作通过。
 
-Codex / Claude 的创建、启动、跟进和配置只通过本机完整控制台使用。Claude API key 使用当前 Windows 用户的 DPAPI 加密保存在忽略目录；服务或计划任务使用同一 Windows 用户。LAN 不初始化 agent 设置或执行器，`/api/agent-settings`、`/api/agent-providers` 及私有原件接口均不开放。
+Codex / Claude / FlagScale Agent 的创建、启动、跟进和配置只通过本机完整控制台使用。Claude 与 FlagScale 的 API key 分别使用当前 Windows 用户的 DPAPI 加密保存在忽略目录；服务或计划任务使用同一 Windows 用户。LAN 不初始化 agent 设置或执行器，`/api/agent-settings`、`/api/agent-providers` 及私有原件接口均不开放。
 
 原生子会话和已落盘任务的共享状态仅包含安全的 backend、分支、状态、阶段和时间。历史实验记录在 LAN 页面指向 GitHub PR，本机入口可读取经哈希验证的 UTF-8 存档。更多配置见 [高级配置与验收参考](docs/REFERENCE.md)。
