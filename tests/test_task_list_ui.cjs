@@ -28,7 +28,7 @@ function ui(sessions){
   const context={document:{activeElement:null},sessionListCards:new Map(),selectionTarget:{session:null,branch:null,backend:null},labels:{cuda:'NVIDIA / CUDA'},statuses:Object.fromEntries(['prepared','starting','running','waiting_approval','waiting_input','interrupting','completed','failed','interrupted','disconnected'].map(value=>[value,value])),API:'/api/codex-sessions',encodeURIComponent,
     $:id=>{if(!nodes.has(id))nodes.set(id,new Element('div'));return nodes.get(id);},
     el:(tag,cls,text)=>{const node=new Element(tag);node.className=cls||'';if(text!==undefined)node.textContent=text;return node;},
-    notice:()=>{},renderDetail:()=>{},refresh:async()=>{},post:async(url,body)=>calls.push({url,body}),
+    notice:()=>{},renderDetail:()=>{},refresh:async()=>{},post:async(url,body)=>calls.push({url,body}),providerAvailable:()=>true,
     statusLabel:status=>status,providerName:()=> 'Codex',formatTime:()=> 'test-time',reportedProvenance:()=>null,sessionProgress:()=>'',latestSessionMessage:()=>'',planMeta:()=>'',progressWarningText:()=>''};
   vm.createContext(context);
   const declaration=source.match(/const state = (\{[^\n]*\});/);

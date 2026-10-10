@@ -180,7 +180,16 @@ class CompositeSessionManager:
         return {**manager.event_history(session_id, cursor=cursor, limit=limit), "provider": provider}
 
     def _provider_status(self, provider, snapshot):
-        health = self._health.get(provider) or snapshot.get("health") or {}
+        cached = self._health.get(provider)
+        if provider == "codex" and "runtime_revision" in snapshot:
+            # An installed/removed/upgraded CLI invalidates the old probe,
+            # including probes cached by this proxy process.
+            if cached and cached.get("runtime_revision") != snapshot["runtime_revision"]:
+                self._health.pop(provider, None)
+                cached = None
+            health = snapshot.get("health") or cached or {}
+        else:
+            health = cached or snapshot.get("health") or {}
         result = {"provider": provider, "available": bool(snapshot.get("available", False)), **health}
         if provider in ("claude", "flagscale"):
             try:

@@ -268,6 +268,10 @@ class CodexSessionManager:
         self.root = self._path(config.get("sessions_dir", "runs/codex-sessions"))
         self.evidence_dir = self._path(config.get("evidence_dir", "runs/gate-evidence"))
         self.executable = config.get("codex_executable") or shutil.which("codex")
+        self._configured_executable = config.get("codex_executable")
+        # Other providers and injected protocol clients own their own runtime.
+        self._uses_codex_runtime = type(self) is CodexSessionManager and client_factory is AppServerClient
+        self._runtime_revision = None
         self.backends = set(config.get("session_backends", self.BACKENDS))
         self.backend_task_policies = self._task_policies(config.get("backend_task_policies", {}))
         self.client_factory = client_factory
@@ -747,11 +751,13 @@ done
         return json.loads(json.dumps(view))
 
     def snapshot(self, compact=False):
+        self._resolve_executable()
         with self._lock:
             for session in self._sessions.values():
                 self._refresh_progress_artifact(session)
             return json.loads(json.dumps({
                 "available": bool(self.executable), "default_branch": self.default_branch,
+                "runtime_revision": self._runtime_revision,
                 "engine": self.engine, "project_label": self.project_label, "case_dir": self.case_dir,
                 "case_sources": self.case_sources,
                 "backends": sorted(self.backends), "health": self._health,
@@ -1353,10 +1359,34 @@ done
             "若用户中断，明确哪些远程 tmux 任务仍运行；不可将中断 Codex 等同于停止远程任务。"
         )
 
+    def _resolve_executable(self):
+        """Refresh app-managed paths after an update, without running the CLI."""
+        if not self._uses_codex_runtime:
+            return self.executable
+        from codex_runtime import resolve_codex_executable
+        executable = resolve_codex_executable(self._configured_executable, base_dir=self.base_dir)
+        try:
+            stamp = Path(executable).stat().st_mtime_ns if executable else None
+        except OSError:
+            executable, stamp = None, None
+        signature = hashlib.sha256(json.dumps([executable, stamp]).encode()).hexdigest()[:24]
+        with self._lock:
+            if signature != self._runtime_revision:
+                self._health = None
+                self._runtime_revision = signature
+            self.executable = executable
+        return executable
+
+    @staticmethod
+    def _runtime_error():
+        return "未找到可用的本机 Codex CLI；请检查 Codex 安装后重新检查连接，并重试原任务。"
+
     def health(self):
+        self._resolve_executable()
         result = {"available": bool(self.executable), "authenticated": None, "account_type": None, "version": None, "error": None}
+        result["runtime_revision"] = self._runtime_revision
         if not self.executable:
-            result["error"] = "Codex CLI was not found; install it and run codex login locally."
+            result["error"] = self._runtime_error()
         else:
             client = None
             try:
@@ -1368,6 +1398,7 @@ done
                 if not result["authenticated"]:
                     result["error"] = "Run codex login in a local terminal before starting a session."
             except (SessionError, OSError) as exc:
+                result["available"] = False
                 result["error"] = str(exc)
             finally:
                 if client:
@@ -1381,8 +1412,11 @@ done
         client = self._clients.get(session_id)
         if client and client.process.poll() is None:
             return client
+        self._resolve_executable()
         if not self.executable:
-            raise SessionError("Codex CLI is unavailable")
+            raise SessionError(self._runtime_error())
+        if self._uses_codex_runtime and not Path(session["worktree"]).is_dir():
+            raise SessionError("任务的本地工作目录已不存在；请恢复该目录后重试原任务。")
         client = self.client_factory(self.executable, session["worktree"], lambda msg: self._event(session_id, msg))
         self._clients[session_id] = client
         params = {"cwd": session["worktree"], "approvalPolicy": "on-request", "approvalsReviewer": "user", "sandbox": "workspace-write"}
@@ -1413,6 +1447,10 @@ done
                 raise SessionError("Session already has an active turn")
             if session_id in self._workers and self._workers[session_id].is_alive():
                 raise SessionError("Previous startup is still settling; refresh before resuming")
+            if self._uses_codex_runtime and not self._resolve_executable():
+                session["error"] = self._runtime_error()
+                self._save(session)
+                raise SessionError(session["error"])
             self._require_free_machine(session, excluding=session_id,
                                        message="This machine is reserved by another session")
             previous_status = session["status"]

@@ -122,7 +122,9 @@ Grep</textarea><small class="hint">SSH 命令可显式配置 Bash(ssh *)。未�
   for(const backend of orderedBackends){const option=document.querySelector('#backend option[value="'+backend+'"]');if(option)$('backend').append(option);}
   function providerName(provider){return {claude:'Claude Code',flagscale:'FlagScale Agent'}[provider]||'Codex';}
   function providerAvailable(provider=$('agent-provider').value){
-    const info=state.providers[provider];return info?!!info.available&&(!['claude','flagscale'].includes(provider)||!!info.configured):provider==='codex'&&state.available;
+    const info=state.providers[provider];
+    if(!info)return provider==='codex'&&state.available;
+    return info.available===true&&!info.error&&(provider!=='codex'||info.authenticated!==false)&&(!['claude','flagscale'].includes(provider)||!!info.configured);
   }
   function claudeDenied(session){return session?.provider==='claude'&&session.status==='waiting_input'&&Array.isArray(session.claude_permission_denials)&&session.claude_permission_denials.length>0;}
   function renderProviderSettings(settings,force=false){
@@ -199,7 +201,7 @@ Grep</textarea><small class="hint">SSH 命令可显式配置 Bash(ssh *)。未�
   function el(tag, cls, text) { const item = document.createElement(tag); if (cls) item.className = cls; if (text !== undefined) item.textContent = String(text); return item; }
   function notice(id, message, error=false) { const node=$(id);node.textContent=message || '';node.classList.toggle('error',error); }
   function formatTime(value) { if (!value) return '—'; const date=new Date(value);return Number.isNaN(date.getTime()) ? String(value) : date.toLocaleString('zh-CN',{hour12:false}); }
-  function statusLabel(status, session) { return session?.approval_cancel_pending && working(session) ? '本轮结束处理中' : statuses[status] || status || '未知'; }
+  function statusLabel(status, session) { return session?.approval_cancel_pending && working(session) ? '本轮结束处理中' : startupFailed(session) ? '启动失败' : statuses[status] || status || '未知'; }
   function errorMessage(value) {
     if(value==null||value==='')return '';
     const message=typeof value==='string'?value:typeof value.message==='string'?value.message:'';
@@ -249,6 +251,7 @@ Grep</textarea><small class="hint">SSH 命令可显式配置 Bash(ssh *)。未�
   }
   function current() { return state.sessions.find(item => String(item.id) === state.selected); }
   function working(session) { return ['starting','running','waiting_approval','waiting_input','interrupting'].includes(session?.status); }
+  function startupFailed(session) { return !!session && session.status==='failed'&&!session.thread_id; }
   function activeTask(session) { return !!session && !session.historical && ['prepared','starting','running','waiting_approval','waiting_input','interrupting'].includes(session?.status); }
   function visibleSessions(sessions=state.sessions) { return prioritizedSessions(sessions.filter(session=>state.showHistory||activeTask(session))); }
   function taskPolicy(backend, branch, session) {
@@ -572,6 +575,16 @@ Grep</textarea><small class="hint">SSH 命令可显式配置 Bash(ssh *)。未�
     if(Number.isSafeInteger(session.event_log_dropped_records)&&session.event_log_dropped_records>0)messages.push('文件保存故障期间有 '+session.event_log_dropped_records+' 条历史事件日志未能保留。');
     box.textContent=messages.join('\n');box.hidden=!messages.length;
   }
+  function renderTaskActions(session,monitor,ending) {
+    const ready=providerAvailable(session.provider||'codex'),failedStart=startupFailed(session);
+    $('start-session').textContent=monitor?'仅监控':failedStart?'重试启动原任务':session.thread_id?'继续任务':'启动任务';
+    $('start-session').disabled=state.readOnly||monitor||(working(session)&&!claudeDenied(session))||state.actionBusy||!ready;
+    $('interrupt-session').textContent=session.status==='prepared'?'取消待启动任务':'中断当前执行';
+    $('interrupt-session').disabled=state.readOnly||(!working(session)&&session.status!=='prepared')||session.status==='interrupting'||state.actionBusy;
+    $('send-message').disabled=state.readOnly||monitor||ending||failedStart||state.actionBusy||(['prepared','starting','interrupting','waiting_input','waiting_approval'].includes(session.status)&&!claudeDenied(session))||(['claude','flagscale'].includes(session.provider)&&working(session)&&!claudeDenied(session))||!ready;
+    $('send-message').textContent=session.thread_id&&!working(session)?'发送要求并继续原任务':'发送指令';
+    $('message-hint').textContent=ending?'本轮结束处理中；修订文字会保留，状态更新后再发送。':monitor?'此任务仅监控，可查看已有 PR、日志或中断执行。':failedStart?ready?'点击「重试启动原任务」继续使用当前任务与工作目录，无需重新创建。':'本机 Agent 暂不可用。完成上方连接检查后可重试启动原任务，无需重新创建。':session.status==='waiting_input'||session.status==='waiting_approval'?'请先处理上方的授权或提问。':session.status==='prepared'?'启动任务后可以发送补充指令。':'执行中可补充指令；本轮结束后可发送修订要求，继续原任务。';
+  }
   function renderDetail() {
     const session=current(),missing=session?'':missingSelectionMessage(selectionTarget);
     $('selection-notice').textContent=missing;$('selection-notice').hidden=!missing;
@@ -583,11 +596,11 @@ Grep</textarea><small class="hint">SSH 命令可显式配置 Bash(ssh *)。未�
     $('detail-task-notice').textContent=ending?(monitor?'已拒绝操作，本轮正在结束。此任务仅监控已有 PR；此操作不会自动停止远端 tmux。':'已拒绝操作，本轮正在结束。请等待状态更新后，在下方填写修订要求并发送，继续原任务。此操作不会自动停止远端 tmux。'):monitor?'仅监控已有 PR；下方为停止主动适配时的历史记录。验收结果请在「分支验收监控」中查看，历史阶段记录不代表 Gate 验收通过。':'本轮对话结束后仍可继续任务。可在下方发送修订要求，继续原任务；轮次结束不会自动停止远端 tmux。验收结果请在「分支验收监控」中查看，任务状态本身不代表 Gate 通过。';
     $('detail-progress-title').textContent=monitor?'历史任务记录':session.progress_warning?'上次有效进度摘要':'当前进度摘要';
     const progressWarning=progressWarningText(session);$('detail-progress-warning').textContent=progressWarning;$('detail-progress-warning').hidden=!progressWarning;
-    $('start-session').textContent=monitor?'仅监控':session.thread_id?'继续任务':'启动任务';$('start-session').disabled=monitor||(working(session)&&!claudeDenied(session))||state.actionBusy||!providerAvailable(session.provider||'codex');$('interrupt-session').textContent=session.status==='prepared'?'取消待启动任务':'中断当前执行';$('interrupt-session').disabled=(!working(session)&&session.status!=='prepared')||session.status==='interrupting'||state.actionBusy;$('send-message').disabled=monitor||ending||state.actionBusy||(['prepared','starting','interrupting','waiting_input','waiting_approval'].includes(session.status)&&!claudeDenied(session))||(['claude','flagscale'].includes(session.provider)&&working(session)&&!claudeDenied(session))||!providerAvailable(session.provider||'codex');$('send-message').textContent=session.thread_id&&!working(session)?'发送要求并继续原任务':'发送指令';$('message-hint').textContent=ending?'本轮结束处理中；修订文字会保留，状态更新后再发送。':monitor?'此任务仅监控，可查看已有 PR、日志或中断执行。':session.status==='waiting_input'||session.status==='waiting_approval'?'请先处理上方的授权或提问。':session.status==='prepared'?'启动任务后可以发送补充指令。':'执行中可补充指令；本轮结束后可发送修订要求，继续原任务。';
+    renderTaskActions(session,monitor,ending);
     $('prompt-preview').hidden=!session.prompt;$('detail-prompt').textContent=session.prompt||'';
     const progress=sessionProgress(session),plan=Array.isArray(session.plan)?session.plan:[],planNote=monitor?'历史任务计划 · '+(planMeta(session)||'记录时间未知'):planMeta(session);$('detail-progress').hidden=!progress&&!plan.length&&!planNote;$('detail-progress-summary').textContent=progress;$('detail-progress-summary').hidden=!progress;$('detail-plan-meta').textContent=planNote;$('detail-plan-meta').hidden=!planNote;$('detail-plan').replaceChildren();$('detail-plan').hidden=!plan.length;for(const step of plan)$('detail-plan').append(el('li','',planStepText(step.status,monitor)+' · '+step.step));
-    if(session.provider==='flagscale')$('message-hint').textContent=working(session)?'FlagScale Agent 正在执行；本轮结束或中断后可跟进，继续使用同一工作目录。':'跟进继续使用同一工作目录。';
-    if(session.provider==='claude'){
+    if(session.provider==='flagscale'&&!startupFailed(session))$('message-hint').textContent=working(session)?'FlagScale Agent 正在执行；本轮结束或中断后可跟进，继续使用同一工作目录。':'跟进继续使用同一工作目录。';
+    if(session.provider==='claude'&&!startupFailed(session)){
       if(claudeDenied(session))$('message-hint').textContent='请先核对 Claude 工具权限配置，再发送要求或继续原任务。';
       else if(working(session))$('message-hint').textContent='Claude 正在执行；等待本轮结束或中断当前轮后可发送跟进。';
     }
@@ -595,11 +608,13 @@ Grep</textarea><small class="hint">SSH 命令可显式配置 Bash(ssh *)。未�
   }
   async function refresh(quiet=false) {
     if(state.fetching)return;state.fetching=true;
-    try{const data=await request(API);state.sessions=Array.isArray(data.sessions)?data.sessions:[];state.policies=data.backend_task_policies&&typeof data.backend_task_policies==='object'?data.backend_task_policies:{};state.profiles=Array.isArray(data.machine_profiles)?data.machine_profiles:[];renderSshSync(data.ssh_config_sync);state.available=!!data.available;state.providers=data.providers&&typeof data.providers==='object'?data.providers:{};renderProviderSettings(data.agent_settings);if(data.agent_settings_by_provider?.flagscale)renderFlagscaleSettings(data.agent_settings_by_provider.flagscale);state.selected=selectSessionId(prioritizedSessions(state.sessions),state.selected,selectionTarget);showProfiles();renderList();renderDetail();$('sync-status').textContent='已更新 '+new Date().toLocaleTimeString('zh-CN',{hour12:false});checkButtons();renderHealth(data.health);if(!quiet)notice('global-notice','');}
+    try{const data=await request(API);state.sessions=Array.isArray(data.sessions)?data.sessions:[];state.policies=data.backend_task_policies&&typeof data.backend_task_policies==='object'?data.backend_task_policies:{};state.profiles=Array.isArray(data.machine_profiles)?data.machine_profiles:[];renderSshSync(data.ssh_config_sync);state.available=!!data.available;state.providers=data.providers&&typeof data.providers==='object'?data.providers:{};renderProviderSettings(data.agent_settings);if(data.agent_settings_by_provider?.flagscale)renderFlagscaleSettings(data.agent_settings_by_provider.flagscale);state.selected=selectSessionId(prioritizedSessions(state.sessions),state.selected,selectionTarget);showProfiles();renderHealth(data.health);renderList();renderDetail();$('sync-status').textContent='已更新 '+new Date().toLocaleTimeString('zh-CN',{hour12:false});checkButtons();if(!quiet)notice('global-notice','');}
     catch(error){$('sync-status').textContent='连接失败，将自动重试';notice('global-notice',error.message,true);}finally{state.fetching=false;}
   }
   async function act(session, action, body={}) {
-    if(state.readOnly||!session||state.actionBusy)return;if(['start','message'].includes(action)&&taskPolicy(session.backend,session.branch,session).mode==='monitor'){notice('session-notice','已有 PR · 仅监控，无法启动或发送适配指令。',true);return false;}state.actionBusy=true;renderDetail();notice('session-notice','');
+    if(state.readOnly||!session||state.actionBusy)return;if(['start','message'].includes(action)&&taskPolicy(session.backend,session.branch,session).mode==='monitor'){notice('session-notice','已有 PR · 仅监控，无法启动或发送适配指令。',true);return false;}
+    if(['start','message'].includes(action)&&!providerAvailable(session.provider||'codex')){notice('session-notice','所选 Agent 暂不可用，请先完成上方连接检查，再继续原任务。',true);return false;}
+    state.actionBusy=true;renderDetail();notice('session-notice','');
     try{await post(API+'/'+encodeURIComponent(session.id)+'/'+action,body);await refresh(true);return true;}catch(error){notice('session-notice',error.message,true);return false;}finally{state.actionBusy=false;renderDetail();}
   }
   async function create(start) {
@@ -632,16 +647,24 @@ Grep</textarea><small class="hint">SSH 命令可显式配置 Bash(ssh *)。未�
   $('message-form').addEventListener('submit',async event=>{event.preventDefault();const message=$('message').value.trim();if(message&&await act(current(),'message',{text:message}))$('message').value='';});
   function renderHealth(health) {
     if(health?.providers)state.providers=health.providers;
+    else if(health&&Object.prototype.hasOwnProperty.call(health,'available'))state.providers.codex={...state.providers.codex,...health};
     const provider=$('agent-provider').value,name=providerName(provider),info=health?.providers?.[provider]||state.providers[provider]||(provider==='codex'?health:null);
     const available=providerAvailable(provider);
     const apiProvider = ['claude','flagscale'].includes(provider);
-    $('health-status').textContent=!available?(apiProvider&&info?.available&&!info.configured?name+' 需要配置 API Key':'本机 '+name+' 需要配置'):apiProvider?name+' API Key 已配置':'Codex 已找到';
+    $('health-status').textContent=!available?(apiProvider&&info?.available&&!info.configured?name+' 需要配置 API Key':!apiProvider&&info?.authenticated===false?'Codex 尚未登录':info?.error?name+' 连接检查失败':'本机 '+name+' 程序不可用'):apiProvider?name+' API Key 已配置':info?.authenticated===true?'Codex 已登录，可启动任务':'Codex 已找到，登录待检查';
     $('health-check').textContent=apiProvider?'检查 '+name+' 连接':'检查 Codex 登录';
     if(apiProvider)$('health-note').textContent=info?.error||[info?.version?'版本 '+info.version:'Agent 待检查','Key 保存状态不代表 API 已验证','任务保存在本机'].join(' · ');
     else $('health-note').textContent=info?.error||[info?.version,info?.authenticated===true?'已登录':info?.authenticated===false?'请在本机登录':'登录待检查','任务保存在本机'].filter(Boolean).join(' · ');
   }
   $('older-events').addEventListener('click',loadOlderEvents);
-  $('health-check').addEventListener('click',async()=>{const button=$('health-check');button.disabled=true;$('health-note').textContent='正在检查本机 agent 可用性…';try{const health=await request('/api/codex-health');state.available=!!health.available;renderHealth(health);checkButtons();}catch(error){$('health-status').textContent='Agent 连接检查失败';$('health-note').textContent=error.message;}finally{button.disabled=false;}});
+  async function checkAgentHealth(){
+    if(state.readOnly)return;
+    const button=$('health-check');button.disabled=true;$('health-note').textContent='正在检查本机 agent 可用性…';
+    try{const health=await request('/api/codex-health');state.available=!!health.available;renderHealth(health);}
+    catch(error){const provider=$('agent-provider').value;state.providers[provider]={...state.providers[provider],available:false,error:error.message||'Agent 连接检查失败'};renderHealth(null);}
+    finally{button.disabled=false;checkButtons();renderDetail();}
+  }
+  $('health-check').addEventListener('click',checkAgentHealth);
   async function initialize() {
     try {
       const capabilities = await request('/api/capabilities');

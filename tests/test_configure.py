@@ -262,10 +262,11 @@ class ConfigureTests(unittest.TestCase):
     def test_codex_discovery_does_not_execute_cli(self):
         cli = self.root / "CLI with spaces.exe"
         cli.write_bytes(b"fixture only; never executed")
+        cli.chmod(0o700)
         with patch.object(configure.shutil, "which", return_value=str(cli)), patch.object(configure.subprocess, "run") as run:
             self.assertEqual(str(cli), configure.cli_path(None))
             run.assert_not_called()
-        with patch.object(configure.shutil, "which", return_value=None):
+        with patch.object(configure.shutil, "which", return_value=None), patch.dict(os.environ, {"LOCALAPPDATA": ""}):
             self.assertIsNone(configure.cli_path(None))
             with self.assertRaisesRegex(configure.ConfigurationError, "existing CLI file"):
                 configure.cli_path(str(self.root / "missing.exe"))
@@ -274,6 +275,16 @@ class ConfigureTests(unittest.TestCase):
             paths, _ = configure.configure(args, app_root=self.app)
         config = json.loads(next(path for path in paths if path.name == "branch-monitor.json").read_text(encoding="utf-8"))
         self.assertEqual(str(cli), config["codex_executable"])
+
+    def test_automatic_cli_discovery_does_not_pin_a_version_path(self):
+        versioned = self.root / "Codex" / "bin" / "aaaaaaaaaaaaaaaa" / "codex.exe"
+        with patch.object(configure, "cli_path", return_value=str(versioned)) as discover:
+            paths, _ = configure.configure(self.args(), app_root=self.app)
+        discover.assert_not_called()
+        for path in paths:
+            if path.name.startswith("branch-monitor"):
+                config = json.loads(path.read_text(encoding="utf-8"))
+                self.assertNotIn("codex_executable", config)
 
     def test_posix_display_command_preserves_shell_metacharacters(self):
         command = ["python", "-B", "start_dashboard.py", "--config", "/private/$USER;folder with spaces/launch.json"]

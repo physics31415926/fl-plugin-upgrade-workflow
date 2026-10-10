@@ -32,6 +32,10 @@ Backend 列表固定 NVIDIA 在第一位，其余按显示名称的英文字母�
 
 新建任务可选择 `Codex`、`Claude` 或 `FlagScale Agent`。Codex 延续已有 CLI 登录、会话与代理服务；Claude 使用独立的本机 Claude Code CLI、工作树和会话目录，保留跨仓库的机器占用检查。Claude 默认运行目录为 `runs/<project>/claude-sessions`，不会把 Claude 请求转发给旧 Codex 服务。
 
+Codex 启动前会重新定位当前 CLI；桌面端更新导致旧版本目录失效时，会自动查找当前程序。Windows 需要原生 `codex.exe`，仅有 `.cmd` / `.bat` 启动脚本时连接检查会报告不可用。默认配置向导不固定版本目录；自定义 `--codex-executable` 仍需维护该文件路径。
+
+任务在创建会话前启动失败时，先点击“检查 Codex 登录”，恢复后在原任务详情点击“重试启动原任务”。重试保留任务 ID、已有工作目录和记录；已有会话则继续该会话。失败任务可勾选“历史任务”找到。
+
 在本机 `/sessions` 页配置 Anthropic API key、兼容 Anthropic 的 Base URL、模型、最大轮数和工具规则。API key 使用当前 Windows 用户的 DPAPI 加密后保存在忽略的 `runs/agent-settings` 中；页面只返回是否已配置，密钥不会回填到浏览器。更换 Windows 用户后需要重新配置。Base URL 默认使用 Anthropic 官方接口，自定义接口要求 HTTPS，loopback 调试接口可使用 HTTP。
 
 Claude CLI 必须支持 `--bare`、`--output-format stream-json` 和 `--include-partial-messages`。任务以 print 模式运行，不加载已有宿主配置与 hooks。默认允许读取与文件编辑；需要执行命令时，在本机配置具体的 Bash 工具规则。工具被拒绝后，页面显示等待处理，可以修改规则再继续原任务；不会自动绕过权限。Claude 正在运行时须等待结束或先停止，再发送跟进要求。配置页保存及 CLI 检查不会发起模型调用，实际启动任务才使用 API。

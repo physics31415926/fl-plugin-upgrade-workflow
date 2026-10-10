@@ -14,6 +14,8 @@ import sys
 import tempfile
 from urllib.parse import urlsplit
 
+from codex_runtime import resolve_codex_executable
+
 APP_ROOT = Path(__file__).resolve().parent
 PROJECTS = {
     "vllm": ("vLLM-Plugin-FL", "vllm-plugin-FL", "branch-monitor.example.json", "branch-monitor.json"),
@@ -144,18 +146,10 @@ def validate_slug(value: str) -> str:
 
 
 def cli_path(value: str | None) -> str | None:
-    if value:
-        candidate = shutil.which(value) or value
-    else:
-        candidate = (shutil.which("codex.exe") if os.name == "nt" else None) or shutil.which("codex")
-    if not candidate:
-        return None
-    path = Path(candidate).expanduser().resolve()
-    if not path.is_file():
-        if value:
-            raise ConfigurationError("--codex-executable must identify an existing CLI file.")
-        return None
-    return str(path)
+    candidate = resolve_codex_executable(value)
+    if value and not candidate:
+        raise ConfigurationError("--codex-executable must identify an existing CLI file (native .exe on Windows).")
+    return candidate
 
 
 def ask(label: str, default: str | None = None) -> str:
@@ -338,7 +332,9 @@ def configure(args, *, app_root: Path = APP_ROOT) -> tuple[list[Path], int]:
             raise ConfigurationError("Port must be an integer from 1 to 65535.") from exc
     if not 1 <= port <= 65535:
         raise ConfigurationError("Port must be an integer from 1 to 65535.")
-    executable = cli_path(args.codex_executable)
+    # Desktop updates replace versioned CLI directories. Only an explicit
+    # override is persisted; automatic discovery stays dynamic at runtime.
+    executable = cli_path(args.codex_executable) if args.codex_executable else None
     documents = {}
     rows = []
     for project_id in selected:
