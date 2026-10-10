@@ -300,6 +300,85 @@ class ShareServerTests(unittest.TestCase):
         self.assertEqual(result["head_url"], original["head_url"])
         self.assertIn("C:\\Users", original["repo"])
 
+    def test_public_acceptance_keeps_safe_summary_and_each_source_without_mutating_gate(self):
+        source = source_snapshot()
+        original_gate = dict(source["backends"][0]["gate"])
+        original_results = list(source["backends"][0]["results"])
+        pr_url = "https://github.com/flagos-ai/vllm-plugin-FL/pull/487"
+        for source_kind in ("pr_description", "local_record", "current_gate", "pr_reference"):
+            with self.subTest(source=source_kind):
+                acceptance = {
+                    "status": "accepted", "source": source_kind, "title": "Validation results",
+                    "summary": "15 scenarios; 78 requests; larger-model graph skipped",
+                    "pr_number": 487, "pr_url": pr_url, "archive_available": True,
+                    "archive_url": "/api/acceptance-record?backend=cuda&record=private-record",
+                }
+                source["backends"][0]["acceptance"] = acceptance
+                backend = sanitize_snapshot(source)["backends"][0]
+                expected = dict(acceptance, archive_url=None)
+                self.assertEqual(backend["acceptance"], expected)
+                self.assertEqual(backend["gate"]["passed"], 20)
+                self.assertEqual(backend["results"][0]["status"], "recorded_pass")
+                self.assertEqual(source["backends"][0]["gate"], original_gate)
+                self.assertEqual(source["backends"][0]["results"], original_results)
+                self.assertEqual(source["backends"][0]["acceptance"], acceptance)
+        source["backends"][0]["acceptance"]["summary"] = "x" * 400
+        self.assertEqual(len(sanitize_snapshot(source)["backends"][0]["acceptance"]["summary"]), 400)
+        for value in (None, "invalid", ["nested"]):
+            source["backends"][0]["acceptance"] = value
+            self.assertIsNone(sanitize_snapshot(source)["backends"][0]["acceptance"])
+
+    def test_public_acceptance_rejects_private_scalars_urls_and_unknown_nested_provenance(self):
+        source = source_snapshot()
+        acceptance = {
+            "status": "accepted", "source": "local_record", "title": "Validation results",
+            "summary": "15 scenarios accepted", "pr_number": 487, "archive_available": True,
+            "pr_url": "https://github.com/flagos-ai/vllm-plugin-FL/pull/487",
+            "archive_url": "https://github.com/owner/repo/private-archive",
+            "body": "explicit_dummy_private_pr_body",
+            "raw_body": "explicit_dummy_private_raw_body",
+            "commands": ["ssh explicit_dummy_private_host cat /data/private/results"],
+            "provenance": {"source_thread": "explicit_dummy_private_thread", "path": "/secret/results"},
+            "extra": {"raw": {"message": "explicit_dummy_private_nested_message"}},
+        }
+        source["backends"][0]["acceptance"] = acceptance
+        public = sanitize_snapshot(source)["backends"][0]["acceptance"]
+        self.assertEqual(set(public), {"status", "source", "title", "summary", "pr_number",
+                                       "pr_url", "archive_available", "archive_url"})
+        self.assertIsNone(public["archive_url"])
+        self.assertNotIn("explicit_dummy_private", json.dumps(public))
+        private_values = (
+            "C:/Users/private-owner/archive.md", r"C:\Users\private-owner\archive.md",
+            "/home/private-owner/results.log", r"\\private-host\archive",
+            "Validation on 192.168.10.20", "Result at 10.24.1.25",
+            "x" * 401, "unsafe\nsummary", {"raw_body": "nested"}, ["nested"],
+        )
+        for key in ("title", "summary"):
+            for value in private_values:
+                with self.subTest(field=key, value_type=type(value).__name__):
+                    candidate = dict(acceptance, **{key: value})
+                    source["backends"][0]["acceptance"] = candidate
+                    self.assertIsNone(sanitize_snapshot(source)["backends"][0]["acceptance"][key])
+        bad_urls = (
+            "http://github.com/owner/repo/pull/1", "https://github.com.evil.test/owner/repo/pull/1",
+            "https://viewer:explicit_dummy_password@github.com/owner/repo/pull/1",
+            "https://192.168.10.20/owner/repo/pull/1", "file:///C:/Users/private-owner/archive.md",
+            "https://github.com:8443/owner/repo/pull/1", "https://github.com/owner/repo/pull/0",
+            "https://github.com/owner/repo/actions/runs/1",
+            "https://github.com/owner/repo/pull/1?token=explicit_dummy_private_token",
+            "https://github.com/owner/repo/pull/1?path=%2Fhome%2Fprivate-owner",
+            "https://github.com/owner/repo/pull/1#explicit_dummy_private_fragment",
+            "https://github.com/owner/repo/pull/1\n",
+        )
+        for value in bad_urls:
+            with self.subTest(url_kind=value.split(":", 1)[0]):
+                source["backends"][0]["acceptance"] = dict(acceptance, pr_url=value)
+                self.assertIsNone(sanitize_snapshot(source)["backends"][0]["acceptance"]["pr_url"])
+        source["backends"][0]["acceptance"] = dict(acceptance, source={"thread": "private"})
+        self.assertIsNone(sanitize_snapshot(source)["backends"][0]["acceptance"]["source"])
+        source["backends"][0]["acceptance"] = dict(acceptance, source="unknown-source")
+        self.assertIsNone(sanitize_snapshot(source)["backends"][0]["acceptance"]["source"])
+
     def test_public_sglang_cases_keep_model_ownership_without_nested_definitions(self):
         source = source_snapshot()
         source["engine"] = "sglang"
@@ -370,6 +449,15 @@ class ShareServerTests(unittest.TestCase):
     def test_share_acceptance_records_link_pr_without_exporting_private_archive(self):
         source = source_snapshot()
         pr_url = "https://github.com/flagos-ai/vllm-plugin-FL/pull/487"
+        source["backends"][0]["acceptance"] = {
+            "status": "accepted", "source": "local_record", "title": "Validation results",
+            "summary": "15 scenarios; 78 requests; larger-model graph skipped",
+            "pr_number": 487, "pr_url": pr_url, "archive_available": True,
+            "archive_url": "/api/acceptance-record?backend=cuda&record=private-archive-id",
+            "raw_body": "explicit_dummy_private_pr_body",
+            "commands": ["ssh explicit_dummy_private_host cat /data/private/results"],
+            "provenance": {"source_thread": "explicit_dummy_private_thread_id"},
+        }
         source["backends"][0]["acceptance_records"] = [{
             "id": "historical-validation", "status": "accepted", "pr_number": 487,
             "title": "Historical validation", "summary": "Three model and mode groups accepted",
@@ -393,6 +481,14 @@ class ShareServerTests(unittest.TestCase):
                 public = public["projects"][0]["status"]
             backend = public["backends"][0]
             self.assertEqual(backend["gate"]["passed"], 20)
+            acceptance = backend["acceptance"]
+            self.assertEqual(acceptance["status"], "accepted")
+            self.assertEqual(acceptance["source"], "local_record")
+            self.assertEqual(acceptance["summary"], "15 scenarios; 78 requests; larger-model graph skipped")
+            self.assertEqual(acceptance["pr_url"], pr_url)
+            self.assertTrue(acceptance["archive_available"])
+            self.assertIsNone(acceptance["archive_url"])
+            self.assertNotIn("explicit_dummy_private", json.dumps(acceptance))
             records = backend["acceptance_records"]
             self.assertEqual(records[0]["pr_url"], pr_url)
             self.assertTrue(records[0]["archive_available"])

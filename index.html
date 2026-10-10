@@ -80,7 +80,7 @@
     .chevron { color: #8c9aae; font-size: 21px; line-height: 1; transition: transform .15s ease; }
     .backend-toggle[aria-expanded="true"] .chevron { transform: rotate(90deg); }
     .backend-detail { border-top: 1px solid var(--line); padding: 17px 20px 20px; background: #fcfdff; }
-    .detail-meta { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; margin-bottom: 22px; }
+    .detail-meta { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 12px; margin-bottom: 22px; }
     .detail-meta > div { border: 1px solid var(--line); border-radius: 9px; padding: 11px 12px; background: #fff; min-width: 0; }
     .detail-meta dt { color: var(--muted); font-size: 11px; }
     .detail-meta dd { margin: 5px 0 0; font-size: 12px; overflow-wrap: anywhere; }
@@ -187,7 +187,7 @@
       .cell-label { display: block; }
       .backend-detail { padding: 14px; }
     }
-  .record-entry{padding:12px 0;border-bottom:1px solid var(--line);overflow-wrap:anywhere}.record-entry p{margin:6px 0}
+  .acceptance-primary{border:1px solid var(--line);border-radius:10px;padding:14px 16px;background:#fff}.acceptance-primary p{font-size:13px;white-space:pre-wrap;overflow-wrap:anywhere;margin:9px 0}.acceptance-heading{display:flex;align-items:center;gap:10px;flex-wrap:wrap;font-size:13px;font-weight:650}.acceptance-evidence{margin:14px 0 20px}.acceptance-evidence>summary{cursor:pointer;color:var(--muted);font-size:12px}.record-entry>strong{margin-right:8px}.record-entry{padding:12px 0;border-bottom:1px solid var(--line);overflow-wrap:anywhere}.record-entry p{margin:6px 0}
   </style>
 </head>
 <body>
@@ -206,14 +206,14 @@
         <div>
           <div class="eyebrow">Branch adaptation monitor</div>
           <h1 id="page-title">正在读取分支…</h1>
-          <p>在分支当前提交上查看各 backend 的代码合入、CI 和适配 Gate。三种状态分别显示。</p>
+          <p>查看各 backend 的代码合入、CI 和验收结果，展开可查看 PR 测试说明与本地明细。</p>
         </div>
         <div class="hero-actions">
           <div>
             <label class="field-label" for="branch-select">目标分支</label>
             <select id="branch-select" aria-label="目标分支"><option value="0.4.0-dev">0.4.0-dev</option></select>
           </div>
-          <button class="button" id="refresh-remote" type="button" title="读取一次最新 Git 分支、PR、CI 和 Gate 数据，并更新本页">读取最新状态</button>
+          <button class="button" id="refresh-remote" type="button" title="读取一次最新 Git 分支、PR、CI 和验收结果，并更新本页">读取最新状态</button>
         </div>
       </div>
       <div class="hero-meta">
@@ -228,10 +228,10 @@
     <div class="summary" aria-label="分支概览">
       <div class="stat"><span class="stat-label">已合入 backend</span><strong class="stat-value" id="merged-count">—</strong><div class="stat-note">代码合入目标分支</div></div>
       <div class="stat"><span class="stat-label">适配 CI 通过</span><strong class="stat-value" id="ci-count">—</strong><div class="stat-note">验收提交或候选 PR，见明细</div></div>
-      <div class="stat"><span class="stat-label">当前分支 Gate</span><strong class="stat-value" id="gate-count">—</strong><div class="stat-note">逐项结果或已核验的验收记录</div></div>
-      <div class="stat"><span class="stat-label">Gate case 覆盖</span><strong class="stat-value" id="case-count">—</strong><div class="stat-note">目标分支上的场景</div></div>
+      <div class="stat"><span class="stat-label">验收通过</span><strong class="stat-value" id="gate-count">—</strong><div class="stat-note">PR 测试说明、本地记录或逐项结果</div></div>
+      <div class="stat"><span class="stat-label">逐项场景覆盖</span><strong class="stat-value" id="case-count">—</strong><div class="stat-note">目标分支上的场景</div></div>
     </div>
-    <div class="guidance"><span class="symbol" aria-hidden="true">ⓘ</span><span>顶部汇总已合入平台的适配 CI。已有验收记录的平台在 Gate 栏标注通过；原始场景结果、测试版本与覆盖范围保留在展开详情。最近一次分支工作流见下方记录。</span></div>
+    <div class="guidance"><span class="symbol" aria-hidden="true">ⓘ</span><span>顶部汇总已合入平台的适配 CI。验收结果优先采用 PR 测试说明；测试版本和覆盖范围见验收明细，逐项 Gate 与本地记录保留为辅助详情。</span></div>
     <details class="ci-history">
       <summary>最近一次分支 CI 记录</summary>
       <p>该次工作流结论：<strong id="branch-ci">—</strong> <a id="branch-ci-link" hidden target="_blank" rel="noopener noreferrer">查看运行 ↗</a></p>
@@ -247,12 +247,12 @@
       <div id="task-list" class="task-list"><div class="empty">正在读取任务…</div></div>
     </section>
     <div class="section-heading">
-      <div><h2>Backend 状态</h2><p>点击平台展开模型、执行模式和具体适配 Gate case。</p></div>
+      <div><h2>Backend 状态</h2><p>点击平台查看验收结果与 PR 测试明细。</p></div>
       <span class="stamp" id="refresh-stamp">自动更新中</span>
     </div>
-    <div class="table-head columns" aria-hidden="true"><span>平台 / PR</span><span>代码合入</span><span>适配 CI</span><span>Gate 验收</span><span>场景覆盖</span><span></span></div>
+    <div class="table-head columns" aria-hidden="true"><span>平台 / PR</span><span>代码合入</span><span>适配 CI</span><span>验收结果</span><span>逐项场景</span><span></span></div>
     <div id="backend-list" class="backend-list" aria-live="polite"><div class="empty">正在读取 backend 状态…</div></div>
-    <p class="footnote">状态每 15 秒从监控服务读取一次。点击“读取最新状态”会立即采集并更新本页。任务进展每 3 秒读取一次；本轮执行结束后，Gate 仍按实际验收证据判断。</p>
+    <p class="footnote">状态每 15 秒从监控服务读取一次。点击“读取最新状态”会立即采集并更新本页。任务进展每 3 秒读取一次；验收结论与范围以 PR 测试说明或本地记录为准。</p>
   </main>
 </div>
 <script>
@@ -277,7 +277,7 @@
     merged:"已合入", open:"打开", draft:"草稿", closed:"已关闭", pending:"待合入", unknown:"未知",
     passed:"通过", recorded_pass:"通过 · 验收记录", failed:"失败", running:"运行中",
     missing:"无证据", stale:"证据过期", partial:"部分通过", cancelled:"已取消",
-    skipped:"跳过"
+    skipped:"跳过", reference:"PR 记录"
   };
   const scenarioLabels = {
     text_single:"长文本单请求",
@@ -462,13 +462,30 @@
   function hasAcceptanceRecord(backend) {
     return Array.isArray(backend.acceptance_records) && backend.acceptance_records.some(record => ["passed", "partial"].includes(record?.status));
   }
-  function effectiveGate(backend, head) {
-    if (hasAcceptanceRecord(backend)) return "passed";
-    const gate = backend.gate || {};
-    const status = normalized(gate.status);
-    if (isPassed(status) && !gate.tree_matches_head && backend.integration && backend.integration.status === "merged" &&
+  function rawGateStatus(backend, head) {
+    const gate = backend.gate || {}, status = normalized(gate.status);
+    if (isPassed(status) && !gate.tree_matches_head && backend.integration?.status === "merged" &&
         gate.latest_commit && head && gate.latest_commit !== head) return "stale";
     return status;
+  }
+  function effectiveGate(backend, head) {
+    const primary = backend.acceptance;
+    if (primary && ["passed", "partial", "failed", "pending", "missing", "reference", "unknown"].includes(primary.status)) return primary.status;
+    if (hasAcceptanceRecord(backend)) return "passed";
+    return rawGateStatus(backend, head);
+  }
+  function acceptanceResult(backend, head) {
+    const primary = backend.acceptance;
+    if (primary && ["passed", "partial", "failed", "pending", "missing", "reference", "unknown"].includes(primary.status)) return primary;
+    const record = (backend.acceptance_records || []).find(item => ["passed", "partial"].includes(item?.status));
+    if (record) return {...record, status:"passed", source:"local_record", summary:[record.summary, record.scope].filter(Boolean).join(" · ")};
+    return {status:rawGateStatus(backend, head), source:"current_gate", summary:backend.gate?.detail || "尚无逐项验收结果", pr_number:backend.pr?.number, pr_url:backend.pr?.url};
+  }
+  function acceptanceText(status) {
+    return {passed:"通过", recorded_pass:"通过 · 验收记录", partial:"部分通过", failed:"未通过", pending:"待验收", missing:"暂无结果", reference:"PR 记录", unknown:"待确认", stale:"证据过期"}[status] || "待确认";
+  }
+  function acceptanceSource(result) {
+    return {pr_description:"PR 测试说明", local_record:"本地验收记录", current_gate:"逐项 Gate", pr_reference:"PR 记录"}[result.source] || "验收记录";
   }
   function branchOptions(data) {
     const select = byId("branch-select");
@@ -488,7 +505,7 @@
     put("merged-count", backends.filter((b) => b.integration && b.integration.status === "merged").length + " / " + backends.length);
     put("ci-count", backends.filter((b) => effectiveCi(b, data.head) === "passed").length + " / " + backends.length);
     put("gate-count", backends.filter((b) => isPassed(effectiveGate(b, data.head))).length + " / " + backends.length);
-    const passed = backends.reduce((sum, b) => sum + (effectiveGate(b, data.head) === "stale" ? 0 : Math.max(0, Number((b.gate || {}).passed) || 0)), 0);
+    const passed = backends.reduce((sum, b) => sum + (rawGateStatus(b, data.head) === "stale" ? 0 : Math.max(0, Number((b.gate || {}).passed) || 0)), 0);
     const total = backends.reduce((sum, b) => sum + Math.max(0, Number((b.gate || {}).total) || 0), 0);
     put("case-count", passed + " / " + total);
   }
@@ -557,7 +574,7 @@
   }
   function renderMatrix(container, data, backend) {
     const groups = expectedRows(data, backend);
-    const stale = effectiveGate(backend, data.head) === "stale";
+    const stale = rawGateStatus(backend, data.head) === "stale";
     if (!groups.length || !Array.isArray(data.cases) || !data.cases.length) {
       container.append(el("div", "empty", "目标分支尚无可识别的验收用例清单。"));
       return;
@@ -594,6 +611,47 @@
       container.append(groupBox);
     }
   }
+  function acceptanceLink(result) {
+    if (!readOnly && result.archive_available && result.archive_url) {
+      try {
+        const target = new URL(appUrl(result.archive_url));
+        if (target.origin === window.location.origin && !target.username && !target.password && target.pathname.endsWith("/api/acceptance-record")) return link(target.href, "查看本地验收明细 ↗");
+      } catch (_) { /* A malformed archive URL falls back to the PR. */ }
+    }
+    return githubPrLink(result.pr_url, result.pr_number ? "PR #" + result.pr_number + " 测试明细 ↗" : "查看 PR 测试明细 ↗");
+  }
+  function renderAcceptance(data, backend) {
+    const result = acceptanceResult(backend, data.head), section = el("section", "acceptance-results");
+    section.append(el("h3", "matrix-heading", "验收结果"));
+    const primary = el("div", "acceptance-primary"), heading = el("div", "acceptance-heading");
+    heading.append(badge(result.status, acceptanceText(result.status)), el("span", "", result.title || acceptanceSource(result)));
+    primary.append(heading, el("p", "", result.summary || "尚无可用的验收结论，可查看 PR 或补充本地记录。"));
+    const anchor = acceptanceLink(result);
+    if (anchor) primary.append(anchor);
+    if (result.source === "pr_description") primary.append(el("p", "matrix-help", "PR 作者报告的测试结果；模型、执行模式、测试版本和覆盖范围以 PR 中的说明为准。"));
+    section.append(primary);
+    const auxiliary = el("details", "acceptance-evidence");
+    auxiliary.append(el("summary", "", "本地记录与逐项结果（辅助明细）"));
+    for (const record of backend.acceptance_records || []) {
+      const box = el("div", "record-entry");
+      box.append(el("strong", "", record.title || "本地验收记录"), badge(record.status, acceptanceText(record.status)), el("p", "", record.summary || ""));
+      if (record.scope) box.append(el("p", "matrix-help", record.scope));
+      if (record.tested_commit) box.append(el("p", "mono", "测试版本 " + shortSha(record.tested_commit) + (record.tree_matches_head ? " · 代码树与当前分支相同；范围见记录" : " · 历史测试版本")));
+      const recordLink = acceptanceLink(record);
+      if (recordLink) box.append(recordLink);
+      auxiliary.append(box);
+    }
+    const gate = backend.gate || {}, rawStatus = rawGateStatus(backend, data.head);
+    const gateDetail = [gate.run_id ? "运行 " + gate.run_id : "", gate.latest_commit ? "测试提交 " + shortSha(gate.latest_commit) : "",
+      gate.requests_passed != null ? Math.max(0, Number(gate.requests_passed) || 0) + "/" + Math.max(0, Number(gate.requests_total) || 0) + " 请求通过" :
+      gate.requests_total != null ? "覆盖 " + gate.requests_total + " 请求" : "", gate.detail].filter(Boolean).join(" · ");
+    const raw = el("div", "record-entry");
+    raw.append(el("strong", "", "逐项 Gate"), badge(rawStatus), el("p", "matrix-help", gateDetail || "尚无逐项 Gate 结果"));
+    auxiliary.append(raw, el("p", "matrix-help", "逐项 Gate 仅反映以下提交与场景，不覆盖上方 PR 描述中的测试结论。"));
+    renderMatrix(auxiliary, data, backend);
+    section.append(auxiliary);
+    return section;
+  }
   function renderBackend(data, backend, index) {
     const id = String(backend.id || "backend-" + index);
     const integration = backend.integration || {};
@@ -621,18 +679,18 @@
     for (const [label, status, text] of [
       ["代码合入", mergeStatus, integrationText(mergeStatus)],
       ["适配 CI", ciStatus, !backend.ci_enabled && (ciStatus === "missing" || ciStatus === "unknown") ? "未接入" : labels[ciStatus]],
-      ["Gate 验收", gateStatus, gateStatus === "passed" ? "通过" : gateStatus === "failed" ? "验收失败" : labels[gateStatus]]
+      ["验收结果", gateStatus, acceptanceText(gateStatus)]
     ]) {
       const cell = el("div");
       cell.append(el("span", "cell-label", label), badge(status, text));
       toggle.append(cell);
     }
     const countCell = el("div", "meter");
-    countCell.append(el("span", "cell-label", "场景覆盖"));
+    countCell.append(el("span", "cell-label", "逐项场景"));
     const track = el("span", "meter-track");
     const fill = el("span", "meter-fill");
     const total = Math.max(0, Number(gate.total) || 0);
-    const passed = gateStatus === "stale" ? 0 : Math.max(0, Number(gate.passed) || 0);
+    const passed = rawGateStatus(backend, data.head) === "stale" ? 0 : Math.max(0, Number(gate.passed) || 0);
     fill.style.width = (total ? Math.min(100, passed / total * 100) : 0) + "%";
     track.append(fill);
     countCell.append(track, el("span", "mono", passed + "/" + total));
@@ -650,28 +708,13 @@
     const ciScope = ci.scope === "accepted-tree" ? "已验收代码树 · " : ci.scope === "pr" ? "候选 PR · " : "当前分支 · ";
     const ciDetail = ciScope + (ci.detail || labels[ciStatus]) + (ci.commit ? " · " + shortSha(ci.commit) : "");
     meta.append(infoBox("CI 运行", ciDetail, ci.url, "查看运行"));
-    const gateDetail = (hasAcceptanceRecord(backend) ? "已按验收记录标注通过 · 原始门禁数据：" : "") + (gate.evidence_type === "audited_record" ? "历史验收 · " : gate.run_id ? "运行 " + gate.run_id + " · " : "") +
-      (gate.latest_commit ? shortSha(gate.latest_commit) + " · " : "") +
-      (gate.requests_passed == null ? "覆盖 " + gate.requests_total + " 请求，见原始证据来源" :
-        Math.max(0, Number(gate.requests_passed) || 0) + "/" + Math.max(0, Number(gate.requests_total) || 0) + " 请求通过") +
-      (gate.detail ? " · " + gate.detail : "");
-    meta.append(infoBox("Gate 证据", gateDetail));
     if (ci.scope === "accepted-tree" && backend.current_ci) {
       const latest = backend.current_ci;
       meta.append(infoBox("后续分支 CI", labels[normalized(latest.status)] + " · " +
         (latest.detail || "") + " · " + shortSha(latest.commit), latest.url, "查看后续运行"));
     }
     detail.append(meta);
-    if(backend.acceptance_records?.length){
-      const records=el('section','acceptance-records');records.append(el('h3','matrix-heading','实验验收记录'),el('p','matrix-help','优先使用本机存档，缺少存档时查看 PR；历史实验的版本与覆盖范围单独列出。'));
-      for(const record of backend.acceptance_records){
-        const box=el('div','record-entry');box.append(el('strong','',record.title||'实验记录'),el('p','',record.summary||''),el('p','matrix-help',record.scope||''));
-        if(record.tested_commit)box.append(el('p','mono','测试版本 '+shortSha(record.tested_commit)+(record.tree_matches_head?' · 代码树与当前分支相同；范围见记录':' · 历史测试版本')));
-        if(!readOnly&&record.archive_available&&record.archive_url){const archive=link(appUrl(record.archive_url),'查看本地存档 ↗');if(archive)box.append(archive,el('span','',' · '));}
-        const prRecord=githubPrLink(record.pr_url,'PR #'+record.pr_number+' 验收说明 ↗');if(prRecord)box.append(prRecord);records.append(box);
-      }
-      detail.append(records);
-    }
+    detail.append(renderAcceptance(data, backend));
     const policy = taskPolicy(id, data.branch);
     const taskEntry = backendTaskEntry(data.branch, id, backend.label || id);
     if (!readOnly && taskEntry.session) {
@@ -690,9 +733,6 @@
       assign.href = taskEntry.href;
       detail.append(assign);
     }
-    detail.append(el("h3", "matrix-heading", "适配 Gate 明细"));
-    detail.append(el("p", "matrix-help", "场景来自目标分支 tools/adaptation-gate-cases；缺失、过期和失败均不计为通过。"));
-    renderMatrix(detail, data, backend);
     card.append(detail);
     toggle.addEventListener("click", () => {
       const next = toggle.getAttribute("aria-expanded") !== "true";
@@ -712,7 +752,7 @@
     if (!backends.length) box.append(el("div", "empty", "没有发现 backend。请检查目标分支和监控服务配置。"));
     backends.forEach((backend, index) => box.append(renderBackend(data, backend, index)));
     const errors = Array.isArray(data.errors) ? data.errors.filter(Boolean) : [];
-    for (const warning of data.case_discovery?.warnings || []) errors.push("验收用例来源不完整：" + (warning.detail || warning.source || warning.model || "待核对"));
+    for (const warning of data.case_discovery?.warnings || []) errors.push("逐项场景来源提示（不影响 PR 验收记录）：" + (warning.detail || warning.source || warning.model || "待核对"));
     showNotice(errors.map(errorMessage).join("\n"));
   }
   let fetching = false;

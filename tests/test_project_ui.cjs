@@ -115,7 +115,7 @@ test('overview hides branch-wide CI while preserving backend CI and coverage', (
     data.branch_ci.status=branchStatus;
     const original=JSON.stringify(data);
     context.render(card,data);
-    assert.equal(textOf(card.collection),'\u9a8c\u6536\u8986\u76d6 20 \u573a\u666f \u00b7 104 \u8bf7\u6c42 / backend');
+    assert.equal(textOf(card.collection),'\u9010\u9879\u8986\u76d6 20 \u573a\u666f \u00b7 104 \u8bf7\u6c42 / backend');
     assert.equal(card.collection.childNodes.length,1,'collection must contain coverage alone');
     assert.equal(card.collection.childNodes[0].tagName,'SPAN');
     assert.equal(card.collection.childNodes[0].className,'','coverage is not a CI status badge');

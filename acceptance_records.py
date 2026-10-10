@@ -5,6 +5,7 @@ import hashlib
 import json
 from pathlib import Path
 import re
+from urllib.parse import urlsplit
 
 
 IDENTIFIER = re.compile(r"^[a-zA-Z0-9][a-zA-Z0-9_-]{0,95}$")
@@ -43,6 +44,45 @@ def _json(path: Path, root: Path) -> dict | None:
 
 def _text(value, limit=800):
     return value if isinstance(value, str) and value and len(value) <= limit and '\x00' not in value else None
+
+
+def _valid_pr_number(value) -> int | None:
+    return value if type(value) is int and 1 <= value <= 10_000_000 else None
+
+
+def _source_pr_numbers(sources, github_repo: str) -> list[int]:
+    if not github_repo:
+        return []
+    values = sources if isinstance(sources, list) else [sources]
+    numbers = []
+    for source in values:
+        url = source.get('url') if isinstance(source, dict) else source
+        if not isinstance(url, str) or any(ord(char) < 32 for char in url):
+            continue
+        try:
+            parsed = urlsplit(url.strip())
+        except ValueError:
+            continue
+        # Canonical HTTPS GitHub identities only; reject other repositories,
+        # lookalike hosts, userinfo, and ports before deriving a PR number.
+        if parsed.scheme.lower() != 'https' or parsed.netloc.lower() != 'github.com':
+            continue
+        match = re.fullmatch(r'/' + re.escape(github_repo) + r'/pull/([1-9][0-9]*)/?', parsed.path, re.I)
+        number = _valid_pr_number(int(match.group(1))) if match and len(match.group(1)) <= 8 else None
+        if number is not None and number not in numbers:
+            numbers.append(number)
+    return numbers
+
+
+def _legacy_pr_number(record: dict, pr: dict | None, github_repo: str) -> int | None:
+    explicit = _valid_pr_number(record.get('pr_number'))
+    if explicit is not None:
+        return explicit
+    numbers = _source_pr_numbers(record.get('sources'), github_repo)
+    selected = _valid_pr_number((pr or {}).get('number'))
+    # A selected PR may identify a multi-source record only when it really
+    # occurs in that archive's sources. Unknown selections never rename it.
+    return selected if selected in numbers else (numbers[0] if numbers else None)
 
 
 class AcceptanceRecords:
@@ -96,7 +136,7 @@ class AcceptanceRecords:
                 and legacy.get('backend') == backend and legacy.get('branch') == branch and legacy.get('sources')
                 and isinstance(legacy.get('gate'), dict) and legacy['gate'].get('status') == 'passed'):
             gate = legacy['gate']
-            number = (pr or {}).get('number')
+            number = _legacy_pr_number(legacy, pr, self.github_repo)
             raw = _read(root / 'acceptance.json', root, MAX_ARCHIVE_BYTES)
             records.append({'id': 'historical-acceptance', 'status': 'passed',
                 'pr_number': number, 'pr_url': f'https://github.com/{self.github_repo}/pull/{number}' if type(number) is int and self.github_repo else None,

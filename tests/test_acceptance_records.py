@@ -141,11 +141,12 @@ class AcceptanceRecordStoreTests(unittest.TestCase):
                 self.write_note(archive=self.write_archive(data))
                 self.assertFalse(self.store.entries("ascend", BRANCH)[0]["archive_available"])
 
-    def write_legacy(self):
+    def write_legacy(self, **changes):
         value = {"schema_version": 1, "evidence_type": "audited_record", "backend": "ascend",
                  "branch": BRANCH, "tested_commit": "c" * 40, "tree": "d" * 40,
                  "verified_at": "2026-09-24", "sources": [{"url": "https://github.com/example/plugin/pull/487"}],
                  "gate": {"status": "passed", "scenarios_passed": 20, "scenarios_total": 20, "requests_total": 104}}
+        value.update(changes)
         path = self.evidence / "ascend" / "acceptance.json"
         path.write_text(json.dumps(value), encoding="utf-8")
         return value, path
@@ -165,6 +166,72 @@ class AcceptanceRecordStoreTests(unittest.TestCase):
         self.assertEqual(original["content"], path.read_text(encoding="utf-8"))
         self.assertEqual(self.store.entries("ascend", "main"), [])
         self.assertEqual(self.store.entries("cuda", BRANCH), [])
+
+    def test_legacy_record_retains_its_source_pr_when_selected_pr_changes(self):
+        self.write_legacy()
+        entry = self.store.entries("ascend", BRANCH, {"number": 999})[0]
+        self.assertEqual(entry["pr_number"], 487)
+        self.assertEqual(entry["pr_url"], "https://github.com/example/plugin/pull/487")
+        self.assertEqual([record for record in self.store.entries("ascend", BRANCH, {"number": 999})
+                          if record.get("pr_number") == 999], [])
+
+    def test_legacy_multiple_sources_select_only_a_pr_really_in_the_archive(self):
+        self.write_legacy(sources=[{"url": "https://github.com/example/plugin/pull/89"},
+                                  {"url": "https://github.com/example/plugin/pull/95"}])
+        self.assertEqual(self.store.entries("ascend", BRANCH, {"number": 95})[0]["pr_number"], 95)
+        self.assertEqual(self.store.entries("ascend", BRANCH, {"number": 999})[0]["pr_number"], 89)
+        self.assertEqual(self.store.entries("ascend", BRANCH)[0]["pr_number"], 89)
+
+    def test_legacy_explicit_valid_pr_identity_is_authoritative(self):
+        self.write_legacy(pr_number=487, sources=[{"url": "https://example.test/experiment"}])
+        entry = self.store.entries("ascend", BRANCH, {"number": 999})[0]
+        self.assertEqual(entry["pr_number"], 487)
+        self.assertEqual(entry["pr_url"], "https://github.com/example/plugin/pull/487")
+        for number in (True, "487", 0, -1, 10_000_001):
+            with self.subTest(number=number):
+                self.write_legacy(pr_number=number)
+                self.assertEqual(self.store.entries("ascend", BRANCH, {"number": 999})[0]["pr_number"], 487)
+
+    def test_legacy_untrusted_source_urls_cannot_borrow_the_selected_pr_identity(self):
+        urls = [
+            "http://github.com/example/plugin/pull/487",
+            "https://github.com.evil.test/example/plugin/pull/487",
+            "https://evil.test/github.com/example/plugin/pull/487",
+            "https://github.com/other/plugin/pull/487",
+            "https://account@github.com/example/plugin/pull/487",
+            "https://github.com:443/example/plugin/pull/487",
+            "https://github.com/example/plugin/pull/0",
+            "https://github.com/example/plugin/pull/0487",
+            "https://github.com/example/plugin/pull/10000001",
+            "https://github.com/example/plugin/pull/" + "9" * 5000,
+            "https://github.com/example/plugin/pull/487/files",
+            "https://github.com/example/plugin/pull/487\n",
+            "https://[github.com/example/plugin/pull/487",
+        ]
+        for url in urls:
+            with self.subTest(url=url):
+                self.write_legacy(sources=[{"url": url}])
+                entry = self.store.entries("ascend", BRANCH, {"number": 487})[0]
+                self.assertIsNone(entry["pr_number"])
+                self.assertIsNone(entry["pr_url"])
+                self.assertTrue(entry["archive_available"])
+
+    def test_legacy_same_repo_string_source_keeps_canonical_pr_details(self):
+        self.write_legacy(sources=["https://GITHUB.COM/EXAMPLE/PLUGIN/pull/487/?view=checks#discussion"])
+        entry = self.store.entries("ascend", BRANCH)[0]
+        self.assertEqual(entry["pr_number"], 487)
+        self.assertEqual(entry["pr_url"], "https://github.com/example/plugin/pull/487")
+
+    def test_legacy_original_archive_reads_without_a_selected_pr(self):
+        value, path = self.write_legacy()
+        entry = self.store.entries("ascend", BRANCH)[0]
+        self.assertEqual(entry["pr_number"], 487)
+        self.assertEqual(self.store.read_archive("ascend", BRANCH, "historical-acceptance"),
+                         {"filename": path.name, "content": path.read_text(encoding="utf-8")})
+        self.write_legacy(sources=[{"url": "https://example.test/experiment"}])
+        self.assertIsNone(self.store.entries("ascend", BRANCH)[0]["pr_number"])
+        self.assertEqual(self.store.read_archive("ascend", BRANCH, "historical-acceptance")["filename"],
+                         "acceptance.json")
 
     def test_legacy_vllm_audit_is_not_exposed_as_sglang_acceptance(self):
         self.write_legacy()

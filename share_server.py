@@ -32,6 +32,8 @@ STATUS_FIELDS = {"status", "scope", "commit", "target_commit", "tree", "tree_mat
 GATE_FIELDS = {"status", "passed", "total", "failed", "missing", "requests_passed", "requests_total",
                "latest_commit", "evidence_type", "tree_matches_head", "recorded_cases", "raw_results_available"}
 RESULT_FIELDS = {"model", "mode", "scenario", "requests", "status", "requests_passed", "evidence_type", "raw_results_available", "label", "source", "source_blob"}
+ACCEPTANCE_FIELDS = {"status", "source", "title", "summary", "pr_number", "archive_available"}
+ACCEPTANCE_SOURCES = {"pr_description", "local_record", "current_gate", "pr_reference"}
 PRIVATE_VALUE = re.compile(r"(?:[A-Za-z]:[\\/]|\\\\|(?:^|\s)[~/][A-Za-z0-9_.-]+(?:/|$)|\b(?:\d{1,3}\.){3}\d{1,3}\b)")
 
 
@@ -57,6 +59,19 @@ def _public_url(value):
     except ValueError:
         pass
     return None
+
+
+def _public_pr_url(value):
+    """Keep only canonical GitHub PR links, without free-form URL metadata."""
+    value = _public_url(value)
+    if value is None or any(ord(c) < 32 for c in value):
+        return None
+    parsed = urlsplit(value)
+    if parsed.query or parsed.fragment or not re.fullmatch(r"/[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+/pull/[1-9][0-9]*", parsed.path):
+        return None
+    if _scalar(parsed.path.lstrip("/")) is None:
+        return None
+    return value
 
 
 def _status(value):
@@ -99,7 +114,16 @@ paths, machine aliases, private IPs, source task IDs, or commands.
         pr = backend.get("pr")
         public["pr"] = {**_fields(pr, {"number", "title", "draft", "state", "merged", "selected_by"}), "url": _public_url(pr.get("url"))} if isinstance(pr, dict) else None
         public["gate"] = _fields(backend.get("gate", {}), GATE_FIELDS)
-        public["gate"]["detail"] = "共享视图；验收状态与原始证据分开记录"
+        public["gate"]["detail"] = "逐项结果；验收概述见验收结果"
+        acceptance = backend.get("acceptance")
+        public["acceptance"] = None
+        if isinstance(acceptance, dict):
+            item = _fields(acceptance, ACCEPTANCE_FIELDS)
+            if item.get("source") not in ACCEPTANCE_SOURCES:
+                item["source"] = None
+            item["pr_url"] = _public_pr_url(acceptance.get("pr_url"))
+            item["archive_url"] = None
+            public["acceptance"] = item
         public["acceptance_records"] = []
         for record in backend.get("acceptance_records", []):
             if not isinstance(record, dict):

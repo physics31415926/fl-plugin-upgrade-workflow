@@ -34,6 +34,8 @@ from typing import Any, Callable
 from urllib.parse import quote, urlencode
 from urllib.request import Request, urlopen
 
+from pr_acceptance import acceptance_summary
+
 
 SHA = re.compile(r"^[0-9a-f]{40}$")
 REF = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._/-]*$")
@@ -831,10 +833,12 @@ class BranchMonitor:
             if accepted_ci:
                 ci = accepted_ci
             gate, results = self._gate(backend, branch, sha, cases, manifests)
+            records = self._acceptance_records(backend, branch, sha, pr)
+            acceptance = acceptance_summary(pr, pr_data, records, gate, branch=branch, head=sha)
             backends.append({"id": backend, "label": self.backend_labels.get(backend, LABELS.get(backend, backend)),
                              "ci_enabled": registry.get(self._ci_platform(backend), False), "integration": integration,
                              "ci": ci, "current_ci": current_ci, "pr": pr, "gate": gate, "results": results,
-                             "acceptance_records": self._acceptance_records(backend, branch, sha, pr)})
+                             "acceptance_records": records, "acceptance": acceptance})
         backends.sort(key=lambda item: (item["id"] != "cuda", str(item["label"]).casefold(), item["id"]))
         upstream_version = self._version(sha)
         return {"branch": branch, "branch_ref": ref, "head": sha,
