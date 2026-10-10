@@ -27,6 +27,8 @@ import threading
 import time
 import uuid
 
+from codex_desktop import desktop as handoff_desktop, refresh_desktop, remember_thread, serialized_control
+
 
 logger = logging.getLogger(__name__)
 
@@ -228,7 +230,8 @@ def require_free_machine(machine, managers, *, excluding_manager=None, excluding
         for existing in sessions:
             if manager is excluding_manager and existing["id"] == excluding_session:
                 continue
-            if (existing["status"] in CodexSessionManager.ACTIVE | {"prepared"}
+            if ((existing["status"] in CodexSessionManager.ACTIVE | {"prepared"}
+                  or existing.get("machine_reserved") is True)
                     and CodexSessionManager._same_machine(existing, machine)):
                 raise SessionError(message or
                     "This machine already has an active or prepared session; finish or interrupt it first")
@@ -272,6 +275,11 @@ class CodexSessionManager:
         # Other providers and injected protocol clients own their own runtime.
         self._uses_codex_runtime = type(self) is CodexSessionManager and client_factory is AppServerClient
         self._runtime_revision = None
+        project_id = config.get("codex_project_id")
+        if project_id is not None and (not isinstance(project_id, str) or not project_id.strip()
+                or len(project_id) > 200 or any(ord(c) < 32 for c in project_id)):
+            raise SessionError("codex_project_id must be a bounded existing project ID")
+        self.codex_project_id = project_id
         self.backends = set(config.get("session_backends", self.BACKENDS))
         self.backend_task_policies = self._task_policies(config.get("backend_task_policies", {}))
         self.client_factory = client_factory
@@ -282,6 +290,7 @@ class CodexSessionManager:
         self.peer_managers = [self]
         self._clients = {}
         self._workers = {}
+        self._desktop_observers = {}
         self._sessions = {}
         self._profiles = {}
         self._saved_at = {}
@@ -303,7 +312,7 @@ class CodexSessionManager:
                 session = json.loads(file.read_text(encoding="utf-8"))
                 if not re.fullmatch(r"[0-9a-f]{32}", session["id"]) or file.parent.name != session["id"]:
                     continue
-                if session.get("status") in self.ACTIVE:
+                if session.get("status") in self.ACTIVE and session.get("execution_owner") != "codex_desktop":
                     session.update(status="disconnected", error="Dashboard restarted; resume the persisted Codex thread.")
                 session["pending_requests"] = []
                 self._sessions[session["id"]] = session
@@ -741,8 +750,23 @@ done
                 # finished. Keep ownership even when the machine or HEAD changes.
                 raise SessionError(f"Use existing session {existing['id']} for this backend and baseline branch")
 
+    @staticmethod
+    def _require_dashboard_owner(session, *, allow_pending=False):
+        if session.get("execution_owner") == "codex_desktop":
+            raise SessionError("此会话已转交到 Codex 桌面端，请在原会话中继续交互。")
+        if session.get("desktop_handoff_pending") and not allow_pending:
+            raise SessionError("此会话正在安全转交；请稍后重试打开桌面端。")
+
+    def desktop(self, session_id, *, launcher=None, timeout=15):
+        return handoff_desktop(self, session_id, launcher=launcher, timeout=timeout)
+
     def _session_view(self, session, compact=False):
         view = {**session, "task_policy": self._task_policy(session["backend"], session["branch"])}
+        if session.get("execution_owner") == "codex_desktop":
+            view["controllable"] = False
+            view["machine_reserved"] = not bool(session.get("desktop_lease_released"))
+        elif session.get("desktop_handoff_pending"):
+            view["controllable"], view["machine_reserved"] = False, True
         if compact:
             # Cards need lifecycle, progress, provenance and pending approvals,
             # but not the event history or the initial task instruction.
@@ -754,7 +778,10 @@ done
         self._resolve_executable()
         with self._lock:
             for session in self._sessions.values():
-                self._refresh_progress_artifact(session)
+                if session.get("execution_owner") == "codex_desktop":
+                    refresh_desktop(self, session)
+                else:
+                    self._refresh_progress_artifact(session)
             return json.loads(json.dumps({
                 "available": bool(self.executable), "default_branch": self.default_branch,
                 "runtime_revision": self._runtime_revision,
@@ -1096,7 +1123,10 @@ done
     def allocation_sessions(self):
         """Return only the fields needed for shared machine ownership checks."""
         with self._lock:
-            return [{key: session.get(key) for key in ("id", "status", "ssh_alias", "ssh_connection")}
+            for session in self._sessions.values():
+                refresh_desktop(self, session)
+            return [{key: self._session_view(session).get(key)
+                     for key in ("id", "status", "ssh_alias", "ssh_connection", "machine_reserved")}
                     for session in self._sessions.values()]
 
     def _require_free_machine(self, machine, excluding=None, message=None):
@@ -1408,6 +1438,7 @@ done
         return result
 
     def _client(self, session):
+        self._require_dashboard_owner(session, allow_pending=True)
         session_id = session["id"]
         client = self._clients.get(session_id)
         if client and client.process.poll() is None:
@@ -1423,16 +1454,16 @@ done
         if session.get("thread_id"):
             result = client.request("thread/resume", {**params, "threadId": session["thread_id"]})
         else:
+            if self._uses_codex_runtime:
+                params["ephemeral"] = False
             result = client.request("thread/start", params)
-        with self._lock:
-            session["thread_id"] = result["thread"]["id"]
-            session["model"] = result.get("model")
-            self._save(session)
+        remember_thread(self, session, result, client)
         return client
 
     def start(self, session_id):
         with self._lock:
             session = self._get(session_id)
+            self._require_dashboard_owner(session)
             self._require_adapt(session["backend"], session["branch"])
             if session["status"] in self.ACTIVE:
                 raise SessionError("Session already has an active turn")
@@ -1442,6 +1473,7 @@ done
     def _launch(self, session_id, text):
         with self.machine_lock, self._lock:
             session = self._get(session_id)
+            self._require_dashboard_owner(session)
             self._require_adapt(session["backend"], session["branch"])
             if session["status"] in self.ACTIVE:
                 raise SessionError("Session already has an active turn")
@@ -1509,6 +1541,8 @@ done
             with self._lock:
                 if session["status"] in self.ACTIVE:
                     session["turn_id"] = result["turn"]["id"]
+                    if session.get("desktop_handoff_pending") and session.get("desktop_handoff_turn_id") is None:
+                        session["desktop_handoff_turn_id"] = result["turn"]["id"]
                 if session["status"] == "starting":
                     session["status"] = "running"
                 cancel_requested = session.get("cancel_requested", False) and session["status"] in self.ACTIVE
@@ -1523,10 +1557,12 @@ done
                 session.update(status="failed", error=str(exc))
                 self._save(session)
 
+    @serialized_control
     def message(self, session_id, text):
         text = self._text(text, "message", 12000, True)
         with self._lock:
             session = self._get(session_id)
+            self._require_dashboard_owner(session)
             self._require_adapt(session["backend"], session["branch"])
             if session.get("approval_cancel_pending") and session["status"] in self.ACTIVE:
                 raise SessionError("本轮正在结束，请等待状态更新后发送修订要求，继续原任务。")
@@ -1546,9 +1582,11 @@ done
         with self._lock:
             return self._session_view(self._get(session_id))
 
-    def interrupt(self, session_id):
+    @serialized_control
+    def interrupt(self, session_id, *, _desktop=False):
         with self._lock:
             session = self._get(session_id)
+            self._require_dashboard_owner(session, allow_pending=True)
             if session["status"] == "prepared":
                 session["status"] = "interrupted"
                 self._save(session)
@@ -1574,11 +1612,13 @@ done
             return isinstance(requested, list) and all(v in requested for v in proposed)
         return proposed == requested
 
+    @serialized_control
     def respond(self, session_id, request_id, response):
         if not isinstance(response, dict):
             raise SessionError("Response must be a JSON object")
         with self._lock:
             session = self._get(session_id)
+            self._require_dashboard_owner(session)
             request = next((r for r in session["pending_requests"] if str(r["id"]) == str(request_id)), None)
             client = self._clients.get(session_id)
             if not request or not client:
@@ -1664,7 +1704,7 @@ done
     def _event(self, session_id, message):
         with self._lock:
             session = self._sessions.get(session_id)
-            if not session:
+            if not session or session.get("execution_owner") == "codex_desktop":
                 return
             method, params = message.get("method", ""), message.get("params", {})
             event_thread = self._event_thread_id(params)
@@ -1713,10 +1753,19 @@ done
                 return
             elif method == "turn/started":
                 session["turn_id"] = params["turn"]["id"]
+                if session.get("desktop_handoff_pending") and session.get("desktop_handoff_turn_id") is None:
+                    session["desktop_handoff_turn_id"] = session["turn_id"]
                 session["initial_prompt_sent"] = True
                 session["status"] = "interrupting" if session.get("cancel_requested") or session.get("approval_cancel_pending") else "running"
             elif method == "turn/completed":
                 turn = params.get("turn", {})
+                if session.get("desktop_handoff_pending"):
+                    if (not session.get("desktop_handoff_turn_id")
+                            or turn.get("id") != session["desktop_handoff_turn_id"]
+                            or turn.get("status") not in {"completed", "interrupted", "failed"}):
+                        self._save_event(session, method)
+                        return
+                    session["desktop_handoff_confirmed"] = True
                 if (session.get("approval_cancel_pending") and session.get("approval_cancel_turn_id")
                         and turn.get("id") != session["approval_cancel_turn_id"]):
                     # A child/unrelated turn or incomplete notification cannot

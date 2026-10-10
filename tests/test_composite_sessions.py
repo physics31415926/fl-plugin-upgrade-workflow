@@ -160,6 +160,39 @@ class CompositeSessionsTests(unittest.TestCase):
         for tid in ("native-thead", "11111111-1111-1111-1111-111111111111", "c" * 32):
             with self.assertRaises(SessionError): self.manager.start(tid)
 
+    def test_desktop_continuation_routes_original_codex_and_rejects_other_provider(self):
+        self.codex.rows = [{"id": "a" * 32, "status": "completed"}]
+        self.claude.rows = [{"id": "b" * 32, "status": "completed"}]
+        self.codex.desktop = Mock(return_value={"session": {"id": "a" * 32}, "desktop_url": "codex://threads/11111111-1111-1111-1111-111111111111"})
+        self.claude.desktop = Mock()
+        result = self.manager.desktop("a" * 32)
+        self.assertEqual(result["session"]["id"], "a" * 32)
+        self.codex.desktop.assert_called_once_with("a" * 32)
+        with self.assertRaisesRegex(SessionError, "Only Codex"):
+            self.manager.desktop("b" * 32)
+        self.claude.desktop.assert_not_called()
+        with self.assertRaisesRegex(SessionError, "observation-only"):
+            self.manager.desktop("native-musa")
+
+    def test_desktop_route_rejects_client_urls_and_cross_origin(self):
+        self.codex.rows = [{"id": "a" * 32, "status": "completed"}]
+        self.codex.desktop = Mock(return_value={"session": {"id": "a" * 32}})
+        self.serve()
+        path = "/api/codex-sessions/" + "a" * 32 + "/desktop?project=vllm"
+        self.assertEqual(self.request(path, {"url": "codex://threads/arbitrary"})[0], 400)
+        self.assertEqual(self.request(path, {}, origin="https://untrusted.example.test")[0], 403)
+        self.codex.desktop.assert_not_called()
+        status, result = self.request(path, {})
+        self.assertEqual(status, 200)
+        self.assertEqual(result["session"]["id"], "a" * 32)
+        self.codex.desktop.assert_called_once_with("a" * 32)
+
+    def test_older_owner_reports_update_required_without_creating_task(self):
+        self.codex.rows = [{"id": "a" * 32, "status": "completed"}]
+        with self.assertRaisesRegex(SessionError, "Update the original"):
+            self.manager.desktop("a" * 32)
+        self.assertEqual(self.codex.calls, [])
+
     def test_ambiguous_owner_is_rejected_instead_of_guessing(self):
         self.codex.rows = self.claude.rows = [{"id": "a" * 32, "status": "completed"}]
         with self.assertRaisesRegex(SessionError, "ambiguous"):

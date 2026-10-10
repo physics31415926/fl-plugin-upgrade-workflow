@@ -36,6 +36,10 @@ Codex 启动前会重新定位当前 CLI；桌面端更新导致旧版本目录�
 
 任务在创建会话前启动失败时，先点击“检查 Codex 登录”，恢复后在原任务详情点击“重试启动原任务”。重试保留任务 ID、已有工作目录和记录；已有会话则继续该会话。失败任务可勾选“历史任务”找到。
 
+本机 Codex 任务建立会话后，可以点击详情中的“在 Codex 中继续”。服务确认当前轮次已暂停后打开客户端中的原会话，保留任务 ID、工作目录和历史；远端 tmux 任务继续保留。交接后在客户端发送后续要求或处理授权，看板读取原生记录显示进展，并关闭对此任务的执行和审批控制。没有收到轮次结束确认时不会交接，避免两边同时执行。
+
+新会话使用简洁的项目、backend 和分支标题，可在客户端任务列表中查找。使用官方支持的 [原会话深链接](https://learn.chatgpt.com/docs/reference/commands#deep-links)，仅本机开放交接入口；局域网继续只读。
+
 在本机 `/sessions` 页配置 Anthropic API key、兼容 Anthropic 的 Base URL、模型、最大轮数和工具规则。API key 使用当前 Windows 用户的 DPAPI 加密后保存在忽略的 `runs/agent-settings` 中；页面只返回是否已配置，密钥不会回填到浏览器。更换 Windows 用户后需要重新配置。Base URL 默认使用 Anthropic 官方接口，自定义接口要求 HTTPS，loopback 调试接口可使用 HTTP。
 
 Claude CLI 必须支持 `--bare`、`--output-format stream-json` 和 `--include-partial-messages`。任务以 print 模式运行，不加载已有宿主配置与 hooks。默认允许读取与文件编辑；需要执行命令时，在本机配置具体的 Bash 工具规则。工具被拒绝后，页面显示等待处理，可以修改规则再继续原任务；不会自动绕过权限。Claude 正在运行时须等待结束或先停止，再发送跟进要求。配置页保存及 CLI 检查不会发起模型调用，实际启动任务才使用 API。

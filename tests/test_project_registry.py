@@ -411,6 +411,9 @@ class RemoteSessionProxyTests(unittest.TestCase):
             def interrupt(self, ident):
                 calls.append(("interrupt", ident))
                 return {"id": ident, "status": "interrupting"}
+            def desktop(self, ident):
+                calls.append(("desktop", ident))
+                return {"session": {"id": ident, "execution_owner": "codex_desktop"}}
             def respond(self, ident, request_id, response):
                 calls.append(("respond", ident, request_id, response))
                 return {"id": ident}
@@ -456,6 +459,14 @@ class RemoteSessionProxyTests(unittest.TestCase):
         self.assertFalse(Path(self.config["sessions_dir"]).exists())
         self.assertFalse(Path(self.config["evidence_dir"]).exists())
         self.assertEqual(self.proxy.snapshot()["sessions"][0]["id"], self.session_id)
+
+    def test_proxy_desktop_continuation_retains_original_owner_without_local_store(self):
+        result = self.proxy.desktop(self.session_id)
+        self.assertEqual(result["session"]["id"], self.session_id)
+        self.assertEqual(self.calls, [("desktop", self.session_id)])
+        self.assertFalse(Path(self.config["sessions_dir"]).exists())
+        with self.assertRaises(SessionError):
+            self.proxy.desktop("../private")
 
     def test_proxy_rejects_non_loopback_credentials_paths_and_invalid_session_ids(self):
         for value in ("https://127.0.0.1:8765", "http://example.com:8765", "http://127.0.0.2:8765",

@@ -157,7 +157,7 @@ class CodexLaunchRecoveryTests(unittest.TestCase):
         self.assertEqual(len(self.manager._sessions), 1)
         client = RecordingClient.instances[-1]
         self.assertEqual(client.executable, str(self.current))
-        self.assertEqual([method for method, _ in client.requests], ["thread/start", "turn/start"])
+        self.assertEqual([method for method, _ in client.requests], ["thread/start", "thread/name/set", "turn/start"])
         with self.assertRaisesRegex(SessionError, "active"):
             self.manager.start(self.session["id"])
         self.assertEqual(len(RecordingClient.instances), 1)
@@ -167,7 +167,7 @@ class CodexLaunchRecoveryTests(unittest.TestCase):
         self.manager.start(self.session["id"])
         self.manager._workers[self.session["id"]].join(3)
         client = RecordingClient.instances[-1]
-        self.assertEqual([method for method, _ in client.requests], ["thread/resume", "turn/start"])
+        self.assertEqual([method for method, _ in client.requests], ["thread/resume", "thread/name/set", "turn/start"])
         self.assertEqual(client.requests[0][1]["threadId"], "persisted-thread")
 
     def test_missing_worktree_has_specific_diagnostic(self):

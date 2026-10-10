@@ -23,6 +23,8 @@ class NativeTaskObserver:
     INCREMENT_BYTES = 4 * 1024 * 1024
     LINE_BYTES = 512 * 1024
     HEADER_BYTES = 256 * 1024
+    LIFECYCLE_TYPES = ("task_started", "task_complete", "task_interrupted",
+                       "task_aborted", "task_failed", "turn_aborted")
     PUBLIC_FIELDS = ("id", "backend", "branch", "title", "source", "source_label",
                      "status", "stale", "observed_at", "updated_at", "stage")
 
@@ -153,6 +155,40 @@ class NativeTaskObserver:
                              and item.get("status") in ("pending", "in_progress", "completed")]
             state["stage"] = self._stage(state["plan"])
 
+    def _recover_lifecycle(self, stream, row, header_size, boundary):
+        """Recover a turn whose start precedes the bounded message window.
+
+        A long tool output can move task_started outside the tail without ending
+        its turn. Read the omitted prefix once, with bounded record allocation,
+        and project only validated lifecycle metadata. Ordinary observations
+        retain the incremental cache; no prefix messages or tool data escape.
+        """
+        state = self._empty(row)
+        stream.seek(header_size)
+        markers = tuple(kind.encode("ascii") for kind in self.LIFECYCLE_TYPES)
+        while stream.tell() < boundary:
+            remaining = boundary - stream.tell()
+            line = stream.readline(min(self.LINE_BYTES + 1, remaining))
+            if not line:
+                break
+            if not line.endswith(b"\n"):
+                # An oversized record or the partial boundary record must not
+                # be interpreted as a separate, possibly forged lifecycle.
+                while line and not line.endswith(b"\n") and stream.tell() < boundary:
+                    line = stream.readline(min(self.LINE_BYTES + 1, boundary - stream.tell()))
+                continue
+            if len(line) > self.LINE_BYTES or b"event_msg" not in line or not any(marker in line for marker in markers):
+                continue
+            try:
+                event = json.loads(line)
+            except (ValueError, UnicodeError):
+                continue
+            payload = event.get("payload") if isinstance(event, dict) else None
+            if (isinstance(event, dict) and event.get("type") == "event_msg" and isinstance(payload, dict)
+                    and payload.get("type") in self.LIFECYCLE_TYPES):
+                self._consume(state, event, row["thread_id"])
+        return {key: state[key] for key in ("status", "updated_at", "_turn_id") if key in state}
+
     def _read(self, row):
         path = row["path"]
         # Explicit configuration still must not follow a swapped symlink.
@@ -179,6 +215,9 @@ class NativeTaskObserver:
                 stream.seek(offset)
                 if offset > len(header):
                     stream.readline(self.LINE_BYTES + 1)  # discard the partial first record
+                    tail_start = stream.tell()
+                    state.update(self._recover_lifecycle(stream, row, len(header), tail_start))
+                    stream.seek(tail_start)
             else:
                 state = copy.deepcopy(cached["state"])
                 stream.seek(cached["position"])

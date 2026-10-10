@@ -238,6 +238,10 @@ class RemoteSessionManager:
     def interrupt(self, session_id):
         return self._request(f"/api/codex-sessions/{self._session_id(session_id)}/interrupt", {})
 
+    def desktop(self, session_id):
+        # The original service releases its own client and opens the same persisted thread.
+        return self._request(f"/api/codex-sessions/{self._session_id(session_id)}/desktop", {})
+
     def respond(self, session_id, request_id, response):
         session = self._get(session_id)
         if self._policy(session).get("mode") == "monitor":

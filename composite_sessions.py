@@ -175,6 +175,16 @@ class CompositeSessionManager:
     def respond(self, session_id, request_id, response):
         return self._control("respond", session_id, request_id, response)
 
+    def desktop(self, session_id):
+        with self.machine_lock:
+            provider, manager = self._owner(session_id)
+            if provider != "codex":
+                raise SessionError("Only Codex tasks can continue in the Codex client")
+            method = getattr(manager, "desktop", None)
+            if not callable(method):
+                raise SessionError("Update the original Codex task service before opening this task in the client")
+            return {**method(session_id), "provider": provider}
+
     def event_history(self, session_id, cursor=None, limit=80):
         provider, manager = self._owner(session_id)
         return {**manager.event_history(session_id, cursor=cursor, limit=limit), "provider": provider}

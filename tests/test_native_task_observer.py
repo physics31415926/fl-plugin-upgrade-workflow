@@ -81,14 +81,90 @@ class NativeTaskObserverTests(unittest.TestCase):
         self.assertEqual(row["status"], "running")
         self.assertIsNone(row["progress_summary"])
 
-    def test_missing_lifecycle_stays_unknown_after_bounded_tail(self):
+    def test_active_turn_before_message_tail_is_recovered(self):
         self.event("task_started", turn_id="a")
         self.write({"timestamp": self.now.isoformat(), "type": "response_item", "payload": {"type": "custom_tool_call_output", "output": "x" * 4000}})
         self.event("item_completed", item={"type": "AgentMessage", "phase": "commentary", "content": "still working"})
         self.observer.INITIAL_BYTES = 1000
         row = self.snapshot()
-        self.assertEqual(row["status"], "unknown")
+        self.assertEqual(row["status"], "running")
         self.assertEqual(row["progress_summary"], "still working")
+
+    def pad(self, size=4000):
+        self.write({"timestamp": self.now.isoformat(), "type": "response_item",
+                    "payload": {"type": "custom_tool_call_output", "output": "x" * size}})
+
+    def test_no_lifecycle_remains_unknown_with_recent_progress(self):
+        self.pad()
+        self.event("item_completed", item={"type": "AgentMessage", "phase": "commentary", "content": "working message"})
+        self.observer.INITIAL_BYTES = 1000
+        row = self.snapshot()
+        self.assertEqual(row["status"], "unknown")
+        self.assertEqual(row["progress_summary"], "working message")
+
+    def test_completed_prefix_turn_is_not_promoted_by_recent_messages(self):
+        self.event("task_started", turn_id="a")
+        self.event("task_complete", turn_id="a", last_agent_message="old prefix message")
+        self.pad()
+        self.event("item_completed", item={"type": "CommandExecution", "command": "private command"})
+        self.observer.INITIAL_BYTES = 1000
+        row = self.snapshot()
+        self.assertEqual(row["status"], "completed")
+        self.assertIsNone(row["progress_summary"])
+        self.assertNotIn("old prefix message", json.dumps(row))
+        self.assertNotIn("private command", json.dumps(row))
+
+    def test_latest_prefix_turn_replaces_old_completion(self):
+        self.event("task_started", turn_id="old")
+        self.event("task_complete", turn_id="old")
+        self.event("task_started", turn_id="current")
+        self.event("task_complete", turn_id="old")
+        self.pad()
+        self.observer.INITIAL_BYTES = 1000
+        self.assertEqual(self.snapshot()["status"], "running")
+        self.event("task_complete", turn_id="current")
+        self.assertEqual(self.snapshot()["status"], "completed")
+
+    def test_large_increment_recovers_an_ending_outside_tail(self):
+        self.event("task_started", turn_id="a")
+        self.assertEqual(self.snapshot()["status"], "running")
+        self.event("task_complete", turn_id="a")
+        self.pad()
+        self.observer.INITIAL_BYTES = self.observer.INCREMENT_BYTES = 1000
+        self.assertEqual(self.snapshot()["status"], "completed")
+
+    def test_large_increment_keeps_active_turn_even_when_start_is_outside_tail(self):
+        self.event("task_started", turn_id="a")
+        self.snapshot()
+        self.pad()
+        self.event("item_completed", item={"type": "AgentMessage", "phase": "commentary", "content": "recent progress"})
+        self.observer.INITIAL_BYTES = self.observer.INCREMENT_BYTES = 1000
+        row = self.snapshot()
+        self.assertEqual(row["status"], "running")
+        self.assertEqual(row["progress_summary"], "recent progress")
+
+    def test_prefix_foreign_thread_and_tool_markers_cannot_forge_lifecycle(self):
+        self.event("task_started", turn_id="foreign", thread_id=OTHER)
+        self.write({"timestamp": self.now.isoformat(), "type": "response_item", "payload": {
+            "type": "custom_tool_call_output", "output": "event_msg task_started"}})
+        self.write(["event_msg", "task_started"])
+        self.pad()
+        self.observer.INITIAL_BYTES = 1000
+        self.assertEqual(self.snapshot()["status"], "unknown")
+
+    def test_prefix_scan_skips_oversized_record_and_keeps_valid_start(self):
+        self.event("task_started", turn_id="a")
+        self.pad(9000)
+        self.event("item_completed", item={"type": "CommandExecution"})
+        self.observer.INITIAL_BYTES = 1000
+        self.observer.LINE_BYTES = 1000
+        self.assertEqual(self.snapshot()["status"], "running")
+
+    def test_lifecycle_crossing_first_tail_record_boundary_is_not_lost(self):
+        self.pad()
+        self.event("task_started", turn_id="a")
+        self.observer.INITIAL_BYTES = 40
+        self.assertEqual(self.snapshot()["status"], "running")
 
     def test_running_freshness_uses_event_time_even_when_file_mtime_is_unchanged(self):
         self.event("task_started", turn_id="a")

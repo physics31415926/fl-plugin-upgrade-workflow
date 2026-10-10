@@ -86,10 +86,10 @@ Grep</textarea><small class="hint">SSH 命令可显式配置 Bash(ssh *)。未�
       </form></section>
       <section class="workspace" aria-label="任务监控"><div class="section-title"><h2>Backend 任务 <span id="session-count">0</span></h2><div class="task-list-options"><label for="show-history"><input id="show-history" type="checkbox">历史任务</label><span id="sync-status">准备读取…</span></div></div><div id="session-list" class="session-list"></div><div id="no-sessions" class="empty"><strong id="no-sessions-title">创建第一个升级任务</strong><span id="no-sessions-note">选择左侧设备和 agent 后，即可在这里查看任务进度和输出。</span></div>
         <div id="selection-notice" class="notice" role="status" hidden></div>
-        <article class="panel" id="session-detail" hidden><div class="panel-head detail-head"><div><div class="detail-title"><h2 id="detail-title">升级任务</h2><span id="detail-status" class="pill"></span></div><p id="detail-subtitle"></p></div><div class="actions"><button class="button primary small" id="start-session" type="button">启动任务</button><button class="button danger small" id="interrupt-session" type="button">中断当前执行</button></div></div>
+        <article class="panel" id="session-detail" hidden><div class="panel-head detail-head"><div><div class="detail-title"><h2 id="detail-title">升级任务</h2><span id="detail-status" class="pill"></span></div><p id="detail-subtitle"></p></div><div class="actions"><button class="button primary small" id="desktop-session" type="button" hidden>在 Codex 中继续</button><button class="button primary small" id="start-session" type="button">启动任务</button><button class="button danger small" id="interrupt-session" type="button">中断当前执行</button></div></div>
           <dl class="detail-meta"><div><dt>验证机器</dt><dd id="detail-machine" class="mono"></dd></div><div><dt>基线分支 · 创建时提交</dt><dd id="detail-branch" class="mono"></dd></div><div><dt>任务工作分支</dt><dd id="detail-work-branch" class="mono"></dd></div><div><dt>上报候选 SHA</dt><dd id="detail-candidate">待核对 · 尚无结构化提交记录</dd></div><div><dt>本地独立 worktree</dt><dd id="detail-worktree" class="mono"></dd></div><div><dt>远端源仓库目录（机器配置）</dt><dd id="detail-seed" class="mono"></dd></div><div><dt>上报远端独立任务目录</dt><dd id="detail-remote-root">待上报 · 尚无结构化目录记录</dd></div><div><dt>Agent 会话 ID</dt><dd id="detail-thread" class="mono"></dd></div><div><dt>证据观察时间</dt><dd id="detail-observed-at" class="mono">待上报</dd></div><div><dt>记录性质</dt><dd id="detail-provenance-source">待核对 · 尚无有效上报</dd></div><div class="provenance-evidence"><dt>上报证据（相对路径）</dt><dd id="detail-provenance-evidence" class="mono">待上报</dd></div></dl>
           <div id="detail-policy" class="notice" role="status" hidden></div>
-          <div class="detail-body"><div id="detail-task-notice" class="notice">本轮对话结束后仍可继续任务。验收结果请在「分支验收监控」中查看，任务状态本身不代表 Gate 通过。</div><div id="detail-progress-warning" class="notice" role="status" hidden></div><section id="detail-progress" style="margin-bottom:16px" hidden><div class="tabs-head"><h3 id="detail-progress-title">当前进度摘要</h3></div><p id="detail-progress-summary" class="event-text"></p><small id="detail-plan-meta" class="hint"></small><ol id="detail-plan" class="event-text"></ol></section><details id="prompt-preview" class="subtle-details" style="margin-bottom:16px" hidden><summary>查看任务指令</summary><pre id="detail-prompt" class="event-text mono"></pre></details><div id="session-error" class="notice error" role="alert" hidden></div><div id="pending-requests" aria-label="等待你的处理"></div><div class="tabs-head"><h3>实时进展</h3><span id="event-count"></span></div><div id="events" class="events" aria-label="Codex 任务事件"></div><details class="subtle-details" style="margin-top:14px"><summary>查看较早事件</summary><div class="tabs-head"><button class="button small" id="older-events" type="button">读取历史事件</button><span id="history-count"></span></div><p class="hint" id="history-note" role="status"></p><div id="history-events" class="events" aria-label="Codex 历史事件"></div></details>
+          <div class="detail-body"><p id="desktop-note" class="hint" role="status" hidden></p><div id="detail-task-notice" class="notice">本轮对话结束后仍可继续任务。验收结果请在「分支验收监控」中查看，任务状态本身不代表 Gate 通过。</div><div id="detail-progress-warning" class="notice" role="status" hidden></div><section id="detail-progress" style="margin-bottom:16px" hidden><div class="tabs-head"><h3 id="detail-progress-title">当前进度摘要</h3></div><p id="detail-progress-summary" class="event-text"></p><small id="detail-plan-meta" class="hint"></small><ol id="detail-plan" class="event-text"></ol></section><details id="prompt-preview" class="subtle-details" style="margin-bottom:16px" hidden><summary>查看任务指令</summary><pre id="detail-prompt" class="event-text mono"></pre></details><div id="session-error" class="notice error" role="alert" hidden></div><div id="pending-requests" aria-label="等待你的处理"></div><div class="tabs-head"><h3>实时进展</h3><span id="event-count"></span></div><div id="events" class="events" aria-label="Codex 任务事件"></div><details class="subtle-details" style="margin-top:14px"><summary>查看较早事件</summary><div class="tabs-head"><button class="button small" id="older-events" type="button">读取历史事件</button><span id="history-count"></span></div><p class="hint" id="history-note" role="status"></p><div id="history-events" class="events" aria-label="Codex 历史事件"></div></details>
             <form id="message-form" class="followup"><label class="field-label" for="message">给 Codex 补充指令</label><textarea id="message" placeholder="例如：先检查已有 Gate 结果；本轮只处理 graph 模式失败。" required></textarea><div class="actions"><small class="hint" id="message-hint">执行中可补充指令；本轮结束后可继续任务。</small><button class="button primary" id="send-message" type="submit">发送指令</button></div></form><div id="session-notice" class="notice" role="status"></div>
           </div></article><p class="footnote">页面可恢复本机保存的 Codex 会话。同一 SSH 别名限制一个活动会话；中断或结束对话后，远端 tmux 可能仍在运行。再次分配机器前请核对远端任务。</p>
       </section>
@@ -252,6 +252,14 @@ Grep</textarea><small class="hint">SSH 命令可显式配置 Bash(ssh *)。未�
   function current() { return state.sessions.find(item => String(item.id) === state.selected); }
   function working(session) { return ['starting','running','waiting_approval','waiting_input','interrupting'].includes(session?.status); }
   function startupFailed(session) { return !!session && session.status==='failed'&&!session.thread_id; }
+  function desktopOwned(session) { return session?.execution_owner==='codex_desktop'; }
+  function desktopEligible(session) { return !state.readOnly&&!!session&&(session.provider||'codex')==='codex'&&typeof session.thread_id==='string'&&/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(session.thread_id); }
+  function renderDesktopEntry(session) {
+    const localCodex=!state.readOnly&&(session.provider||'codex')==='codex',eligible=desktopEligible(session),button=$('desktop-session'),hint=$('desktop-note');
+    button.hidden=!eligible;button.disabled=state.actionBusy;button.textContent='在 Codex 中继续';
+    hint.hidden=!localCodex;
+    hint.textContent=!localCodex?'':eligible?desktopOwned(session)?'任务已交给 Codex 客户端。点击可再次打开原会话；看板继续同步状态。':working(session)?'将暂停当前轮次并在客户端继续；远端 tmux 不会停止。':'在本机 Codex 客户端打开原会话，继续使用同一任务与工作目录。':startupFailed(session)?'启动尚未成功。重试启动原任务后，即可在 Codex 客户端继续。':session.thread_id?'会话 ID 无法核对，暂时不能在客户端打开。':'任务成功启动并建立会话后，即可在 Codex 客户端继续。';
+  }
   function activeTask(session) { return !!session && !session.historical && ['prepared','starting','running','waiting_approval','waiting_input','interrupting'].includes(session?.status); }
   function visibleSessions(sessions=state.sessions) { return prioritizedSessions(sessions.filter(session=>state.showHistory||activeTask(session))); }
   function taskPolicy(backend, branch, session) {
@@ -543,9 +551,10 @@ Grep</textarea><small class="hint">SSH 命令可显式配置 Bash(ssh *)。未�
   function responseButton(title, kind, handler) { const button=el('button','button small '+(kind||''),title);button.type='button';button.addEventListener('click',async()=>{button.disabled=true;try{await handler();}finally{if(button.isConnected)button.disabled=false;}});return button; }
   function renderPending(session) {
     const monitor=taskPolicy(session.backend,session.branch,session).mode==='monitor';
-    const requests=Array.isArray(session.pending_requests)?session.pending_requests:[],key=JSON.stringify([session.id,requests,monitor]);if(key===state.pendingKey)return;state.pendingKey=key;
+    const requests=Array.isArray(session.pending_requests)?session.pending_requests:[],readOnly=state.readOnly||desktopOwned(session),key=JSON.stringify([session.id,requests,monitor,readOnly]);if(key===state.pendingKey)return;state.pendingKey=key;
     const container=$('pending-requests');container.replaceChildren();
     for(const pending of requests){const method=pending.method||'',p=pending.params||{},box=el('section','request');box.append(el('h3','',method==='item/tool/requestUserInput'?'Codex 需要你的回答':'Codex 等待授权'));const details=el('details');details.open=true;details.append(el('summary','',method),el('pre','',JSON.stringify(p,null,2)));box.append(details);const actions=el('div','actions');
+      if(readOnly){box.append(el('p','',desktopOwned(session)?'请在 Codex 客户端处理授权或提问；看板仅同步此任务的状态。':'此页面仅查看任务状态。'));container.append(box);continue;}
       if(monitor){
         box.append(el('p','','已有 PR · 仅监控，请拒绝待执行操作或中断当前执行。'));
         if(method==='item/permissions/requestApproval')actions.append(responseButton('拒绝权限','',()=>respond(session,pending.id,{permissions:{},scope:'turn'})));
@@ -576,12 +585,16 @@ Grep</textarea><small class="hint">SSH 命令可显式配置 Bash(ssh *)。未�
     box.textContent=messages.join('\n');box.hidden=!messages.length;
   }
   function renderTaskActions(session,monitor,ending) {
-    const ready=providerAvailable(session.provider||'codex'),failedStart=startupFailed(session);
+    const ready=providerAvailable(session.provider||'codex'),failedStart=startupFailed(session),owned=desktopOwned(session),readOnly=state.readOnly||owned;
+    renderDesktopEntry(session);
     $('start-session').textContent=monitor?'仅监控':failedStart?'重试启动原任务':session.thread_id?'继续任务':'启动任务';
-    $('start-session').disabled=state.readOnly||monitor||(working(session)&&!claudeDenied(session))||state.actionBusy||!ready;
+    $('start-session').disabled=readOnly||monitor||(working(session)&&!claudeDenied(session))||state.actionBusy||!ready;
+    $('start-session').hidden=readOnly;
     $('interrupt-session').textContent=session.status==='prepared'?'取消待启动任务':'中断当前执行';
-    $('interrupt-session').disabled=state.readOnly||(!working(session)&&session.status!=='prepared')||session.status==='interrupting'||state.actionBusy;
-    $('send-message').disabled=state.readOnly||monitor||ending||failedStart||state.actionBusy||(['prepared','starting','interrupting','waiting_input','waiting_approval'].includes(session.status)&&!claudeDenied(session))||(['claude','flagscale'].includes(session.provider)&&working(session)&&!claudeDenied(session))||!ready;
+    $('interrupt-session').disabled=readOnly||(!working(session)&&session.status!=='prepared')||session.status==='interrupting'||state.actionBusy;
+    $('interrupt-session').hidden=readOnly;
+    $('message-form').hidden=readOnly;$('message').disabled=readOnly||monitor;
+    $('send-message').disabled=readOnly||monitor||ending||failedStart||state.actionBusy||(['prepared','starting','interrupting','waiting_input','waiting_approval'].includes(session.status)&&!claudeDenied(session))||(['claude','flagscale'].includes(session.provider)&&working(session)&&!claudeDenied(session))||!ready;
     $('send-message').textContent=session.thread_id&&!working(session)?'发送要求并继续原任务':'发送指令';
     $('message-hint').textContent=ending?'本轮结束处理中；修订文字会保留，状态更新后再发送。':monitor?'此任务仅监控，可查看已有 PR、日志或中断执行。':failedStart?ready?'点击「重试启动原任务」继续使用当前任务与工作目录，无需重新创建。':'本机 Agent 暂不可用。完成上方连接检查后可重试启动原任务，无需重新创建。':session.status==='waiting_input'||session.status==='waiting_approval'?'请先处理上方的授权或提问。':session.status==='prepared'?'启动任务后可以发送补充指令。':'执行中可补充指令；本轮结束后可发送修订要求，继续原任务。';
   }
@@ -590,10 +603,10 @@ Grep</textarea><small class="hint">SSH 命令可显式配置 Bash(ssh *)。未�
     $('selection-notice').textContent=missing;$('selection-notice').hidden=!missing;
     $('session-detail').hidden=!session;if(!session)return;
     renderProvenance(session);
-    $('detail-title').textContent=(labels[session.backend]||session.backend)+' 升级任务';$('detail-status').textContent=statusLabel(session.status,session);$('detail-status').className='pill '+(statuses[session.status]?session.status:'');$('detail-subtitle').textContent=providerName(session.provider)+' · '+(session.goal||'跟进分支适配，并收集实际验收证据。');$('detail-machine').textContent=session.ssh_alias||'待配置';$('detail-seed').textContent=session.remote_workspace||'待配置';$('detail-work-branch').textContent=session.work_branch||'待核对';$('detail-branch').textContent=session.branch+' · '+(session.commit?session.commit.slice(0,12):'待解析');$('detail-worktree').textContent=session.worktree||'准备中';$('detail-thread').textContent=session.thread_id||'启动后创建';
+    $('detail-title').textContent=session.name||(labels[session.backend]||session.backend)+' 升级任务';$('detail-status').textContent=statusLabel(session.status,session);$('detail-status').className='pill '+(statuses[session.status]?session.status:'');$('detail-subtitle').textContent=providerName(session.provider)+' · '+(session.goal||'跟进分支适配，并收集实际验收证据。');$('detail-machine').textContent=session.ssh_alias||'待配置';$('detail-seed').textContent=session.remote_workspace||'待配置';$('detail-work-branch').textContent=session.work_branch||'待核对';$('detail-branch').textContent=session.branch+' · '+(session.commit?session.commit.slice(0,12):'待解析');$('detail-worktree').textContent=session.worktree||'准备中';$('detail-thread').textContent=session.thread_id||'启动后创建';
     const policy=taskPolicy(session.backend,session.branch,session),monitor=policy.mode==='monitor';renderPolicy($('detail-policy'),policy);$('message').disabled=monitor;
     const ending=session.approval_cancel_pending&&working(session);
-    $('detail-task-notice').textContent=ending?(monitor?'已拒绝操作，本轮正在结束。此任务仅监控已有 PR；此操作不会自动停止远端 tmux。':'已拒绝操作，本轮正在结束。请等待状态更新后，在下方填写修订要求并发送，继续原任务。此操作不会自动停止远端 tmux。'):monitor?'仅监控已有 PR；下方为停止主动适配时的历史记录。验收结果请在「分支验收监控」中查看，历史阶段记录不代表 Gate 验收通过。':'本轮对话结束后仍可继续任务。可在下方发送修订要求，继续原任务；轮次结束不会自动停止远端 tmux。验收结果请在「分支验收监控」中查看，任务状态本身不代表 Gate 通过。';
+    $('detail-task-notice').textContent=desktopOwned(session)?'此任务已交给 Codex 客户端。请在客户端继续对话、处理授权或中断；看板会同步原任务的状态与输出。远端 tmux 不会因切换客户端停止。':ending?(monitor?'已拒绝操作，本轮正在结束。此任务仅监控已有 PR；此操作不会自动停止远端 tmux。':'已拒绝操作，本轮正在结束。请等待状态更新后，在下方填写修订要求并发送，继续原任务。此操作不会自动停止远端 tmux。'):monitor?'仅监控已有 PR；下方为停止主动适配时的历史记录。验收结果请在「分支验收监控」中查看，历史阶段记录不代表 Gate 验收通过。':'本轮对话结束后仍可继续任务。可在下方发送修订要求，继续原任务；轮次结束不会自动停止远端 tmux。验收结果请在「分支验收监控」中查看，任务状态本身不代表 Gate 通过。';
     $('detail-progress-title').textContent=monitor?'历史任务记录':session.progress_warning?'上次有效进度摘要':'当前进度摘要';
     const progressWarning=progressWarningText(session);$('detail-progress-warning').textContent=progressWarning;$('detail-progress-warning').hidden=!progressWarning;
     renderTaskActions(session,monitor,ending);
@@ -612,10 +625,26 @@ Grep</textarea><small class="hint">SSH 命令可显式配置 Bash(ssh *)。未�
     catch(error){$('sync-status').textContent='连接失败，将自动重试';notice('global-notice',error.message,true);}finally{state.fetching=false;}
   }
   async function act(session, action, body={}) {
-    if(state.readOnly||!session||state.actionBusy)return;if(['start','message'].includes(action)&&taskPolicy(session.backend,session.branch,session).mode==='monitor'){notice('session-notice','已有 PR · 仅监控，无法启动或发送适配指令。',true);return false;}
+    if(state.readOnly||!session||state.actionBusy)return;
+    if(action==='desktop'&&!desktopEligible(session)){notice('session-notice','请先成功启动原 Codex 任务并建立有效会话，再在客户端继续。',true);return false;}
+    if(desktopOwned(session)&&action!=='desktop'){notice('session-notice','此任务已交给 Codex 客户端，请在客户端继续；看板仅同步状态。',true);return false;}
+    if(['start','message'].includes(action)&&taskPolicy(session.backend,session.branch,session).mode==='monitor'){notice('session-notice','已有 PR · 仅监控，无法启动或发送适配指令。',true);return false;}
     if(['start','message'].includes(action)&&!providerAvailable(session.provider||'codex')){notice('session-notice','所选 Agent 暂不可用，请先完成上方连接检查，再继续原任务。',true);return false;}
     state.actionBusy=true;renderDetail();notice('session-notice','');
-    try{await post(API+'/'+encodeURIComponent(session.id)+'/'+action,body);await refresh(true);return true;}catch(error){notice('session-notice',error.message,true);return false;}finally{state.actionBusy=false;renderDetail();}
+    try{
+      const result=await post(API+'/'+encodeURIComponent(session.id)+'/'+action,body);
+      if(action==='desktop'){
+        const original=result.session;
+        if(!original||String(original.id)!==String(session.id))throw new Error('客户端返回的任务与当前任务不一致，请刷新后核对。');
+        state.sessions=state.sessions.map(item=>String(item.id)===String(session.id)?{...item,...original}:item);state.pendingKey='';
+      }
+      await refresh(true);
+      if(action==='desktop'){
+        if(result.desktop_opened===false)notice('session-notice',(errorMessage(result.desktop_open_error)||'Codex 客户端暂时无法打开。')+'\n原任务已交给客户端，可再次点击「在 Codex 中继续」重试打开。',true);
+        else notice('session-notice','已在 Codex 客户端打开原任务。看板继续同步状态，远端 tmux 不会停止。');
+      }
+      return true;
+    }catch(error){notice('session-notice',error.message,true);return false;}finally{state.actionBusy=false;renderDetail();}
   }
   async function create(start) {
     if(state.readOnly||state.creating||state.checking)return;
@@ -643,6 +672,7 @@ Grep</textarea><small class="hint">SSH 命令可显式配置 Bash(ssh *)。未�
   $('save-profile').addEventListener('click',async()=>{if(state.readOnly||state.creating||state.checking||!$('custom-settings').checked)return;state.checking=true;checkButtons();try{await saveConnection();invalidateCheck();notice('form-notice','连接配置已保存在本机。启动适配任务前请检查验证环境。');}catch(error){notice('form-notice',error.message,true);}finally{state.checking=false;checkButtons();}});
   $('check-machine').addEventListener('click',()=>checkMachine());
   $('create-form').addEventListener('submit',event=>{event.preventDefault();create(true);});$('create-only').addEventListener('click',()=>create(false));
+  $('desktop-session').addEventListener('click',()=>act(current(),'desktop'));
   $('start-session').addEventListener('click',()=>act(current(),'start'));$('interrupt-session').addEventListener('click',()=>act(current(),'interrupt'));
   $('message-form').addEventListener('submit',async event=>{event.preventDefault();const message=$('message').value.trim();if(message&&await act(current(),'message',{text:message}))$('message').value='';});
   function renderHealth(health) {
