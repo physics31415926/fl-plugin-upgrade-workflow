@@ -21,19 +21,39 @@
     @media(max-width:1080px) { .layout { grid-template-columns:310px minmax(0,1fr);gap:15px; }.shell { padding:0 20px 35px; }.session-list { grid-template-columns:1fr; }.detail-head { flex-direction:column; }.hero { align-items:flex-start; }.health { min-width:180px; } }
     @media(max-width:740px) { .shell { padding:0 14px 30px; }.topbar { min-height:65px;gap:8px; }.brand { font-size:13px; }.toplinks { gap:10px;font-size:11px; }.toplinks .secondary { display:none; }.hero { padding:22px 20px;display:block; }.hero h1 { font-size:27px; }.health { margin-top:17px; }.health strong { display:inline;margin-right:10px; }.health small { margin-top:6px; }.layout { grid-template-columns:1fr; }.detail-meta { grid-template-columns:1fr; }.session-list { grid-template-columns:repeat(2,minmax(0,1fr)); }.panel-head,.form,.detail-body { padding:16px; }.event-header { flex-wrap:wrap; }.event-header time { font-size:10px; }.followup .hint { max-width:100%; }.detail-head .actions { width:100%; } }
     @media(max-width:440px) { .session-list { grid-template-columns:1fr; }.brand .brand-extra { display:none; } }
+
+    /* Keep progress and the next useful action in the first screen. */
+    .shell{max-width:1450px;padding-bottom:36px}.topbar{min-height:72px;flex-wrap:wrap;padding:12px 0}.toplinks{align-items:center;flex-wrap:wrap;gap:12px}.toplinks a{min-height:42px;display:inline-flex;align-items:center}.toplinks .current{color:var(--ink);font-weight:650}.toplinks label{display:flex;align-items:center;gap:8px}.toplinks select{min-height:42px;border:1px solid var(--line);border-radius:8px;padding:7px 10px;background:var(--panel);color:var(--ink);max-width:220px}
+    .hero{padding:20px 24px;background:var(--panel);color:var(--ink);border:1px solid var(--line);border-radius:13px;box-shadow:var(--shadow);overflow:visible}.hero h1{font-size:25px;margin:0 0 6px}.hero p{color:var(--muted);font-size:13px}.hero .eyebrow{display:none}.health{min-width:230px;max-width:350px;flex:0 0 32%;padding:12px 14px;color:var(--ink);border:1px solid var(--line);background:var(--soft)}.health small{color:var(--muted);display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
+    .layout{grid-template-columns:minmax(0,1fr) 360px;gap:22px}.workspace{grid-column:1;min-width:0}.create-panel{grid-column:2;grid-row:1;position:sticky;top:18px}.create-toggle{display:flex;align-items:center;justify-content:space-between;gap:14px;cursor:pointer;list-style:none}.create-toggle::-webkit-details-marker{display:none}.create-toggle::after{content:'＋';font-size:20px;color:var(--muted)}.create-panel[open]>.create-toggle::after{content:'−'}.create-toggle #create-title{font-size:16px;font-weight:700}.create-panel:not([open])>.panel-head{border-bottom:0}.create-intro{margin:0 0 18px;color:var(--muted);font-size:13px}
+    .button,.button.small{min-height:42px;font-size:13px;padding:9px 13px;display:inline-flex;align-items:center;justify-content:center;text-decoration:none;line-height:1.35}.button.stop{color:#a63545;background:transparent;border-color:var(--line)}.button.primary:disabled{background:#7895df;border-color:#7895df}.button:disabled{cursor:not-allowed}.form-actions .button{width:100%}.actions{gap:10px}.detail-actions{flex-shrink:0;max-width:100%}.detail-actions .button{white-space:nowrap}.subtle-details>summary{padding:7px 0;min-height:34px}.field label,.field-label{font-size:13px}.hint{font-size:12px}.field select,.field input{min-height:42px}.agent-toolbar{display:flex;align-items:center;justify-content:space-between;gap:10px;margin:7px 0 14px}.agent-toolbar .hint{margin:0}.readiness{margin:9px 0 0;min-height:20px;font-size:12px;color:var(--muted)}.form-actions{margin-top:14px}.secondary-actions .button{min-height:38px;font-size:12px}.section-title{flex-wrap:wrap}.task-list-options{gap:12px}.session-list{grid-template-columns:repeat(2,minmax(0,1fr))}.session-card{padding:15px}.session-sub{font-size:12px;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}.session-card:focus-visible{outline:3px solid #95b5ff;outline-offset:3px}
+    .detail-head{align-items:flex-start}.detail-head p{display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;overflow-wrap:anywhere;max-width:600px}.task-context{display:grid;grid-template-columns:1fr 1.5fr 1fr;gap:12px;padding:14px 20px;margin:0;background:var(--soft);border-bottom:1px solid var(--line)}.task-context dt{font-size:11px;color:var(--muted)}.task-context dd{margin:3px 0 0;font-size:13px;overflow-wrap:anywhere}.technical-info{margin:14px 0;border:1px solid var(--line);border-radius:9px;background:var(--soft)}.technical-info>summary{padding:11px 13px;min-height:42px;font-size:12px;color:var(--muted);cursor:pointer}.technical-info .detail-meta{border:0;padding:12px 14px}.detail-body>.notice{font-size:12px}.detail-body .tabs-head h3{font-size:14px}.events{max-height:390px}.event details>summary{min-height:34px;padding:6px 0}.followup textarea{font-size:13px;min-height:95px}.footnote{line-height:1.6}.detail-body .request{scroll-margin-top:18px}.panel-head{scroll-margin-top:18px}#new-task{scroll-margin-top:18px}
+    @media(prefers-color-scheme:dark){.button.stop{color:#ffbdc7}.button.primary:disabled{background:#304875;border-color:#304875}}
+    @media(max-width:1100px){.layout{grid-template-columns:minmax(0,1fr) 320px;gap:16px}.session-list{grid-template-columns:1fr}.detail-head{flex-direction:column}.health{max-width:300px}.shell{padding-left:20px;padding-right:20px}}
+    @media(max-width:740px){.shell{padding-left:14px;padding-right:14px}.layout{display:flex;flex-direction:column;gap:18px}.workspace,.create-panel{width:100%}.create-panel{position:static}.hero{padding:18px;display:block}.hero h1{font-size:23px}.health{max-width:none;margin-top:14px}.toplinks{width:100%;gap:10px}.toplinks .secondary{display:none}.toplinks select{max-width:200px}.button,.button.small,.secondary-actions .button{min-height:44px}.field input,.field select{min-height:44px}.task-context{grid-template-columns:1fr 1fr;padding:14px 16px}.task-context>div:last-child{grid-column:1/-1}.detail-actions{width:100%;gap:8px}.detail-actions .button{flex:1}.session-list{grid-template-columns:1fr}.followup .actions{align-items:stretch;flex-direction:column}.followup .hint{max-width:100%}.followup .button{width:100%}.section-title h2{font-size:16px}.task-list-options{justify-content:flex-start}.technical-info .detail-meta{grid-template-columns:1fr}.section-title #new-task-link{min-width:104px}}
   </style>
 </head>
 <body>
 <div class="shell">
-  <header class="topbar"><div class="brand"><span class="mark" aria-hidden="true">FL</span><span><span id="project-brand">vLLM-Plugin-FL</span> <span class="brand-extra" style="font-weight:400;color:var(--muted)">/ 升级任务</span></span></div><nav class="toplinks" aria-label="页面导航"><a id="overview-link" href="/" hidden>双仓库总览</a><label id="project-picker" hidden>仓库 <select id="project-select" aria-label="选择仓库"></select></label><a id="monitor-link" href="/">分支验收监控 ↗</a><a class="secondary" href="/workflow">演示流程</a></nav></header>
+  <header class="topbar"><div class="brand"><span class="mark" aria-hidden="true">FL</span><span><span id="project-brand">vLLM-Plugin-FL</span> <span class="brand-extra" style="font-weight:400;color:var(--muted)">/ 升级任务</span></span></div><nav class="toplinks" aria-label="页面导航"><a id="overview-link" href="/" hidden>总览</a><label id="project-picker" hidden>仓库 <select id="project-select" aria-label="选择仓库"></select></label><a id="monitor-link" href="/">分支进展</a><a class="current" href="#session-list" aria-current="page">任务</a><a class="secondary" href="/workflow">演示流程</a></nav></header>
   <main>
-    <section class="hero"><div><div class="eyebrow">Backend upgrade sessions</div><h1>下发任务，让 agent 跟进适配</h1><p>选择验证设备和 agent，即可启动自动适配。任务将跟进代码适配、真实 Gate 验收和结果归档，进展可在分支监控页查看。</p></div><div class="health"><strong id="health-status">正在检查本机 agent…</strong><button class="button small" id="health-check" type="button">检查 agent 连接</button><small id="health-note">任务保存在本机，可在此页面继续。</small></div></section>
+    <section class="hero"><div><div class="eyebrow">Backend upgrade sessions</div><h1>任务工作台</h1><p>查看任务进展、处理待办，或选择设备和 Agent 开始新任务。</p></div><div class="health"><strong id="health-status">正在检查本机 agent…</strong><button class="button small" id="health-check" type="button">检查 agent 连接</button><small id="health-note">任务保存在本机，可在此页面继续。</small></div></section>
     <div id="global-notice" class="notice" role="status" aria-live="polite"></div>
     <div class="layout">
-      <section class="panel" aria-labelledby="create-title"><div class="panel-head"><h2 id="create-title">下发 backend 适配任务</h2><p>选择设备和 agent，可按需填写补充说明。</p></div><form id="create-form" class="form">
+
+      <section class="workspace" aria-label="任务监控"><div class="section-title"><h2>当前任务 <span id="session-count">0</span></h2><a class="button primary" id="new-task-link" href="#new-task">新建任务</a><div class="task-list-options"><label for="show-history"><input id="show-history" type="checkbox">历史任务</label><span id="sync-status">准备读取…</span></div></div><div id="session-list" class="session-list"></div><div id="no-sessions" class="empty"><strong id="no-sessions-title">创建第一个升级任务</strong><span id="no-sessions-note">选择设备和 Agent 后，即可在这里查看任务进度和输出。</span></div>
+        <div id="selection-notice" class="notice" role="status" hidden></div>
+        <article class="panel" id="session-detail" hidden><div class="panel-head detail-head"><div><div class="detail-title"><h2 id="detail-title">升级任务</h2><span id="detail-status" class="pill"></span></div><p id="detail-subtitle"></p></div><div class="actions detail-actions"><button class="button small" id="desktop-session" type="button" hidden>在 Codex 中继续</button><button class="button primary small" id="start-session" type="button">启动任务</button><button class="button stop small" id="interrupt-session" type="button">中断当前执行</button></div></div>
+          <dl class="task-context"><div><dt>验证机器</dt><dd id="detail-machine" class="mono"></dd></div><div><dt>基线分支 · 创建时提交</dt><dd id="detail-branch" class="mono"></dd></div><div><dt>执行 Agent</dt><dd id="detail-provider"></dd></div></dl>
+          <div id="detail-policy" class="notice" role="status" hidden></div>
+          <div class="detail-body"><p id="desktop-note" class="hint" role="status" hidden></p><div id="detail-task-notice" class="notice">本轮对话结束后仍可继续任务。验收结果请在「分支验收监控」中查看，任务状态本身不代表 Gate 通过。</div><div id="detail-progress-warning" class="notice" role="status" hidden></div><div id="pending-requests" aria-label="等待你的处理"></div><section id="detail-progress" style="margin-bottom:16px" hidden><div class="tabs-head"><h3 id="detail-progress-title">当前进度摘要</h3></div><p id="detail-progress-summary" class="event-text"></p><small id="detail-plan-meta" class="hint"></small><ol id="detail-plan" class="event-text"></ol></section><details id="prompt-preview" class="subtle-details" style="margin-bottom:16px" hidden><summary>查看任务指令</summary><pre id="detail-prompt" class="event-text mono"></pre></details><details class="technical-info" id="task-info"><summary>工作目录、提交与验收证据</summary><dl class="detail-meta"><div><dt>任务工作分支</dt><dd id="detail-work-branch" class="mono"></dd></div><div><dt>上报候选 SHA</dt><dd id="detail-candidate">待核对 · 尚无结构化提交记录</dd></div><div><dt>本地独立 worktree</dt><dd id="detail-worktree" class="mono"></dd></div><div><dt>远端源仓库目录（机器配置）</dt><dd id="detail-seed" class="mono"></dd></div><div><dt>上报远端独立任务目录</dt><dd id="detail-remote-root">待上报 · 尚无结构化目录记录</dd></div><div><dt>Agent 会话 ID</dt><dd id="detail-thread" class="mono"></dd></div><div><dt>证据观察时间</dt><dd id="detail-observed-at" class="mono">待上报</dd></div><div><dt>记录性质</dt><dd id="detail-provenance-source">待核对 · 尚无有效上报</dd></div><div class="provenance-evidence"><dt>上报证据（相对路径）</dt><dd id="detail-provenance-evidence" class="mono">待上报</dd></div></dl></details><div id="session-error" class="notice error" role="alert" hidden></div><div class="tabs-head"><h3>实时进展</h3><span id="event-count"></span></div><div id="events" class="events" aria-label="Codex 任务事件"></div><details class="subtle-details" style="margin-top:14px"><summary>查看较早事件</summary><div class="tabs-head"><button class="button small" id="older-events" type="button">读取历史事件</button><span id="history-count"></span></div><p class="hint" id="history-note" role="status"></p><div id="history-events" class="events" aria-label="Codex 历史事件"></div></details>
+            <form id="message-form" class="followup"><label class="field-label" for="message">给 Codex 补充指令</label><textarea id="message" placeholder="例如：先检查已有 Gate 结果；本轮只处理 graph 模式失败。" required></textarea><div class="actions"><small class="hint" id="message-hint">执行中可补充指令；本轮结束后可继续任务。</small><button class="button primary" id="send-message" type="submit">发送指令</button></div></form><div id="session-notice" class="notice" role="status"></div>
+          </div></article><p class="footnote">页面可恢复本机保存的 Codex 会话。同一 SSH 别名限制一个活动会话；中断或结束对话后，远端 tmux 可能仍在运行。再次分配机器前请核对远端任务。</p>
+      </section>
+      <details class="panel create-panel" id="new-task" open aria-labelledby="create-title"><summary class="panel-head create-toggle"><span id="create-title">新建任务</span></summary><form id="create-form" class="form"><p class="create-intro">选择设备和 Agent，补充说明可选。</p>
         <div class="field"><label for="profile">验证设备</label><select id="profile" required><option value="">请选择设备</option></select><small id="profile-guidance" class="hint profile-guidance"></small></div><div class="actions"><button id="sync-ssh" type="button" class="button small">同步 SSH 配置</button></div><small id="ssh-sync-status" class="hint" role="status" aria-live="polite">读取本机 SSH 别名；同步后保留正在编辑的连接。</small>
         <details class="subtle-details machine-inventory"><summary>已导入机器 <span id="machine-count">0</span></summary><div id="machine-inventory"></div><small class="hint">开发机用于承载看板，跳板机用于连接入口。选择计算节点后，系统会自动识别设备并准备任务目录。</small></details>
-        <div class="field"><label for="agent-provider">执行 Agent</label><select id="agent-provider"><option value="codex">Codex（默认）</option><option value="claude">Claude Code · API</option><option value="flagscale">FlagScale Agent · API</option></select><small id="provider-hint" class="hint">已有任务继续使用创建时选择的 agent。</small></div>
+        <div class="field"><label for="agent-provider">执行 Agent</label><select id="agent-provider"><option value="codex">Codex（默认）</option><option value="claude">Claude Code · API</option><option value="flagscale">FlagScale Agent · API</option></select><small id="provider-hint" class="hint">已有任务继续使用创建时选择的 agent。</small></div><div class="agent-toolbar"><small id="agent-config-state" class="hint"></small><button id="configure-agent" class="button small" type="button" hidden>配置 Agent</button></div>
         <details id="claude-settings-panel" class="subtle-details" hidden><summary>Claude 本机 API 配置</summary>
           <div class="field"><label for="claude-base-url">API Base URL</label><input id="claude-base-url" value="https://api.anthropic.com" autocomplete="off" spellcheck="false"><small class="hint">需兼容 Anthropic API 协议。远端地址使用 HTTPS；HTTP 只允许本机 loopback。</small></div>
           <div class="field"><label for="claude-api-key">API Key</label><input id="claude-api-key" type="password" autocomplete="new-password" spellcheck="false" placeholder="留空保留已有 Key"><small id="claude-key-state" class="hint">Key 仅在本机使用 Windows DPAPI 加密保存，不会回填。</small></div>
@@ -82,17 +102,8 @@ Grep</textarea><small class="hint">SSH 命令可显式配置 Bash(ssh *)。未�
         <div class="field"><label for="model-paths">模型路径 <span style="font-weight:400;color:var(--muted)">（可选，JSON）</span></label><textarea id="model-paths" class="mono" spellcheck="false" placeholder='{"Qwen3.6-27B": "/models/Qwen3.6-27B"}'></textarea><small class="hint">模型名称对应验证机器上的路径，可填写多个模型。</small></div>
         <details class="subtle-details"><summary>机器配置名称 <span style="font-weight:400">（可选）</span></summary><div class="field"><label for="profile-label">配置名称</label><div class="profile-row"><input id="profile-label" placeholder="例如：沐曦 C550 验证机" maxlength="120"><button class="button small" id="save-profile" type="button">仅保存配置</button></div></div></details>
         <hr class="rule"><div class="form-actions"><button class="button" id="check-machine" type="button">保存连接并检查</button></div><div id="connection-check" class="check-summary" aria-live="polite" hidden><h3 id="check-title">连接检查结果</h3><div id="check-items"></div><small id="check-note" class="hint"></small><details id="check-terminal" class="subtle-details" hidden><summary>在本机终端检查 SSH 登录</summary><pre id="check-terminal-command" class="event-text mono"></pre><small class="hint">在 PowerShell 中运行此命令，核对主机指纹并完成登录后，返回页面重新检查。</small></details></div></fieldset></details>
-        <div class="form-actions"><button class="button primary" id="create-start" type="submit">创建并启动任务</button><button class="button" id="create-only" type="button">仅创建，稍后启动</button></div><label class="return-option"><input id="auto-monitor" type="checkbox" checked>启动后进入监控页</label><small class="hint">agent 会跟进适配、运行 tools/adaptation-gate-cases 并归档结果。进展、授权和提问可在监控页处理；验收是否通过以真实证据为准。</small><div id="form-notice" class="notice" role="status"></div><a id="monitor-after-start" class="monitor-after-start" href="/" hidden>任务已下发，前往分支监控页 ↗</a>
-      </form></section>
-      <section class="workspace" aria-label="任务监控"><div class="section-title"><h2>Backend 任务 <span id="session-count">0</span></h2><div class="task-list-options"><label for="show-history"><input id="show-history" type="checkbox">历史任务</label><span id="sync-status">准备读取…</span></div></div><div id="session-list" class="session-list"></div><div id="no-sessions" class="empty"><strong id="no-sessions-title">创建第一个升级任务</strong><span id="no-sessions-note">选择左侧设备和 agent 后，即可在这里查看任务进度和输出。</span></div>
-        <div id="selection-notice" class="notice" role="status" hidden></div>
-        <article class="panel" id="session-detail" hidden><div class="panel-head detail-head"><div><div class="detail-title"><h2 id="detail-title">升级任务</h2><span id="detail-status" class="pill"></span></div><p id="detail-subtitle"></p></div><div class="actions"><button class="button primary small" id="desktop-session" type="button" hidden>在 Codex 中继续</button><button class="button primary small" id="start-session" type="button">启动任务</button><button class="button danger small" id="interrupt-session" type="button">中断当前执行</button></div></div>
-          <dl class="detail-meta"><div><dt>验证机器</dt><dd id="detail-machine" class="mono"></dd></div><div><dt>基线分支 · 创建时提交</dt><dd id="detail-branch" class="mono"></dd></div><div><dt>任务工作分支</dt><dd id="detail-work-branch" class="mono"></dd></div><div><dt>上报候选 SHA</dt><dd id="detail-candidate">待核对 · 尚无结构化提交记录</dd></div><div><dt>本地独立 worktree</dt><dd id="detail-worktree" class="mono"></dd></div><div><dt>远端源仓库目录（机器配置）</dt><dd id="detail-seed" class="mono"></dd></div><div><dt>上报远端独立任务目录</dt><dd id="detail-remote-root">待上报 · 尚无结构化目录记录</dd></div><div><dt>Agent 会话 ID</dt><dd id="detail-thread" class="mono"></dd></div><div><dt>证据观察时间</dt><dd id="detail-observed-at" class="mono">待上报</dd></div><div><dt>记录性质</dt><dd id="detail-provenance-source">待核对 · 尚无有效上报</dd></div><div class="provenance-evidence"><dt>上报证据（相对路径）</dt><dd id="detail-provenance-evidence" class="mono">待上报</dd></div></dl>
-          <div id="detail-policy" class="notice" role="status" hidden></div>
-          <div class="detail-body"><p id="desktop-note" class="hint" role="status" hidden></p><div id="detail-task-notice" class="notice">本轮对话结束后仍可继续任务。验收结果请在「分支验收监控」中查看，任务状态本身不代表 Gate 通过。</div><div id="detail-progress-warning" class="notice" role="status" hidden></div><section id="detail-progress" style="margin-bottom:16px" hidden><div class="tabs-head"><h3 id="detail-progress-title">当前进度摘要</h3></div><p id="detail-progress-summary" class="event-text"></p><small id="detail-plan-meta" class="hint"></small><ol id="detail-plan" class="event-text"></ol></section><details id="prompt-preview" class="subtle-details" style="margin-bottom:16px" hidden><summary>查看任务指令</summary><pre id="detail-prompt" class="event-text mono"></pre></details><div id="session-error" class="notice error" role="alert" hidden></div><div id="pending-requests" aria-label="等待你的处理"></div><div class="tabs-head"><h3>实时进展</h3><span id="event-count"></span></div><div id="events" class="events" aria-label="Codex 任务事件"></div><details class="subtle-details" style="margin-top:14px"><summary>查看较早事件</summary><div class="tabs-head"><button class="button small" id="older-events" type="button">读取历史事件</button><span id="history-count"></span></div><p class="hint" id="history-note" role="status"></p><div id="history-events" class="events" aria-label="Codex 历史事件"></div></details>
-            <form id="message-form" class="followup"><label class="field-label" for="message">给 Codex 补充指令</label><textarea id="message" placeholder="例如：先检查已有 Gate 结果；本轮只处理 graph 模式失败。" required></textarea><div class="actions"><small class="hint" id="message-hint">执行中可补充指令；本轮结束后可继续任务。</small><button class="button primary" id="send-message" type="submit">发送指令</button></div></form><div id="session-notice" class="notice" role="status"></div>
-          </div></article><p class="footnote">页面可恢复本机保存的 Codex 会话。同一 SSH 别名限制一个活动会话；中断或结束对话后，远端 tmux 可能仍在运行。再次分配机器前请核对远端任务。</p>
-      </section>
+        <div class="form-actions"><button class="button primary" id="create-start" aria-describedby="create-readiness" type="submit">创建并启动任务</button><button class="button" id="create-only" type="button">仅创建，稍后启动</button></div><p id="create-readiness" class="readiness" role="status" aria-live="polite"></p><label class="return-option"><input id="auto-monitor" type="checkbox">启动后进入监控页</label><small class="hint">agent 会跟进适配、运行 tools/adaptation-gate-cases 并归档结果。进展、授权和提问可在监控页处理；验收是否通过以真实证据为准。</small><div id="form-notice" class="notice" role="status"></div><a id="monitor-after-start" class="monitor-after-start" href="/" hidden>任务已下发，前往分支监控页 ↗</a>
+      </form></details>
     </div>
   </main>
 </div>
@@ -172,6 +183,9 @@ Grep</textarea><small class="hint">SSH 命令可显式配置 Bash(ssh *)。未�
   function providerChanged(){
     const provider=$('agent-provider').value; $('claude-settings-panel').hidden=state.readOnly||provider!=='claude';$('flagscale-settings-panel').hidden=state.readOnly||provider!=='flagscale';
     $('provider-hint').textContent=provider==='flagscale'?'跟进继续使用同一工作目录；执行中请等待本轮结束或先中断。':provider==='claude'?'使用本机 Claude CLI 与已配置 API。执行中请等待本轮结束或中断后跟进。':'已有任务继续使用创建时选择的 agent。';
+    const settings=provider==='claude'?state.agentSettings:state.agentSettingsByProvider?.flagscale;
+    const panel=$(provider==='claude'?'claude-settings-panel':'flagscale-settings-panel');
+    if(!state.readOnly&&['claude','flagscale'].includes(provider)&&!settings?.configured)panel.open=true;
     renderHealth(null);checkButtons();
   }
   async function saveClaudeSettings(deleteKey=false){
@@ -256,7 +270,7 @@ Grep</textarea><small class="hint">SSH 命令可显式配置 Bash(ssh *)。未�
   function desktopEligible(session) { return !state.readOnly&&!!session&&(session.provider||'codex')==='codex'&&typeof session.thread_id==='string'&&/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(session.thread_id); }
   function renderDesktopEntry(session) {
     const localCodex=!state.readOnly&&(session.provider||'codex')==='codex',eligible=desktopEligible(session),button=$('desktop-session'),hint=$('desktop-note');
-    button.hidden=!eligible;button.disabled=state.actionBusy;button.textContent='在 Codex 中继续';
+    button.hidden=!eligible;button.disabled=state.actionBusy;button.textContent='在 Codex 中继续';button.className='button '+(desktopOwned(session)||working(session)?'primary':'');button.title=working(session)&&!desktopOwned(session)?'暂停当前轮次后，在客户端打开同一个任务':'在客户端打开原会话';
     hint.hidden=!localCodex;
     hint.textContent=!localCodex?'':eligible?desktopOwned(session)?'任务已交给 Codex 客户端。点击可再次打开原会话；看板继续同步状态。':working(session)?'将暂停当前轮次并在客户端继续；远端 tmux 不会停止。':'在本机 Codex 客户端打开原会话，继续使用同一任务与工作目录。':startupFailed(session)?'启动尚未成功。重试启动原任务后，即可在 Codex 客户端继续。':session.thread_id?'会话 ID 无法核对，暂时不能在客户端打开。':'任务成功启动并建立会话后，即可在 Codex 客户端继续。';
   }
@@ -279,7 +293,7 @@ Grep</textarea><small class="hint">SSH 命令可显式配置 Bash(ssh *)。未�
   }
   function missingSelectionMessage(target) {
     if(target.session)return '指定任务暂无记录，请核对任务链接或从列表选择。';
-    const suffix=state.showHistory?'暂无任务，请在左侧配置验证环境后创建。':'暂无活跃任务，可勾选「历史任务」查看以往记录。';
+    const suffix=state.showHistory?'暂无任务，请展开「新建任务」后创建。':'暂无活跃任务，可勾选「历史任务」查看以往记录。';
     if(target.backend)return '此分支的 '+(labels[target.backend]||target.backend)+' '+suffix;
     if(target.branch)return '此分支'+suffix;
     return '';
@@ -354,6 +368,13 @@ Grep</textarea><small class="hint">SSH 命令可显式配置 Bash(ssh *)。未�
     $('create-start').textContent=state.creating?'正在准备设备与工作目录…':manual?(state.checkedKey?'创建并启动适配 agent':'检查连接并启动适配 agent'):'创建并启动任务';
     $('create-only').textContent='仅创建，稍后启动';$('check-machine').disabled=busy||!manual;$('save-profile').disabled=busy||!manual;
     $('create-form').querySelectorAll('input, select, textarea').forEach(input=>{input.disabled=busy;});$('custom-fields').disabled=busy||!manual;$('automatic-hint').hidden=manual;
+    const provider=$('agent-provider').value,info=state.providers?.[provider],api=['claude','flagscale'].includes(provider);
+    const reason=state.readOnly?'局域网仅查看任务。':state.creating?'正在准备，请等待当前操作完成。':state.checking?'正在检查连接，请稍候。':monitor?'已有适配 PR，请在分支进展中查看。':!deviceReady?'请先选择一台计算设备。':!providerAvailable()?api&&!info?.configured?'请先保存所选 Agent 的 API 配置。':'Agent 暂不可用，请检查本机连接。':'设备与 Agent 已就绪，创建后将在此页显示进展。';
+    $('create-readiness').textContent=reason;$('create-start').title=reason;
+    $('configure-agent').hidden=state.readOnly||!api;$('configure-agent').disabled=busy;
+    $('configure-agent').textContent=info?.configured?'编辑 API 配置':'配置 API';
+    $('agent-config-state').textContent=api?(info?.configured?'本机 API 配置已保存':'首次使用需配置 API'):'使用本机 Codex 登录';
+    $('new-task').hidden=state.readOnly;$('new-task-link').hidden=state.readOnly;
     renderSshSync();
   }
   async function saveConnection(){
@@ -445,7 +466,7 @@ Grep</textarea><small class="hint">SSH 命令可显式配置 Bash(ssh *)。未�
     $('session-count').textContent=String(sessions.length);$('session-count').title='显示 '+sessions.length+' 个任务，共 '+state.sessions.length+' 条记录';$('no-sessions').hidden=sessions.length>0;
     const onlyHistory=!state.showHistory&&state.sessions.length>0;
     $('no-sessions-title').textContent=onlyHistory?'暂无活跃任务':'创建第一个升级任务';
-    $('no-sessions-note').textContent=onlyHistory?'勾选「历史任务」可查看和继续以往任务，也可以在左侧创建新任务。':'选择左侧设备和 agent 后，即可在这里查看任务进度和输出。';
+    $('no-sessions-note').textContent=onlyHistory?'勾选「历史任务」可查看和继续以往任务，也可以点击「新建任务」创建。':'选择设备和 Agent 后，即可在这里查看任务进度和输出。';
     const key=JSON.stringify([state.selected,state.showHistory,state.policies,sessions.map(({id,backend,branch,work_branch,task_policy,reported_provenance,ssh_alias,status,approval_cancel_pending,updated_at,created_at,progress_summary,progress_warning,last_agent_message,plan_source,plan_updated_at})=>({id,backend,branch,work_branch,task_policy,reported_provenance,ssh_alias,status,approval_cancel_pending,updated_at,created_at,progress_summary,progress_warning,last_agent_message,plan_source,plan_updated_at}))]);if(key===state.listKey)return;state.listKey=key;
     const box=$('session-list'),ids=new Set(sessions.map(session=>String(session.id)));
     for(const [id,entry] of sessionListCards)if(!ids.has(id)){entry.button.remove();sessionListCards.delete(id);}
@@ -589,21 +610,64 @@ Grep</textarea><small class="hint">SSH 命令可显式配置 Bash(ssh *)。未�
     renderDesktopEntry(session);
     $('start-session').textContent=monitor?'仅监控':failedStart?'重试启动原任务':session.thread_id?'继续任务':'启动任务';
     $('start-session').disabled=readOnly||monitor||(working(session)&&!claudeDenied(session))||state.actionBusy||!ready;
-    $('start-session').hidden=readOnly;
+    $('start-session').hidden=readOnly||monitor||(working(session)&&!claudeDenied(session));$('start-session').className='button primary';$('start-session').title=!ready?'请先检查本机 Agent 连接':failedStart?'在原任务与工作目录重试':'继续当前任务';
     $('interrupt-session').textContent=session.status==='prepared'?'取消待启动任务':'中断当前执行';
     $('interrupt-session').disabled=readOnly||(!working(session)&&session.status!=='prepared')||session.status==='interrupting'||state.actionBusy;
-    $('interrupt-session').hidden=readOnly;
+    $('interrupt-session').hidden=readOnly||(!working(session)&&session.status!=='prepared');$('interrupt-session').title='仅中断当前轮次；远端 tmux 任务仍可能运行';
     $('message-form').hidden=readOnly;$('message').disabled=readOnly||monitor;
     $('send-message').disabled=readOnly||monitor||ending||failedStart||state.actionBusy||(['prepared','starting','interrupting','waiting_input','waiting_approval'].includes(session.status)&&!claudeDenied(session))||(['claude','flagscale'].includes(session.provider)&&working(session)&&!claudeDenied(session))||!ready;
     $('send-message').textContent=session.thread_id&&!working(session)?'发送要求并继续原任务':'发送指令';
     $('message-hint').textContent=ending?'本轮结束处理中；修订文字会保留，状态更新后再发送。':monitor?'此任务仅监控，可查看已有 PR、日志或中断执行。':failedStart?ready?'点击「重试启动原任务」继续使用当前任务与工作目录，无需重新创建。':'本机 Agent 暂不可用。完成上方连接检查后可重试启动原任务，无需重新创建。':session.status==='waiting_input'||session.status==='waiting_approval'?'请先处理上方的授权或提问。':session.status==='prepared'?'启动任务后可以发送补充指令。':'执行中可补充指令；本轮结束后可发送修订要求，继续原任务。';
   }
+  // BEGIN session message drafts
+  const sessionMessageDrafts = new Map();
+  let messageDraftOwner = null;
+  let messageDraftVersion = 0;
+  function messageDraftId(session) {
+    return session && session.id !== undefined && session.id !== null ? String(session.id) : null;
+  }
+  function rememberMessageDraft() {
+    if (messageDraftOwner === null) return null;
+    const text = $('message').value, previous = sessionMessageDrafts.get(messageDraftOwner);
+    if (previous && previous.text === text) return previous;
+    const draft = {text,version:++messageDraftVersion};
+    sessionMessageDrafts.set(messageDraftOwner,draft);
+    return draft;
+  }
+  function syncMessageDraft(session) {
+    const next = messageDraftId(session);
+    rememberMessageDraft();
+    if (next === messageDraftOwner) return;
+    messageDraftOwner = next;
+    $('message').value = next === null ? '' : sessionMessageDrafts.get(next)?.text || '';
+  }
+  async function submitMessage(event) {
+    event.preventDefault();
+    if (state.readOnly || state.actionBusy) return false;
+    const session = current();
+    if (!session) return false;
+    syncMessageDraft(session);
+    const draft = rememberMessageDraft(), text = draft?.text.trim();
+    if (!text) return false;
+    const id = messageDraftId(session), version = draft.version;
+    const sent = await act({...session},'message',{text});
+    if (!sent) return false;
+    if (messageDraftOwner === id) rememberMessageDraft();
+    if (sessionMessageDrafts.get(id)?.version === version) {
+      sessionMessageDrafts.set(id,{text:'',version:++messageDraftVersion});
+      if (messageDraftOwner === id) $('message').value = '';
+    }
+    return true;
+  }
+  // END session message drafts
+
   function renderDetail() {
     const session=current(),missing=session?'':missingSelectionMessage(selectionTarget);
+    syncMessageDraft(session);
     $('selection-notice').textContent=missing;$('selection-notice').hidden=!missing;
     $('session-detail').hidden=!session;if(!session)return;
     renderProvenance(session);
-    $('detail-title').textContent=session.name||(labels[session.backend]||session.backend)+' 升级任务';$('detail-status').textContent=statusLabel(session.status,session);$('detail-status').className='pill '+(statuses[session.status]?session.status:'');$('detail-subtitle').textContent=providerName(session.provider)+' · '+(session.goal||'跟进分支适配，并收集实际验收证据。');$('detail-machine').textContent=session.ssh_alias||'待配置';$('detail-seed').textContent=session.remote_workspace||'待配置';$('detail-work-branch').textContent=session.work_branch||'待核对';$('detail-branch').textContent=session.branch+' · '+(session.commit?session.commit.slice(0,12):'待解析');$('detail-worktree').textContent=session.worktree||'准备中';$('detail-thread').textContent=session.thread_id||'启动后创建';
+    $('detail-title').textContent=session.name||(labels[session.backend]||session.backend)+' 升级任务';$('detail-status').textContent=statusLabel(session.status,session);$('detail-status').className='pill '+(statuses[session.status]?session.status:'');$('detail-subtitle').textContent=providerName(session.provider)+' · '+(session.goal&&!session.goal.startsWith('自动准备任务：')?session.goal:'按所选设备自动配置，详细要求可查看任务指令。');$('detail-provider').textContent=providerName(session.provider);$('detail-machine').textContent=session.ssh_alias||'待配置';$('detail-seed').textContent=session.remote_workspace||'待配置';$('detail-work-branch').textContent=session.work_branch||'待核对';$('detail-branch').textContent=session.branch+' · '+(session.commit?session.commit.slice(0,12):'待解析');$('detail-worktree').textContent=session.worktree||'准备中';$('detail-thread').textContent=session.thread_id||'启动后创建';
     const policy=taskPolicy(session.backend,session.branch,session),monitor=policy.mode==='monitor';renderPolicy($('detail-policy'),policy);$('message').disabled=monitor;
     const ending=session.approval_cancel_pending&&working(session);
     $('detail-task-notice').textContent=desktopOwned(session)?'此任务已交给 Codex 客户端。请在客户端继续对话、处理授权或中断；看板会同步原任务的状态与输出。远端 tmux 不会因切换客户端停止。':ending?(monitor?'已拒绝操作，本轮正在结束。此任务仅监控已有 PR；此操作不会自动停止远端 tmux。':'已拒绝操作，本轮正在结束。请等待状态更新后，在下方填写修订要求并发送，继续原任务。此操作不会自动停止远端 tmux。'):monitor?'仅监控已有 PR；下方为停止主动适配时的历史记录。验收结果请在「分支验收监控」中查看，历史阶段记录不代表 Gate 验收通过。':'本轮对话结束后仍可继续任务。可在下方发送修订要求，继续原任务；轮次结束不会自动停止远端 tmux。验收结果请在「分支验收监控」中查看，任务状态本身不代表 Gate 通过。';
@@ -674,7 +738,8 @@ Grep</textarea><small class="hint">SSH 命令可显式配置 Bash(ssh *)。未�
   $('create-form').addEventListener('submit',event=>{event.preventDefault();create(true);});$('create-only').addEventListener('click',()=>create(false));
   $('desktop-session').addEventListener('click',()=>act(current(),'desktop'));
   $('start-session').addEventListener('click',()=>act(current(),'start'));$('interrupt-session').addEventListener('click',()=>act(current(),'interrupt'));
-  $('message-form').addEventListener('submit',async event=>{event.preventDefault();const message=$('message').value.trim();if(message&&await act(current(),'message',{text:message}))$('message').value='';});
+  $('message').addEventListener('input',rememberMessageDraft);
+  $('message-form').addEventListener('submit',submitMessage);
   function renderHealth(health) {
     if(health?.providers)state.providers=health.providers;
     else if(health&&Object.prototype.hasOwnProperty.call(health,'available'))state.providers.codex={...state.providers.codex,...health};
@@ -721,13 +786,17 @@ Grep</textarea><small class="hint">SSH 命令可显式配置 Bash(ssh *)。未�
         $('project-select').addEventListener('change', () => { const url=new URL('/sessions',location.href);url.searchParams.set('project',$('project-select').value);location.assign(url.href); });
       }
     } catch (error) { notice('global-notice',error.message,true); }
-    configureTaskMode();await refresh();
+    configureTaskMode();await refresh();if(innerWidth<741&&visibleSessions().length&&location.hash!=='#new-task')$('new-task').open=false;
     try{const settings=await request('/api/agent-settings');renderProviderSettings(settings.settings||settings);}
     catch(_){$('agent-provider').querySelector('option[value="claude"]').disabled=true;}
     try{const settings=await request('/api/agent-settings?provider=flagscale');renderFlagscaleSettings(settings.settings||settings);}
     catch(_){$('agent-provider').querySelector('option[value="flagscale"]').disabled=true;}
-    providerChanged();
+    providerChanged();if(location.hash==='#new-task')focusNewTask();
   }
+  function focusNewTask(){if(state.readOnly)return;const panel=$('new-task');panel.open=true;panel.scrollIntoView({behavior:'smooth',block:'start'});$('profile').focus({preventScroll:true});}
+  $('new-task-link').addEventListener('click',()=>focusNewTask());
+  window.addEventListener('hashchange',()=>{if(location.hash==='#new-task')focusNewTask();});
+  $('configure-agent').addEventListener('click',()=>{if(state.readOnly)return;const provider=$('agent-provider').value;if(!['claude','flagscale'].includes(provider))return;const panel=$(provider+'-settings-panel');panel.open=true;const input=$(provider+'-api-key');input.focus({preventScroll:true});panel.scrollIntoView({behavior:'smooth',block:'start'});});
   initialize();setInterval(()=>{if(!document.hidden)refresh(true);},3000);document.addEventListener('visibilitychange',()=>{if(!document.hidden)refresh(true);});
 })();
 </script>
