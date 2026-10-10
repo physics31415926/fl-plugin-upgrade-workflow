@@ -62,6 +62,7 @@ class DesktopTests(unittest.TestCase):
         self.worktree.mkdir()
         self.config = {"repo": str(self.repo), "branch": "main", "codex_project_id": "existing-project"}
         self.manager = CodexSessionManager(self.config, self.root)
+        self.manager.executable = None
         self.addCleanup(self.manager.close)
         self.session = {"id": TASK, "backend": "enflame", "branch": "main", "provider": "codex",
                         "ssh_alias": "explicit_dummy_gpu", "ssh_connection": None,
@@ -249,10 +250,10 @@ class DesktopTests(unittest.TestCase):
         path = self.rollout([])
         self.session.update(thread_id=None)
         self.client.path, self.client.fail_name = path, True
-        self.resolver.stop()
-        with patch("codex_runtime.resolve_codex_executable", return_value="explicit_dummy_codex.exe"):
-            self.manager.client_factory = Mock(return_value=self.client)
-            self.manager._client(self.session)
+        self.manager.executable = "explicit_dummy_codex.exe"
+        self.resolver.return_value = self.manager.executable
+        self.manager.client_factory = Mock(return_value=self.client)
+        self.manager._client(self.session)
         params = self.client.requests[0][1]
         self.assertFalse(params["ephemeral"])
         self.assertNotIn("projectId", params)
@@ -287,9 +288,9 @@ class DesktopTests(unittest.TestCase):
             return original(method, params)
         self.client.request = request
         self.manager.client_factory = Mock(return_value=self.client)
-        self.resolver.stop()
-        with patch("codex_runtime.resolve_codex_executable", return_value="explicit_dummy_codex.exe"):
-            self.manager._run(TASK, "synthetic task")
+        self.manager.executable = "explicit_dummy_codex.exe"
+        self.resolver.return_value = self.manager.executable
+        self.manager._run(TASK, "synthetic task")
         self.assertEqual(self.session["status"], "running")
         self.assertEqual(self.session["thread_id"], THREAD)
         self.assertIn("thread_project_error", self.session)
