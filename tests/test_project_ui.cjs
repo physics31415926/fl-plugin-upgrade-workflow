@@ -36,7 +36,7 @@ test('SGLang source cases only appear for their own model and runtime mode', () 
 });
 
 
-function gateDisplayFor(name) {
+function gateDisplayFor(name, field = 'gate') {
   const text=source(name),context={URL,location:{href:'https://example.invalid/dashboard/'}};
   vm.createContext(context);
   const implementation=name==='overview.html'
@@ -44,8 +44,8 @@ function gateDisplayFor(name) {
     : between(text,'  const labels =', '  const scenarioLabels =')
       +between(text,'  const isPassed =', '  function prStatusText(')
       +between(text,'  function effectiveCi(', '  function branchOptions(');
-  vm.runInContext(implementation+'\nglobalThis.gate=effectiveGate;',context);
-  return context.gate;
+  vm.runInContext(implementation+'\nglobalThis.gate=effectiveGate;globalThis.ci=effectiveCi;',context);
+  return context[field];
 }
 for(const page of ['overview.html','index.html']) {
   test(`${page}: historical passed or partial acceptance displays passed with old or missing raw Gate`, () => {
@@ -129,3 +129,18 @@ test('overview hides branch-wide CI while preserving backend CI and coverage', (
     assert.equal(JSON.stringify(data),original,'display must not alter CI data');
   }
 });
+
+for (const page of ['overview.html','index.html']) {
+  test(`${page}: merged adaptation backend CI keeps its PR result across later branch revisions`, () => {
+    const display = gateDisplayFor(page, 'ci');
+    const backend = {integration:{status:'merged'},ci:{status:'passed',scope:'merged-pr',commit:'tested-pr'},
+      current_ci:{status:'failed',scope:'branch',commit:'later-head'}};
+    const original = JSON.stringify(backend);
+    for (const head of ['merge-head','later-head','another-head']) assert.equal(display(backend,head),'passed');
+    assert.equal(JSON.stringify(backend),original);
+    for (const status of ['failed','unknown','running','partial','skipped']) {
+      assert.equal(display({...backend,ci:{...backend.ci,status}},'later-head'),status);
+    }
+    assert.equal(display({ci:{status:'passed',scope:'branch',commit:'old-head'}},'later-head'),'stale');
+  });
+}

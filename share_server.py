@@ -78,7 +78,7 @@ def _public_pr_url(value):
 def _status(value):
     result = _fields(value, STATUS_FIELDS)
     result["url"] = _public_url(value.get("url")) if isinstance(value, dict) else None
-    scope = {"branch": "当前分支 CI", "pr": "候选 PR CI", "accepted-tree": "已验收代码树 CI"}.get(result.get("scope"), "状态记录")
+    scope = {"branch": "当前分支 CI", "pr": "适配 PR CI", "merged-pr": "已合入 PR 适配 CI", "accepted-tree": "已验收代码树 CI"}.get(result.get("scope"), "状态记录")
     result["detail"] = scope + (f" · 第 {result['attempt']} 次运行" if type(result.get("attempt")) is int else "")
     return result
 

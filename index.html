@@ -258,7 +258,7 @@
       <div class="stat"><span class="stat-label">验收通过</span><strong class="stat-value" id="gate-count">—</strong><div class="stat-note">PR 测试说明、本地记录或逐项结果</div></div>
       <div class="stat"><span class="stat-label">逐项场景覆盖</span><strong class="stat-value" id="case-count">—</strong><div class="stat-note">目标分支上的场景</div></div>
     </div>
-    <div class="guidance"><span class="symbol" aria-hidden="true">ⓘ</span><span>顶部汇总已合入平台的适配 CI。验收结果优先采用 PR 测试说明；测试版本和覆盖范围见验收明细，逐项 Gate 与本地记录保留为辅助详情。</span></div>
+    <div class="guidance"><span class="symbol" aria-hidden="true">ⓘ</span><span>适配 CI 只统计对应 backend 的测试；合入后保留适配 PR 的测试结果，后续分支 CI 在展开详情中单独显示。验收结果优先采用 PR 测试说明。</span></div>
     <details class="ci-history">
       <summary>最近一次分支 CI 记录</summary>
       <p>该次工作流结论：<strong id="branch-ci">—</strong> <a id="branch-ci-link" hidden target="_blank" rel="noopener noreferrer">查看运行 ↗</a></p>
@@ -760,10 +760,10 @@
       (integration.commit ? " · " + shortSha(integration.commit) : "") +
       (pr.title ? " · " + pr.title : "");
     meta.append(infoBox("代码合入", mergeDetail, pr.url, pr.number ? "PR #" + pr.number : ""));
-    const ciScope = ci.scope === "accepted-tree" ? "已验收代码树 · " : ci.scope === "pr" ? "候选 PR · " : "当前分支 · ";
+    const ciScope = ci.scope === "accepted-tree" ? "已验收代码树 · " : ci.scope === "merged-pr" ? "已合入适配 PR · " : ci.scope === "pr" ? "适配 PR · " : "当前分支 · ";
     const ciDetail = ciScope + (ci.detail || labels[ciStatus]) + (ci.commit ? " · " + shortSha(ci.commit) : "");
-    meta.append(infoBox("CI 运行", ciDetail, ci.url, "查看运行"));
-    if (ci.scope === "accepted-tree" && backend.current_ci) {
+    meta.append(infoBox("适配 CI", ciDetail, ci.url, "查看 backend 测试"));
+    if (["accepted-tree", "merged-pr"].includes(ci.scope) && backend.current_ci) {
       const latest = backend.current_ci;
       meta.append(infoBox("后续分支 CI", labels[normalized(latest.status)] + " · " +
         (latest.detail || "") + " · " + shortSha(latest.commit), latest.url, "查看后续运行"));

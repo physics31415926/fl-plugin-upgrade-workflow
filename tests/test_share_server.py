@@ -300,6 +300,30 @@ class ShareServerTests(unittest.TestCase):
         self.assertEqual(result["head_url"], original["head_url"])
         self.assertIn("C:\\Users", original["repo"])
 
+    def test_merged_pr_ci_keeps_tested_commit_and_separate_branch_result_without_private_details(self):
+        source = source_snapshot()
+        source["backends"][0]["ci"] = {
+            "status": "passed", "scope": "merged-pr", "commit": "b" * 40,
+            "url": "https://github.com/example/plugin/actions/runs/122/job/1",
+            "detail": "private-machine /private/runtime/key",
+        }
+        source["backends"][0]["current_ci"] = {
+            "status": "failed", "scope": "branch", "commit": "a" * 40,
+            "url": "https://github.com/example/plugin/actions/runs/123/job/2",
+            "detail": "private-machine /private/runtime/key",
+        }
+        original = json.dumps(source)
+        public = sanitize_snapshot(source)["backends"][0]
+        self.assertEqual(public["ci"]["status"], "passed")
+        self.assertEqual(public["ci"]["scope"], "merged-pr")
+        self.assertEqual(public["ci"]["commit"], "b" * 40)
+        self.assertEqual(public["ci"]["detail"], "已合入 PR 适配 CI")
+        self.assertEqual(public["ci"]["url"], source["backends"][0]["ci"]["url"])
+        self.assertEqual(public["current_ci"]["status"], "failed")
+        self.assertEqual(public["current_ci"]["commit"], "a" * 40)
+        self.assertNotIn("private-machine", json.dumps(public))
+        self.assertEqual(json.dumps(source), original)
+
     def test_public_acceptance_keeps_safe_summary_and_each_source_without_mutating_gate(self):
         source = source_snapshot()
         original_gate = dict(source["backends"][0]["gate"])

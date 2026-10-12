@@ -443,6 +443,188 @@ class BranchMonitorTests(unittest.TestCase):
                 self.assertEqual(corex["ci"]["status"], expected)
                 self.assertEqual(corex["ci"]["url"], "https://example.test/relevant")
 
+    def _adaptation_ci_transport(self, pr, checks, *, branch_jobs=None):
+        calls = []
+
+        def transport(url):
+            calls.append(url)
+            if url.endswith(f"/pulls/{pr['number']}"):
+                return pr
+            if "/commits/" in url and "/check-runs" in url:
+                self.assertIn(f"/commits/{pr['head']['sha']}/check-runs", url)
+                return {"check_runs": checks}
+            if "/actions/runs/1/jobs" in url and branch_jobs is not None:
+                return {"jobs": branch_jobs}
+            return self._transport(url)
+
+        return transport, calls
+
+    def test_backend_ci_retains_pr_result_after_merge_and_later_branch_changes(self) -> None:
+        tested_head = self.head
+        pr = self._adaptation_pr("cuda", 484, draft=False,
+                                 head={"ref": "codex/backend-cuda-demo", "sha": tested_head})
+        checks = [
+            {"name": "test-cuda / unit / Unit tests (cuda)", "status": "completed",
+             "conclusion": "success", "details_url": "https://example.test/cuda-unit"},
+            {"name": "test-cuda / e2e / E2E (cuda)", "status": "completed",
+             "conclusion": "success", "details_url": "https://example.test/cuda-e2e"},
+            {"name": "test-ascend / unit / Unit tests (ascend)", "status": "completed",
+             "conclusion": "failure"},
+            {"name": "test-cuda / Setup (cuda)", "status": "completed", "conclusion": "failure"},
+            {"name": "test-cuda / notify / Notify (cuda)", "status": "completed", "conclusion": "failure"},
+        ]
+        branch_jobs = [{"name": "test-cuda / e2e / E2E (cuda)", "status": "completed",
+                        "conclusion": "failure", "html_url": "https://example.test/later-cuda-e2e"}]
+        transport, calls = self._adaptation_ci_transport(pr, checks, branch_jobs=branch_jobs)
+        monitor = BranchMonitor(dict(self.config, merged_commits={}), transport=transport)
+        candidate = self._backend(monitor.status(force=True))
+        self.assertEqual(candidate["integration"]["status"], "open")
+        self.assertEqual(candidate["ci"]["status"], "passed")
+        self.assertEqual(candidate["ci"]["scope"], "pr")
+        self.assertEqual(candidate["ci"]["commit"], tested_head)
+
+        pr.update(state="closed", merged=True, merge_commit_sha=tested_head)
+        merged = self._backend(monitor.status(force=True))
+        self.assertEqual(merged["integration"]["status"], "merged")
+        self.assertEqual(merged["ci"]["status"], "passed")
+        self.assertEqual(merged["ci"]["scope"], "merged-pr")
+        self.assertEqual(merged["ci"]["commit"], tested_head)
+        self.assertEqual(merged["current_ci"]["status"], "failed")
+        self.assertEqual(merged["current_ci"]["scope"], "branch")
+
+        self._write("later-change.txt", "another backend was updated\n")
+        git(self.repo, "add", "later-change.txt")
+        git(self.repo, "commit", "-qm", "later unrelated adaptation")
+        self.head = git(self.repo, "rev-parse", "HEAD")
+        git(self.repo, "update-ref", "refs/remotes/upstream/0.4.0-dev", self.head)
+        status = monitor.status(force=True)
+        backend = self._backend(status)
+        self.assertEqual(status["branch_ci"]["status"], "failed")
+        self.assertEqual(backend["ci"]["status"], "passed")
+        self.assertEqual(backend["ci"]["scope"], "merged-pr")
+        self.assertEqual(backend["ci"]["commit"], tested_head)
+        self.assertEqual(backend["ci"]["url"], "https://example.test/cuda-unit")
+        self.assertEqual(backend["current_ci"]["status"], "failed")
+        self.assertEqual(backend["current_ci"]["commit"], self.head)
+        self.assertEqual(backend["current_ci"]["url"], "https://example.test/later-cuda-e2e")
+        self.assertNotEqual(backend["ci"]["commit"], backend["current_ci"]["commit"])
+        self.assertEqual(backend["gate"]["status"], "missing")
+        self.assertTrue(any(f"/commits/{tested_head}/check-runs" in url for url in calls))
+
+    def test_merged_pr_ci_uses_iluvatar_alias_and_excludes_other_platform_failures(self) -> None:
+        pr = self._corex_pr(state="closed", merged=True, merge_commit_sha=self.head)
+        checks = [
+            {"name": "test-cuda / e2e / E2E (cuda)", "status": "completed", "conclusion": "failure"},
+            {"name": "test-iluvatar / unit / Unit tests (iluvatar)", "status": "completed",
+             "conclusion": "success", "details_url": "https://example.test/merged-iluvatar-unit"},
+            {"name": "test-iluvatar / e2e / E2E (iluvatar)", "status": "completed", "conclusion": "success"},
+            {"name": "test-iluvatar / Setup (iluvatar)", "status": "completed", "conclusion": "failure"},
+            {"name": "test-iluvatar / notify / Notify (iluvatar)", "status": "completed", "conclusion": "failure"},
+        ]
+        branch_jobs = [{"name": "test-iluvatar / unit / Unit tests (iluvatar)",
+                        "status": "completed", "conclusion": "failure"}]
+        transport, _ = self._adaptation_ci_transport(pr, checks, branch_jobs=branch_jobs)
+        config = dict(self.config, backend_prs={"corex": 566}, merged_commits={})
+        backend = self._backend(BranchMonitor(config, transport=transport).status(), "corex")
+        self.assertEqual(backend["ci"]["status"], "passed")
+        self.assertEqual(backend["ci"]["scope"], "merged-pr")
+        self.assertEqual(backend["ci"]["url"], "https://example.test/merged-iluvatar-unit")
+        self.assertEqual(backend["current_ci"]["status"], "failed")
+
+    def test_merged_pr_ci_requires_own_backend_checks_to_pass(self) -> None:
+        pr = self._adaptation_pr("cuda", 484, state="closed", merged=True,
+                                 merge_commit_sha=self.head)
+        branch_jobs = [{"name": "test-cuda / unit / Unit tests (cuda)", "status": "completed",
+                        "conclusion": "success", "html_url": "https://example.test/current-cuda-pass"}]
+        for conclusion, expected in (("failure", "failed"), ("timed_out", "failed"),
+                                     ("skipped", "partial"), ("cancelled", "cancelled")):
+            with self.subTest(conclusion=conclusion):
+                checks = [
+                    {"name": "test-cuda / unit / Unit tests (cuda)", "status": "completed", "conclusion": "success"},
+                    {"name": "test-cuda / e2e / E2E (cuda)", "status": "completed", "conclusion": conclusion,
+                     "details_url": "https://example.test/relevant-merged-check"},
+                ]
+                transport, _ = self._adaptation_ci_transport(pr, checks, branch_jobs=branch_jobs)
+                backend = self._backend(BranchMonitor(self.config, transport=transport).status())
+                self.assertEqual(backend["ci"]["status"], expected)
+                self.assertEqual(backend["ci"]["scope"], "merged-pr")
+                self.assertEqual(backend["ci"]["url"], "https://example.test/relevant-merged-check")
+                self.assertEqual(backend["current_ci"]["status"], "passed")
+
+    def test_merged_pr_without_matching_backend_checks_does_not_fall_back_to_pass(self) -> None:
+        pr = self._adaptation_pr("cuda", 484, state="closed", merged=True,
+                                 merge_commit_sha=self.head)
+        branch_jobs = [{"name": "test-cuda / unit / Unit tests (cuda)", "status": "completed", "conclusion": "success"}]
+        for checks, expected in (([], "unknown"),
+                                 ([{"name": "test-ascend / unit / Unit tests (ascend)",
+                                    "status": "completed", "conclusion": "success"}], "unknown"),
+                                 ([{"name": "test-cuda / e2e / E2E (cuda)",
+                                    "status": "completed", "conclusion": "skipped"}], "skipped")):
+            with self.subTest(checks=checks):
+                transport, _ = self._adaptation_ci_transport(pr, checks, branch_jobs=branch_jobs)
+                backend = self._backend(BranchMonitor(self.config, transport=transport).status())
+                self.assertEqual(backend["ci"]["status"], expected)
+                self.assertEqual(backend["ci"]["scope"], "merged-pr")
+                self.assertEqual(backend["current_ci"]["status"], "passed")
+
+    def test_merged_pr_missing_or_invalid_head_keeps_explicit_branch_fallback(self) -> None:
+        branch_jobs = [{"name": "test-cuda / unit / Unit tests (cuda)", "status": "completed",
+                        "conclusion": "success", "html_url": "https://example.test/current-cuda-unit"}]
+        for invalid_head in (None, "", "not-a-sha", "b" * 39):
+            with self.subTest(head=invalid_head):
+                pr = self._adaptation_pr("cuda", 484, state="closed", merged=True,
+                                         merge_commit_sha=self.head, head={"sha": invalid_head})
+                if invalid_head is None:
+                    pr.pop("head")
+                transport, calls = self._adaptation_ci_transport(pr, [], branch_jobs=branch_jobs)
+                backend = self._backend(BranchMonitor(self.config, transport=transport).status())
+                self.assertEqual(backend["ci"]["status"], "passed")
+                self.assertEqual(backend["ci"]["scope"], "branch")
+                self.assertEqual(backend["ci"]["commit"], self.head)
+                self.assertEqual(backend["ci"]["url"], "https://example.test/current-cuda-unit")
+                self.assertFalse(any("/check-runs" in url for url in calls))
+
+    def test_unverified_merged_pr_cannot_supply_adaptation_ci(self) -> None:
+        branch_jobs = [{"name": "test-cuda / unit / Unit tests (cuda)", "status": "completed", "conclusion": "failure"}]
+        branch_ci = {"status": "failed", "commit": self.head, "url": "https://example.test/current-run"}
+        for changes, integration_commit in (({"base": {"ref": "other"}}, self.head),
+                                             ({"merge_commit_sha": "f" * 40}, "f" * 40),
+                                             ({}, "f" * 40)):
+            with self.subTest(changes=changes, integration_commit=integration_commit):
+                pr = self._adaptation_pr("cuda", 484, **{
+                    "state": "closed", "merged": True, "merge_commit_sha": self.head, **changes})
+                def no_network(url):
+                    self.fail(f"Unverified merged PR must not read historical checks: {url}")
+                monitor = BranchMonitor(self.config, transport=no_network)
+                result = monitor._backend_ci("cuda", {"status": "merged", "commit": integration_commit},
+                                             branch_jobs, branch_ci, pr, False, [], branch="0.4.0-dev")
+                self.assertEqual(result["status"], "failed")
+                self.assertEqual(result["scope"], "branch")
+                self.assertEqual(result["commit"], self.head)
+
+    def test_merged_pr_ci_verifies_the_selected_branch_instead_of_default_branch(self) -> None:
+        git(self.repo, "update-ref", "refs/remotes/upstream/main", self.head)
+        pr = self._adaptation_pr("cuda", 484, state="closed", merged=True,
+                                 base={"ref": "main"}, merge_commit_sha=self.head)
+        checks = [{"name": "test-cuda / unit / Unit tests (cuda)", "status": "completed", "conclusion": "success"}]
+        transport, _ = self._adaptation_ci_transport(pr, checks)
+        backend = self._backend(BranchMonitor(dict(self.config, merged_commits={}),
+                                             transport=transport).status(branch="main"))
+        self.assertEqual(backend["integration"]["status"], "merged")
+        self.assertEqual(backend["ci"]["status"], "passed")
+        self.assertEqual(backend["ci"]["scope"], "merged-pr")
+        self.assertEqual(backend["ci"]["commit"], pr["head"]["sha"])
+
+    def test_ci_check_url_accepts_job_links_and_prefers_relevant_backend_result(self) -> None:
+        checks = [
+            {"status": "completed", "conclusion": "success", "html_url": "https://example.test/success-job"},
+            {"status": "completed", "conclusion": "failure", "html_url": "https://example.test/failed-job"},
+        ]
+        self.assertEqual(BranchMonitor._ci_check_url(checks, "failed"), "https://example.test/failed-job")
+        self.assertEqual(BranchMonitor._ci_check_url(checks, "passed"), "https://example.test/success-job")
+        checks[1]["details_url"] = "https://example.test/failed-check"
+        self.assertEqual(BranchMonitor._ci_check_url(checks, "failed"), "https://example.test/failed-check")
+
     def test_custom_ci_platform_applies_to_accepted_run(self) -> None:
         config = dict(self.config, backend_labels={"corex": "CoreX"},
                       backend_ci_platforms={"corex": "custom_vendor"},

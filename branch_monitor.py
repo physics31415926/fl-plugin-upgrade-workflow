@@ -361,7 +361,8 @@ class BranchMonitor:
             relevant = [check for check in checks if check.get("conclusion") == conclusion]
         else:
             relevant = checks
-        return next((check["details_url"] for check in relevant if check.get("details_url")), None)
+        return next((check.get("details_url") or check.get("html_url") for check in relevant
+                     if check.get("details_url") or check.get("html_url")), None)
 
     def _branch_ci(self, branch: str, sha: str, force: bool, errors: list[str]) -> tuple[dict[str, Any], list[dict[str, Any]]]:
         result = {"status": "unknown", "scope": "branch", "detail": "No CI run for current branch HEAD",
@@ -518,30 +519,47 @@ class BranchMonitor:
             return {"status": "closed", "commit": None, "detail": "PR is closed but not verified in this branch"}
         return result
 
+    def _branch_backend_ci(self, backend: str, branch_jobs: list[dict[str, Any]],
+                           branch_ci: dict[str, Any]) -> dict[str, Any]:
+        jobs = self._ci_test_jobs(backend, branch_jobs)
+        if not jobs:
+            jobs = [job for job in branch_jobs if job.get("name") == f"test-{self._ci_platform(backend)}"]
+        status = self._ci_status(jobs)
+        return {"status": status, "scope": "branch", "detail": f"{len(jobs)} backend test jobs at branch HEAD",
+                "url": self._ci_check_url(jobs, status) or branch_ci.get("url"), "commit": branch_ci.get("commit")}
+
     def _backend_ci(self, backend: str, integration: dict[str, Any], branch_jobs: list[dict[str, Any]],
                     branch_ci: dict[str, Any], pr_data: dict[str, Any] | None, force: bool,
-                    errors: list[str]) -> dict[str, Any]:
-        if integration["status"] == "merged":
-            jobs = self._ci_test_jobs(backend, branch_jobs)
-            if not jobs:
-                jobs = [job for job in branch_jobs if job.get("name") == f"test-{self._ci_platform(backend)}"]
-            return {"status": self._ci_status(jobs), "scope": "branch", "detail": f"{len(jobs)} backend test jobs at branch HEAD",
-                    "url": branch_ci.get("url"), "commit": branch_ci.get("commit")}
-        head_sha = (pr_data or {}).get("head", {}).get("sha")
-        if integration["status"] not in ("open", "draft"):
-            return {"status": "unknown", "scope": "pr", "detail": "No adaptation PR targeting this branch",
+                    errors: list[str], branch: str | None = None) -> dict[str, Any]:
+        pr = pr_data or {}
+        head_sha = pr.get("head", {}).get("sha")
+        merge_sha = pr.get("merge_commit_sha")
+        merged_pr = (integration["status"] == "merged" and pr.get("merged") is True and
+                     pr.get("base", {}).get("ref") == (branch or self.branch) and
+                     isinstance(merge_sha, str) and integration.get("commit") == merge_sha.lower() and
+                     isinstance(head_sha, str) and SHA.fullmatch(head_sha.lower()) and
+                     self._ancestor(merge_sha.lower(), branch_ci.get("commit", "")))
+        # Keep the adaptation's tested PR commit after a verified merge. A later
+        # branch run describes a different revision and belongs in current_ci.
+        if integration["status"] == "merged" and not merged_pr:
+            return self._branch_backend_ci(backend, branch_jobs, branch_ci)
+        scope = "merged-pr" if merged_pr else "pr"
+        if integration["status"] not in ("open", "draft") and not merged_pr:
+            return {"status": "unknown", "scope": scope, "detail": "No adaptation PR targeting this branch",
                     "url": None, "commit": None}
         if not self.github_repo or not isinstance(head_sha, str) or not SHA.fullmatch(head_sha.lower()):
-            return {"status": "unknown", "scope": "pr", "detail": "No candidate branch CI data", "url": None, "commit": head_sha}
+            return {"status": "unknown", "scope": scope, "detail": "No candidate branch CI data", "url": None, "commit": head_sha}
+        head_sha = head_sha.lower()
         try:
             data = self._api(f"commits/{head_sha}/check-runs?per_page=100", force)
             checks = self._ci_test_jobs(backend, data.get("check_runs", []))
             status = self._ci_status(checks)
-            return {"status": status, "scope": "pr", "detail": f"{len(checks)} backend test checks at PR head",
+            detail = ("已合入适配 PR" if merged_pr else "适配 PR") + f" 提交上的 {len(checks)} 个 backend 测试"
+            return {"status": status, "scope": scope, "detail": detail,
                     "url": self._ci_check_url(checks, status), "commit": head_sha}
         except (OSError, ValueError, MonitorError) as exc:
             errors.append(f"GitHub {backend} checks unavailable: {exc}")
-            return {"status": "unknown", "scope": "pr", "detail": "Candidate branch CI unavailable", "url": None, "commit": head_sha}
+            return {"status": "unknown", "scope": scope, "detail": "Adaptation PR backend CI unavailable", "url": None, "commit": head_sha}
 
     def _manifests(self) -> list[tuple[Path, dict[str, Any]]]:
         if not self.evidence_dir.is_dir():
@@ -827,8 +845,8 @@ class BranchMonitor:
         for backend in backend_ids:
             pr, pr_data = self._pr(backend, branch, force, errors, open_prs, sha)
             integration = self._integration(backend, branch, sha, pr_data)
-            ci = self._backend_ci(backend, integration, jobs, branch_ci, pr_data, force, errors)
-            current_ci = ci
+            ci = self._backend_ci(backend, integration, jobs, branch_ci, pr_data, force, errors, branch=branch)
+            current_ci = self._branch_backend_ci(backend, jobs, branch_ci) if integration["status"] == "merged" else ci
             accepted_ci = self._accepted_ci(backend, branch, sha, force, errors)
             if accepted_ci:
                 ci = accepted_ci

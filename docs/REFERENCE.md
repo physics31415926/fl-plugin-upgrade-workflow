@@ -74,6 +74,8 @@ python -B <tools>/sglang_evidence.py --repo <clean-candidate> --branch <baseline
 
 所有已知 backend 默认自动发现 `codex/backend-<backend>-…` 命名的打开 PR；已知清单来自所选分支的平台注册和显式 backend 配置，不会因为 GitHub 出现其他平台分支就增加平台。`corex` 也接受 `codex/backend-iluvatar-…`。候选必须准确指向当前目标分支，且只能有一个；默认不按标题猜测 backend。已明确配置的打开 PR、当前分支已验证合入的 PR 保持优先，关闭的旧 PR 不会掩盖唯一的新候选。需要自定义命名时可配置 `backend_pr_discovery` 的 `head_prefixes` 和可选 `title_terms`，该 backend 的显式规则覆盖默认规则。如果匹配多个 PR，服务报告歧义并保留明确配置的关联，需维护者指定编号。PR 打开、代码已合入、CI 和 Gate 仍分别判定。
 
+适配 CI 只汇总对应 backend 的测试，准备步骤和通知不参与判定，其他 backend 的失败不会影响它。PR 合入目标分支并验证合入提交后，继续显示该适配 PR 原提交的测试结果；后续分支的同 backend CI 在展开详情中单独显示。缺少测试记录时显示未知，代码合入本身不代表测试通过。显式配置的已验收 CI 运行仍校验测试提交、运行次数与当前代码树。
+
 监控清单从**所选分支**的 `.github/configs/platforms.yml` 和 `tools/adaptation-gate-cases/test_*.py` 读取。当前 `0.4.0-dev` 的 gate 包含两个 Qwen3.6 模型、eager/graph 两种模式、每组 5 个 pytest 场景（合计 20 个场景、104 个请求）。代码已合入、CI 成功和 Gate 通过是三个独立状态。直接验收结果由运行清单绑定 backend、实际测试提交、模型、模式和端口，再检查每个 JSON 的逐请求结果。历史验收记录会单独标注来源和接受版本，不会伪装成当前 HEAD 的新一轮测试；本机演示结果也不会计入分支监控。
 
 要让 Gate 显示真实结果，在 `evidence_dir` 下为每次 backend / 模型 / 模式运行放一个 `manifest.json`，并把 `tools/adaptation-gate-cases` 写出的 5 个场景 JSON 放在清单指定的 `results_dir`。例如 `runs/gate-evidence/cuda/Qwen3.6-27B/eager/run-001/manifest.json`：
@@ -114,7 +116,7 @@ Ascend、MetaX 和 iluvatar 等候选 PR 显示在各自 backend 行。候选工
 
 特殊情况可展开高级设置，并勾选“使用自定义连接与验收配置”，填写连接、backend、已有远端目录或模型路径，使用原有保存与预检流程。仅展开高级设置不会切换到手工模式。“仅创建，稍后启动”固定基线并建立本地独立 worktree，远端代码由 Agent 启动后准备。同一 SSH 别名或同一直接连接的主机、用户、端口只允许一个待启动或活动任务；不同机器可并行跟进不同 backend。
 
-启动后默认进入首页监控。适配任务每 3 秒读取一次，显示 agent 报告的实际计划、最新消息、异常和待处理授权/提问；可以在监控页答复、发送补充指令、中断或继续任务，并打开详情查看事件日志。agent 指令要求跟进环境检查、适配、服务启动、原仓库 `tools/adaptation-gate-cases` 验收与证据归档。浏览器关闭不会取消后台执行；服务进程仍需保持运行。
+创建并启动后默认留在任务页；勾选“启动后进入监控页”可切换到分支监控。适配任务每 3 秒读取一次，显示 agent 报告的实际计划、最新消息、异常和待处理授权/提问；可以在监控页答复、发送补充指令、中断或继续任务，并打开详情查看事件日志。agent 指令要求跟进环境检查、适配、服务启动、原仓库 `tools/adaptation-gate-cases` 验收与证据归档。浏览器关闭不会取消后台执行；服务进程仍需保持运行。
 
 机器列表分别显示最近一次 SSH 连通检查和完整环境预检，附检查时间及失败原因。Windows 向远端发送预检脚本时使用 UTF-8 字节保留 LF；SSH 已通过但远端检查脚本失败时，页面单独报告环境检查失败。修改连接参数会使原连接检查失效；只修改备注不会丢失检查记录。
 
