@@ -35,6 +35,7 @@ from urllib.parse import quote, urlencode
 from urllib.request import Request, urlopen
 
 from pr_acceptance import acceptance_summary
+from pr_discovery import adaptation_backend
 
 
 SHA = re.compile(r"^[0-9a-f]{40}$")
@@ -397,8 +398,7 @@ class BranchMonitor:
             return self.backend_pr_discovery[backend]
         if not isinstance(backend, str) or not PLATFORM.fullmatch(backend):
             return None
-        names = [backend, "iluvatar"] if backend == "corex" else [backend]
-        return {"head_prefixes": [f"codex/backend-{name}-" for name in names]}
+        return {"content_backend": backend}
 
     @staticmethod
     def _matches_pr_selector(pr: dict[str, Any], branch: str, selector: dict[str, Any]) -> bool:
@@ -407,6 +407,8 @@ class BranchMonitor:
                 not isinstance(base, dict) or base.get("ref") != branch or
                 not isinstance(candidate_head, dict) or not isinstance(candidate_head.get("ref"), str)):
             return False
+        if selector.get("content_backend"):
+            return adaptation_backend(pr) == selector["content_backend"]
         return (any(candidate_head["ref"].startswith(prefix) for prefix in selector["head_prefixes"]) and
                 (not selector.get("title_terms") or
                  any(term.casefold() in str(pr.get("title", "")).casefold() for term in selector["title_terms"])))

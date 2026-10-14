@@ -72,7 +72,9 @@ python -B <tools>/sglang_evidence.py --repo <clean-candidate> --branch <baseline
 
 监控服务优先通过已登录的 `gh api` 读取 GitHub 状态；若未安装或不可用，则用 GitHub HTTP API（可通过 `GH_TOKEN` 或 `GITHUB_TOKEN` 提高配额）。远端数据缓存 5 分钟；页面每 15 秒读取服务状态，点击“读取最新状态”会触发一次采集并直接显示返回结果。网络故障会明确显示错误，页面保留上次采集时间。
 
-所有已知 backend 默认自动发现 `codex/backend-<backend>-…` 命名的打开 PR；已知清单来自所选分支的平台注册和显式 backend 配置，不会因为 GitHub 出现其他平台分支就增加平台。`corex` 也接受 `codex/backend-iluvatar-…`。候选必须准确指向当前目标分支，且只能有一个；默认不按标题猜测 backend。已明确配置的打开 PR、当前分支已验证合入的 PR 保持优先，关闭的旧 PR 不会掩盖唯一的新候选。需要自定义命名时可配置 `backend_pr_discovery` 的 `head_prefixes` 和可选 `title_terms`，该 backend 的显式规则覆盖默认规则。如果匹配多个 PR，服务报告歧义并保留明确配置的关联，需维护者指定编号。PR 打开、代码已合入、CI 和 Gate 仍分别判定。
+默认根据 PR 标题和正文的 Summary / Description / 概述等目的段落识别 backend 适配。接受明确的适配、升级标题，或明确说明将插件、vLLM、SGLang 适配到某 backend 的正文。分支名称仅用于冲突检查，不能单独证明适配；测试表格、代码块、引用和 HTML 注释不作为适配目标。普通算子修复、CI 调整及仅提及某设备的 PR 不自动关联。规则采用保守文本匹配，描述不明确时由维护者指定 PR 编号。
+
+候选必须指向当前目标分支，并且适配目标唯一；多个候选不自动选择。已明确配置的打开 PR 和已验证合入当前分支的 PR 保持优先。backend_pr_discovery 的 head_prefixes 和可选 title_terms 是维护者显式覆盖规则。corex 与 iluvatar 视为同一 backend。PR 关联、合入状态、CI 和验收记录分别判定，描述中的通过结果不会覆盖真实 CI 状态。
 
 适配 CI 只汇总对应 backend 的测试，准备步骤和通知不参与判定，其他 backend 的失败不会影响它。PR 合入目标分支并验证合入提交后，继续显示该适配 PR 原提交的测试结果；后续分支的同 backend CI 在展开详情中单独显示。缺少测试记录时显示未知，代码合入本身不代表测试通过。显式配置的已验收 CI 运行仍校验测试提交、运行次数与当前代码树。
 

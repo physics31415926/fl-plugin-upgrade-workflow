@@ -211,7 +211,7 @@ class BranchMonitorTests(unittest.TestCase):
     def _adaptation_pr(self, backend, number=901, **changes):
         value = {"number": number, "state": "open", "merged": False, "draft": True,
                  "base": {"ref": "0.4.0-dev"}, "head": {"ref": f"codex/backend-{backend}-demo", "sha": "b" * 40},
-                 "title": "Update plugin backend", "html_url": f"https://example.test/pr/{number}"}
+                 "title": f"adapt({backend}): upgrade backend runtime", "html_url": f"https://example.test/pr/{number}"}
         value.update(changes)
         return value
 
@@ -250,6 +250,38 @@ class BranchMonitorTests(unittest.TestCase):
         self.assertEqual(len(queries), 1)
         self.assertIn("base=0.4.0-dev", queries[0])
         self.assertFalse(status["errors"])
+
+    def test_adapt_prefix_discovers_backend_pr_and_retains_target_branch(self):
+        candidate = self._adaptation_pr("kunlunxin", head={"ref": "adapt/kunlunxin-runtime-upgrade", "sha": "b" * 40})
+        transport, _ = self._discovery_transport([candidate])
+        config = dict(self.config, backend_labels={"kunlunxin": "Kunlunxin"})
+        row = self._backend(BranchMonitor(config, transport=transport).status(), "kunlunxin")
+        self.assertEqual(row["pr"]["number"], 901)
+        self.assertEqual(row["pr"]["selected_by"], "discovered")
+        self.assertEqual(row["integration"]["status"], "draft")
+        self.assertEqual(row["gate"]["status"], "missing")
+
+    def test_adapt_prefix_rejects_other_branch_backend_and_lookalikes(self):
+        candidates = [
+            self._adaptation_pr("kunlunxin", 901, head={"ref": "adapt/kunlunxin-runtime"}, base={"ref": "other"}),
+            self._adaptation_pr("kunlunxin", 902, head={"ref": "adapt/kunlunxinplus-runtime"}),
+            self._adaptation_pr("metax", 903, head={"ref": "adapt/metax-runtime"}, title="Kunlunxin support"),
+        ]
+        transport, calls = self._discovery_transport(candidates)
+        row = self._backend(BranchMonitor(dict(self.config, backend_labels={"kunlunxin": "Kunlunxin"}), transport=transport).status(), "kunlunxin")
+        self.assertIsNone(row["pr"])
+        self.assertFalse(any(url.endswith(f"/pulls/{number}") for url in calls for number in (901, 902, 903)))
+
+    def test_adapt_and_codex_candidates_are_ambiguous_without_explicit_selection(self):
+        candidates = [self._adaptation_pr("kunlunxin", 901),
+                      self._adaptation_pr("kunlunxin", 902, head={"ref": "adapt/kunlunxin-runtime", "sha": "b" * 40})]
+        transport, _ = self._discovery_transport(candidates)
+        config = dict(self.config, backend_labels={"kunlunxin": "Kunlunxin"})
+        status = BranchMonitor(config, transport=transport).status()
+        self.assertIsNone(self._backend(status, "kunlunxin")["pr"])
+        self.assertTrue(any("Multiple open kunlunxin" in error for error in status["errors"]))
+        config["backend_prs"] = {"kunlunxin": 902}
+        self.assertEqual(self._backend(BranchMonitor(config, transport=transport).status(), "kunlunxin")["pr"]["number"], 902)
 
     def test_default_discovery_can_find_registry_backend_without_label_configuration(self):
         transport, _ = self._discovery_transport([self._adaptation_pr("ascend")])
