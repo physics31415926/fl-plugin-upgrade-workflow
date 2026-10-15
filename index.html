@@ -214,7 +214,8 @@
     @media(prefers-color-scheme:dark){.hero{background:var(--panel)}.toplinks .demo{color:#fff;background:#315bdb}.button,select{background:var(--panel);color:var(--ink);border-color:#4a5e7a}.button:hover:not(:disabled){background:#283d5f}.button.primary{color:white;background:#315bdb}.acceptance-dialog{background:var(--panel)}.acceptance-dialog .dialog-close{background:var(--panel);color:var(--ink)}}
     @media(max-width:1060px){.topbar{align-items:flex-start}.toplinks{max-width:64%}.hero-content{flex-wrap:wrap}.hero-actions{justify-content:flex-start}.hero-actions select{max-width:380px}.shell{padding:0 20px 32px}}
     @media(max-width:640px){.shell{padding:0 14px 28px}.topbar{min-height:64px;gap:10px;margin-bottom:16px}.brand{font-size:13px}.toplinks{max-width:none;width:100%;justify-content:flex-start;gap:6px}.toplinks>a{min-height:42px;padding:8px 10px}.toplinks .secondary{display:none}#project-picker{margin-left:auto}#project-select{max-width:175px;min-height:42px}.hero{padding:18px}.hero h1{font-size:25px}.hero-content{display:block}.hero-actions{margin-top:16px;display:flex;flex-wrap:wrap}.hero-actions>div{flex:1;min-width:170px}.hero-actions select{width:100%;min-width:0}.hero-actions .button{align-self:flex-end}.hero-meta{gap:8px 14px}.summary{gap:8px}.stat{min-height:91px;padding:12px}.stat-value{font-size:22px}.stat-note{font-size:11px}select,.button{min-height:44px}.backend-row{padding:12px 14px}.backend-row .backend-toggle,.backend-expand,.acceptance-open{min-height:44px}.acceptance-open{flex-direction:column;align-items:flex-start;gap:4px}.section-heading{gap:12px}.section-heading .button{width:100%}.acceptance-dialog{width:96vw;padding:16px}.acceptance-dialog h2{font-size:17px}}
-  </style>
+  .pr-description{margin-top:24px;border-top:1px solid #dce3ed;padding-top:12px}.pr-description h4{margin:20px 0 10px}.acceptance-dialog .pr-description td:last-child{white-space:pre-wrap}
+</style>
 </head>
 <body>
 <div class="shell">
@@ -667,6 +668,26 @@
       table.append(head, body);wrap.append(table);dialog.append(wrap);
       if (result.rows_truncated || Number(result.rows_total) > rows.length) dialog.append(el("p", "", "当前展示 " + rows.length + " 条" + (Number.isInteger(result.rows_total) && result.rows_total > rows.length ? " / 共 " + result.rows_total + " 条" : "") + "；完整范围请查看原 PR。"));
     } else dialog.append(el("p", "empty", "暂无可识别的验收表格。可查看原 PR，或在分支详情中查看本地记录与逐项结果。"));
+    const blocks = Array.isArray(result.description_blocks) ? result.description_blocks.slice(0,4000) : [];
+    if(blocks.length){
+      const section=el("section","pr-description");
+      section.append(el("h3","","PR 描述记录"),el("p","","按原文顺序保留环境、测试、补充验证和限制说明，不额外计入通过数量。敏感信息已隐藏，代码块请查看原 PR。"));
+      for(const block of blocks){
+        if(block.type==="heading")section.append(el("h4","",block.text||""));
+        else if(block.type==="paragraph")section.append(el("p","",block.text||""));
+        else if(block.type==="table"&&Array.isArray(block.rows)){
+          const wrap=el("div","acceptance-table-wrap"),table=el("table"),body=el("tbody");
+          for(const [index,cells] of block.rows.slice(0,1000).entries()){
+            if(!Array.isArray(cells))continue;
+            const row=el("tr");
+            for(const text of cells.slice(0,24)){const cell=el(index===0?"th":"td","",String(text||""));if(index===0)cell.scope="col";row.append(cell);}
+            body.append(row);
+          }
+          table.append(body);wrap.append(table);section.append(wrap);
+        }
+      }
+      dialog.append(section);
+    }
     const original = githubPrLink(result.pr_url, "查看原 PR ↗");
     if (original) {original.className = "original-pr";original.textContent = result.pr_number ? "查看原 PR #" + result.pr_number + " ↗" : "查看原 PR ↗";dialog.append(original);}
     close.addEventListener("click", () => dialog.close());

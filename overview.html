@@ -43,6 +43,7 @@
     @media(max-width:820px){.topbar{margin-bottom:20px;min-height:68px}.intro{gap:8px;align-items:flex-start}.intro h1{font-size:25px}.intro-note{max-width:none;text-align:left}.controls{flex-direction:row;align-items:flex-end}.project-head{padding-top:18px}.top-status{gap:8px}.sync{font-size:12px}}
     @media(max-width:520px){.table-wrap::before{content:"左右滑动可查看完整验收结果";display:block;margin:0 0 6px;color:var(--muted);font-size:11px}.shell{padding:0 14px 28px}.topbar{align-items:flex-start;padding:16px 0;gap:10px}.brand{font-size:15px}.top-status{width:100%;justify-content:space-between}.intro h1{font-size:24px}.intro-note{font-size:12px}.project-title h2{font-size:19px}.controls{flex-direction:column;align-items:stretch}.control-actions{display:grid;grid-template-columns:1fr 1.4fr}.button,select{min-height:44px}.project-footer{gap:10px}.project-footer .button{flex:1}.metric{padding:10px 8px}.metric strong{font-size:20px}.metric span{font-size:11px}.acceptance-open{min-height:44px}.acceptance-dialog{width:96vw;padding:16px}.acceptance-dialog h2{font-size:17px}}
   .project .table-wrap table{table-layout:fixed}.project .table-wrap th:nth-child(1){width:29%}.project .table-wrap th:nth-child(2){width:19%}.project .table-wrap th:nth-child(3){width:19%}.project .table-wrap th:nth-child(4){width:33%}.project .table-wrap td{overflow-wrap:anywhere}.project .table-wrap td:first-child{min-width:0}.project .acceptance-open{display:flex;flex-direction:column;align-items:flex-start;gap:2px;min-height:0;white-space:nowrap}.project .acceptance-summary{display:block;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;line-height:18px}.project .table-wrap td:first-child strong{display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;line-height:18px}.project .table-wrap tbody tr{height:100px}
+.pr-description{margin-top:24px;border-top:1px solid #dce3ed;padding-top:12px}.pr-description h4{margin:20px 0 10px}.acceptance-dialog .pr-description td:last-child{white-space:pre-wrap}.pr-description table{table-layout:auto}
 </style>
 </head>
 <body>
@@ -121,6 +122,26 @@
       table.append(head, body);wrap.append(table);dialog.append(wrap);
       if (result.rows_truncated || Number(result.rows_total) > rows.length) dialog.append(el("p", "", "当前展示 " + rows.length + " 条" + (Number.isInteger(result.rows_total) && result.rows_total > rows.length ? " / 共 " + result.rows_total + " 条" : "") + "；完整范围请查看原 PR。"));
     } else dialog.append(el("p", "empty", "暂无可识别的验收表格。可查看原 PR，或在分支详情中查看本地记录与逐项结果。"));
+    const blocks = Array.isArray(result.description_blocks) ? result.description_blocks.slice(0,4000) : [];
+    if(blocks.length){
+      const section=el("section","pr-description");
+      section.append(el("h3","","PR 描述记录"),el("p","","按原文顺序保留环境、测试、补充验证和限制说明，不额外计入通过数量。敏感信息已隐藏，代码块请查看原 PR。"));
+      for(const block of blocks){
+        if(block.type==="heading")section.append(el("h4","",block.text||""));
+        else if(block.type==="paragraph")section.append(el("p","",block.text||""));
+        else if(block.type==="table"&&Array.isArray(block.rows)){
+          const wrap=el("div","acceptance-table-wrap"),table=el("table"),body=el("tbody");
+          for(const [index,cells] of block.rows.slice(0,1000).entries()){
+            if(!Array.isArray(cells))continue;
+            const row=el("tr");
+            for(const text of cells.slice(0,24)){const cell=el(index===0?"th":"td","",String(text||""));if(index===0)cell.scope="col";row.append(cell);}
+            body.append(row);
+          }
+          table.append(body);wrap.append(table);section.append(wrap);
+        }
+      }
+      dialog.append(section);
+    }
     const original = acceptanceLink({...result, archive_available:false});
     if (original) {original.className = "original-pr";original.textContent = result.pr_number ? "查看原 PR #" + result.pr_number + " ↗" : "查看原 PR ↗";dialog.append(original);}
     close.addEventListener("click", () => dialog.close());

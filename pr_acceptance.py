@@ -196,6 +196,49 @@ def parse_pr_description(body) -> dict | None:
             "rows": rows, "rows_total": sum(counts.values()), "rows_truncated": sum(counts.values()) > len(rows)}
 
 
+
+def description_blocks(body):
+    """Local-only PR context; deliberately excluded from the public LAN schema."""
+    if not isinstance(body, str):
+        return []
+    body = re.sub(r"<!--.*?-->", "", body[:262144], flags=re.S)
+    blocks = []
+    fence = None
+    table = None
+    for raw in body.splitlines()[:4000]:
+        line = raw.strip()
+        marker = re.match(r"^(`{3,}|~{3,})", line)
+        if marker:
+            if fence is None:
+                fence = marker[1][0]
+                blocks.append({"type": "paragraph", "text": "代码或命令块请查看原 PR。"})
+            elif marker[1][0] == fence:
+                fence = None
+            table = None
+            continue
+        if fence:
+            continue
+        if not line:
+            table = None
+            continue
+        heading = re.match(r"^#{1,6}\s+(.+)", line)
+        if heading:
+            table = None
+            blocks.append({"type": "heading", "text": detail_text(heading[1], 4000)})
+        elif line.startswith("|") and line.endswith("|"):
+            if re.fullmatch(r"[| :\-]+", line):
+                continue
+            cells = [detail_text(cell.strip(), 4000) for cell in re.split(r"(?<!\\)\|", line.strip("|"))]
+            if table is None:
+                table = {"type": "table", "rows": []}
+                blocks.append(table)
+            table["rows"].append(cells)
+        else:
+            table = None
+            blocks.append({"type": "paragraph", "text": detail_text(line, 4000)})
+    return blocks
+
+
 def acceptance_summary(pr, pr_data, records, gate, *, branch: str, head: str) -> dict:
     """Choose one display result while preserving independent raw Gate evidence."""
     pr = pr if isinstance(pr, dict) else {}
@@ -204,6 +247,7 @@ def acceptance_summary(pr, pr_data, records, gate, *, branch: str, head: str) ->
             "rows": [], "rows_total": 0, "rows_truncated": False}
     data = pr_data if isinstance(pr_data, dict) else {}
     if number is not None and data.get("base", {}).get("ref") == branch and data.get("number") == number:
+        base["description_blocks"] = description_blocks(data.get("body"))
         description = parse_pr_description(data.get("body"))
         if description:
             # The parser only exports bounded and sanitized result cells.
