@@ -42,7 +42,8 @@
     @media(max-width:1120px){.shell{padding:0 20px 30px}.controls{align-items:stretch;flex-direction:column}.control-actions{justify-content:flex-start}.project-head{padding:18px 18px 12px}.metrics{margin:0 18px 14px}.table-wrap{margin:0 18px}.collection{padding-left:18px;padding-right:18px}.tasks,.project-footer{padding-left:18px;padding-right:18px}.notice{margin-left:18px;margin-right:18px}}
     @media(max-width:820px){.topbar{margin-bottom:20px;min-height:68px}.intro{gap:8px;align-items:flex-start}.intro h1{font-size:25px}.intro-note{max-width:none;text-align:left}.controls{flex-direction:row;align-items:flex-end}.project-head{padding-top:18px}.top-status{gap:8px}.sync{font-size:12px}}
     @media(max-width:520px){.table-wrap::before{content:"左右滑动可查看完整验收结果";display:block;margin:0 0 6px;color:var(--muted);font-size:11px}.shell{padding:0 14px 28px}.topbar{align-items:flex-start;padding:16px 0;gap:10px}.brand{font-size:15px}.top-status{width:100%;justify-content:space-between}.intro h1{font-size:24px}.intro-note{font-size:12px}.project-title h2{font-size:19px}.controls{flex-direction:column;align-items:stretch}.control-actions{display:grid;grid-template-columns:1fr 1.4fr}.button,select{min-height:44px}.project-footer{gap:10px}.project-footer .button{flex:1}.metric{padding:10px 8px}.metric strong{font-size:20px}.metric span{font-size:11px}.acceptance-open{min-height:44px}.acceptance-dialog{width:96vw;padding:16px}.acceptance-dialog h2{font-size:17px}}
-  </style>
+  .project .table-wrap table{table-layout:fixed}.project .table-wrap th:nth-child(1){width:29%}.project .table-wrap th:nth-child(2){width:19%}.project .table-wrap th:nth-child(3){width:19%}.project .table-wrap th:nth-child(4){width:33%}.project .table-wrap td{overflow-wrap:anywhere}.project .table-wrap td:first-child{min-width:0}.project .acceptance-open{flex-wrap:wrap}.project .table-wrap tbody tr{height:100px}
+</style>
 </head>
 <body>
 <div class="shell">
@@ -81,15 +82,15 @@
   function badge(status,text){status=normalize(status);return el('span','pill '+(Object.hasOwn(labels,status)?status:'unknown'),text||labels[status]||'未知');}
   function githubLink(url,text){try{const target=new URL(url);if(target.protocol!=='https:'||target.hostname!=='github.com'||target.username||target.password)return null;const anchor=el('a','',text);anchor.href=target.href;anchor.target='_blank';anchor.rel='noopener noreferrer';return anchor;}catch(_){return null;}}
   function timeText(value){if(!value)return '尚未采集';const date=new Date(value);return Number.isFinite(date.getTime())?date.toLocaleString('zh-CN',{hour12:false}):'时间未知';}
-  async function request(url,options={}){const response=await fetch(url,{cache:'no-store',credentials:'same-origin',...options});const value=await response.json();if(!response.ok)throw new Error(value.error||'读取失败（HTTP '+response.status+'）');return value;}
+  async function request(url,options={}){const response=await fetch(url,{cache:'no-store',credentials:'same-origin',signal:AbortSignal.timeout(90000),...options});const value=await response.json();if(!response.ok)throw new Error(value.error||'读取失败（HTTP '+response.status+'）');return value;}
   function makeCard(project){
     const root=el('article','project '+project.engine),header=el('div','project-head'),title=el('div','project-title'),heading=el('h2','',project.label),engine=el('span','engine',project.engine==='sglang'?'SGLang':'vLLM');title.append(heading,engine);
     const controls=el('div','controls'),field=el('div','field'),select=el('select'),label=el('label','','目标分支'),refresh=el('button','button','刷新状态'),createLink=el('a','button primary','＋ 新建任务'),controlActions=el('div','control-actions');select.id='branch-'+project.id;select.setAttribute('aria-label',project.label+' 目标分支');label.htmlFor=select.id;refresh.type='button';refresh.title='重新采集此分支的 PR、CI 和验收结果';refresh.setAttribute('aria-label',project.label+' 刷新状态');createLink.hidden=readOnly||project.sessions===false;field.append(label,select);controlActions.append(refresh,createLink);controls.append(field,controlActions);
-    const meta=el('div','meta'),feedback=el('p','card-feedback','每 15 秒自动更新');feedback.setAttribute('role','status');feedback.setAttribute('aria-live','polite');header.append(title,controls,meta,feedback);const metrics=el('div','metrics'),counts={};for(const [key,label]of [['merged','代码合入'],['ci','适配 CI 通过'],['gate','验收通过']]){const box=el('div','metric'),value=el('strong','','—');box.append(el('span','',label),value);metrics.append(box);counts[key]=value;}
+    const meta=el('div','meta'),feedback=el('p','card-feedback','每 15 秒读取 · 每分钟采集');feedback.setAttribute('role','status');feedback.setAttribute('aria-live','polite');header.append(title,controls,meta,feedback);const metrics=el('div','metrics'),counts={};for(const [key,label]of [['merged','代码合入'],['ci','适配 CI 通过'],['gate','验收通过']]){const box=el('div','metric'),value=el('strong','','—');box.append(el('span','',label),value);metrics.append(box);counts[key]=value;}
     const collection=el('div','collection'),notice=el('div','notice');notice.hidden=true;notice.setAttribute('role','status');const tableWrap=el('div','table-wrap'),table=el('table'),thead=el('thead'),tr=el('tr');for(const text of ['Backend / PR','代码合入','适配 CI','验收结果']){const th=el('th','',text);th.scope='col';tr.append(th);}thead.append(tr);const tbody=el('tbody');table.append(thead,tbody);tableWrap.append(table);
     const tasks=el('div','tasks'),footer=el('div','project-footer'),detail=el('a','button','查看分支进展'),taskLink=el('a','','查看任务 →');footer.append(detail,taskLink);root.append(header,metrics,collection,notice,tableWrap,tasks,footer);
     const card={root,heading,engine,select,refresh,meta,feedback,counts,collection,notice,tbody,tasks,detail,taskLink,createLink,project,branch:project.default_branch,snapshot:null,busy:false};
-    select.addEventListener('change',async()=>{if(card.busy)return;card.branch=select.value;setCardBusy(card,true,'正在读取分支…');try{await loadCard(card);feedback.textContent='每 15 秒自动更新';}finally{setCardBusy(card,false);}});
+    select.addEventListener('change',async()=>{if(card.busy)return;card.branch=select.value;setCardBusy(card,true,'正在读取分支…');try{await loadCard(card);feedback.textContent='每 15 秒读取 · 每分钟采集';}finally{setCardBusy(card,false);}});
     refresh.addEventListener('click',async()=>{if(card.busy)return;setCardBusy(card,true,'正在采集最新状态…');try{const data=await request(appUrl('api/branch-refresh',project.id),{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({branch:card.branch})});renderSnapshot(card,data);await loadSessions(card);feedback.textContent='已刷新 · '+new Date().toLocaleTimeString('zh-CN',{hour12:false});}catch(error){showError(card,error.message);feedback.textContent='刷新未完成，可重试';}finally{setCardBusy(card,false);}});
     return card;
   }
@@ -156,7 +157,7 @@
     const messages=[...(data.errors||[])];for(const warning of data.case_discovery?.warnings||[])messages.push('逐项场景来源提示（不影响 PR 验收记录）：'+(warning.detail||warning.source||warning.model||'待核对'));card.notice.hidden=!messages.length;card.notice.textContent=messages.join('；');
     card.tbody.replaceChildren();
     for(const backend of backends){
-      const row=el('tr'),name=el('td');name.append(el('strong','',backend.label||backend.id));
+      const row=el('tr'),name=el('td');row.setAttribute('data-backend',backend.id);name.append(el('strong','',backend.label||backend.id));
       const pr=backend.pr&&githubLink(backend.pr.url,'PR #'+backend.pr.number);
       if(pr){pr.className='pr';name.append(pr);}else name.append(el('span','pr',backend.ci_enabled?'CI 已启用':'CI 未启用'));
       row.append(name);
@@ -166,14 +167,42 @@
       if(result.summary)cell.append(el('div','acceptance-summary',result.summary));
       cell.title=[acceptanceSource(result),result.title,result.summary].filter(Boolean).join(' · ');row.append(cell);card.tbody.append(row);
     }
+    if(typeof scheduleAlignment==='function')scheduleAlignment();
     card.detail.href=appUrl('monitor',card.project.id,card.branch);card.taskLink.href=appUrl('sessions',card.project.id,card.branch);card.taskLink.hidden=readOnly||card.project.sessions===false;if(card.createLink){card.createLink.href=appUrl('sessions',card.project.id,card.branch)+'#new-task';card.createLink.hidden=card.taskLink.hidden;}
   }
+
+  function alignProjects(){
+    const roots=[...cards.values()].map(card=>card.root);
+    const selectors=['.project-head','.metrics','.collection','.notice','.table-wrap'];
+    for(const root of roots){
+      for(const selector of selectors)root.querySelector(selector).style.minHeight='';
+      root.querySelector('.table-wrap').style.paddingTop='';
+      for(const row of root.querySelectorAll('tbody tr'))row.style.height='';
+    }
+    if(window.innerWidth<=820||roots.length<2)return;
+    for(const selector of ['.project-head','.metrics','.collection']){
+      const nodes=roots.map(root=>root.querySelector(selector));
+      const height=Math.max(...nodes.map(node=>node.getBoundingClientRect().height));
+      nodes.forEach(node=>node.style.minHeight=height+'px');
+    }
+    const wraps=roots.map(root=>root.querySelector('.table-wrap'));
+    const top=Math.max(...wraps.map(node=>node.getBoundingClientRect().top));
+    wraps.forEach(node=>node.style.paddingTop=(top-node.getBoundingClientRect().top)+'px');
+    const groups=new Map();
+    roots.forEach(root=>root.querySelectorAll('tbody tr').forEach(row=>{
+      const key=row.dataset.backend;if(!groups.has(key))groups.set(key,[]);groups.get(key).push(row);
+    }));
+    groups.forEach(rows=>{const height=Math.max(...rows.map(row=>row.getBoundingClientRect().height));rows.forEach(row=>row.style.height=height+'px');});
+  }
+  function scheduleAlignment(){if(typeof requestAnimationFrame==='function')requestAnimationFrame(alignProjects);}
   async function loadSessions(card){try{const data=await request(appUrl('api/adaptation-tasks',card.project.id));renderTasks(card,data.tasks);}catch(error){card.tasks.replaceChildren(el('div','empty','任务状态暂不可用：'+error.message));}}
   async function loadCard(card){try{renderSnapshot(card,await request(appUrl('api/branch-status',card.project.id,card.branch)));await loadSessions(card);}catch(error){showError(card,error.message);}}
   async function update(){
-    if(loading)return;loading=true;try{const data=await request(appUrl('api/projects-status'));for(const entry of data.projects||[]){const card=cards.get(entry.id);if(!card||card.busy)continue;if(card.branch!==card.project.default_branch){await loadCard(card);continue;}if(entry.status){renderSnapshot(card,entry.status);renderTasks(card,entry.adaptation_tasks||entry.sessions);}if(entry.error)showError(card,entry.error);} $('sync').textContent='已连接 · 更新于 '+new Date().toLocaleTimeString('zh-CN',{hour12:false});$('error').hidden=true;}catch(error){$('sync').textContent='连接中断 · 正在等待重试';$('error').textContent=error.message+'；已有采集结果保留。';$('error').hidden=false;}finally{loading=false;}
+    if(loading)return;loading=true;try{const data=await request(appUrl('api/projects-status'));for(const entry of data.projects||[]){const card=cards.get(entry.id);if(!card||card.busy)continue;if(card.branch!==card.project.default_branch){await loadCard(card);continue;}if(entry.status){renderSnapshot(card,entry.status);renderTasks(card,entry.adaptation_tasks||entry.sessions);}if(entry.error)showError(card,entry.error);} $('sync').textContent='已连接 · 页面读取于 '+new Date().toLocaleTimeString('zh-CN',{hour12:false});$('error').hidden=true;}catch(error){$('sync').textContent='连接中断 · 正在等待重试';$('error').textContent=error.message+'；已有采集结果保留。';$('error').hidden=false;}finally{loading=false;}
   }
-  async function initialize(){try{const data=await request(appUrl('api/projects'));readOnly=data.read_only===true;$('access-mode').hidden=!readOnly;$('projects').replaceChildren();for(const project of data.projects||[]){const card=makeCard(project);cards.set(project.id,card);$('projects').append(card.root);}if(!cards.size)throw new Error('尚未配置监控仓库');if(readOnly)$('footnote').textContent='团队只读看板每 15 秒读取监控状态。可分别刷新两个仓库；原生子任务状态只读展示；机器配置、任务控制与原始私有存档由维护者在本机管理。';await update();setInterval(()=>{if(!document.hidden)update();},15000);document.addEventListener('visibilitychange',()=>{if(!document.hidden)update();});}catch(error){$('error').textContent=error.message;$('error').hidden=false;$('sync').textContent='监控服务需要处理';}}
+  async function initialize(){try{const data=await request(appUrl('api/projects'));readOnly=data.read_only===true;$('access-mode').hidden=!readOnly;$('projects').replaceChildren();for(const project of data.projects||[]){const card=makeCard(project);cards.set(project.id,card);$('projects').append(card.root);}if(!cards.size)throw new Error('尚未配置监控仓库');if(readOnly)$('footnote').textContent='团队只读看板每 15 秒读取状态，后台定期重新采集。可分别刷新两个仓库；原生子任务状态只读展示；机器配置、任务控制与原始私有存档由维护者在本机管理。';await update();setInterval(()=>{if(!document.hidden)update();},15000);document.addEventListener('visibilitychange',()=>{if(!document.hidden)update();});}catch(error){$('error').textContent=error.message;$('error').hidden=false;$('sync').textContent='监控服务需要处理';}}
+  window.addEventListener('resize',scheduleAlignment);
+  if(document.fonts)document.fonts.ready.then(scheduleAlignment);
   initialize();
 })();
 </script>

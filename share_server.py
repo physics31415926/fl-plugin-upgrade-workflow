@@ -162,7 +162,7 @@ paths, machine aliases, private IPs, source task IDs, or commands.
 
 
 class SnapshotCache:
-    def __init__(self, monitor, refresh_interval=300):
+    def __init__(self, monitor, refresh_interval=60):
         if refresh_interval != 0 and refresh_interval < 30:
             raise ValueError("refresh_interval must be 0 (disabled) or at least 30 seconds")
         self.monitor = monitor
@@ -232,7 +232,7 @@ class SnapshotCache:
 
 class ProjectSnapshotCache:
     """Separate public caches; one project's failure cannot hide its peers."""
-    def __init__(self, registry, refresh_interval=300):
+    def __init__(self, registry, refresh_interval=60):
         if refresh_interval != 0 and refresh_interval < 30:
             raise ValueError("refresh_interval must be 0 (disabled) or at least 30 seconds")
         self.registry = registry
@@ -560,7 +560,7 @@ def main(argv=None):
     parser.add_argument("--base-path", default="")
     parser.add_argument("--tls-cert", type=Path, help="PEM certificate chain for direct HTTPS")
     parser.add_argument("--tls-key", type=Path, help="Unencrypted PEM private key for direct HTTPS")
-    parser.add_argument("--refresh-interval", type=int, default=300, help="Git/API refresh seconds; 0 disables background fetching")
+    parser.add_argument("--refresh-interval", type=int, default=60, help="Git/API refresh seconds; 0 disables background fetching")
     args = parser.parse_args(argv)
     if not args.monitor_config and not args.projects_config:
         parser.error("--monitor-config or --projects-config is required")

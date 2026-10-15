@@ -165,6 +165,8 @@ class BranchMonitor:
         self.transport = transport or self._http_json
         self._api_cache: dict[str, tuple[float, dict[str, Any] | list[Any]]] = {}
         self._cache_lock = threading.RLock()
+        self._auto_refresh_lock = threading.Lock()
+        self._auto_refresh_times = {self.branch: time.monotonic()}
 
     @staticmethod
     def _validate_branch(branch: str) -> None:
@@ -835,6 +837,16 @@ class BranchMonitor:
         return gate, rows
 
     def status(self, branch: str | None = None, force: bool = False) -> dict[str, Any]:
+        # Polling must refresh remote refs as well as cached GitHub metadata.
+        selected = branch or self.branch
+        if not force and time.monotonic() - self._auto_refresh_times.get(selected, float("-inf")) >= 60:
+            if self._auto_refresh_lock.acquire(blocking=False):
+                try:
+                    if time.monotonic() - self._auto_refresh_times.get(selected, float("-inf")) >= 60:
+                        return self.refresh_branch(branch=branch)
+                finally:
+                    self._auto_refresh_times[selected] = time.monotonic()
+                    self._auto_refresh_lock.release()
         branch = branch or self.branch
         self._validate_branch(branch)
         errors: list[str] = []
