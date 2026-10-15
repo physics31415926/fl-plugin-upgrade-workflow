@@ -227,3 +227,5 @@ python flflow.py serve --config workflow.json --host 127.0.0.1 --port 8765
 官方仓库已有 [多平台 CI](https://raw.githubusercontent.com/flagos-ai/vllm-plugin-FL/main/.github/workflows/ci.yml)、[平台测试编排](https://raw.githubusercontent.com/flagos-ai/vllm-plugin-FL/main/.github/workflows/_platform_test.yml) 和 [统一测试入口](https://raw.githubusercontent.com/flagos-ai/vllm-plugin-FL/main/tests/README.md)。截至 2026-09-24，[平台开关](https://raw.githubusercontent.com/flagos-ai/vllm-plugin-FL/main/.github/configs/platforms.yml)启用了 CUDA、Hygon、MetaX；这表示 CI 会调度这些平台，不代表任何新目标版本已经验收。生产版可以把本地编排器的远端测试命令改为触发或查询现有 CI，并在候选 PR 上做最终同 SHA 全平台门禁。
 
 以明确的目标 tag 和完整 commit 为准。截至 2026-09-24，仓库主线的[测试依赖指向 vLLM 0.24.0](https://raw.githubusercontent.com/flagos-ai/vllm-plugin-FL/main/pyproject.toml)；本机已有的 setup 技能仍写 0.13.0，部分 worker 文件头写 0.19.0，均不能单独作为当前兼容版本的依据。真实 preflight 还应记录每台 GPU 机器实际安装的 vLLM/fork、PyTorch、FlagGems、驱动和模型版本。
+
+SGLang 与 vLLM 使用相同的 backend CI 判定：只汇总关联 PR 提交上该 backend 的测试，不受其他 backend、通知或整体 workflow 结论影响。没有该 backend 的测试保持未知，取消或失败不算通过；旧提交的验收记录不覆盖新提交 CI。PR checks 超过一页时继续读取，避免漏掉目标设备测试。SGLang 的 feat(backend) 升级/运行时适配标题、以设备名称开头的升级描述以及 MThreads/MUSA 别名均支持自动发现。

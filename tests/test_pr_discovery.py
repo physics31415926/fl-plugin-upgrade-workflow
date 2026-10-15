@@ -24,3 +24,11 @@ class DiscoveryTests(unittest.TestCase):
     def test_alias_and_word_boundaries(self):
         self.assertEqual(adaptation_backend({"title": "upgrade(iluvatar): runtime"}), "corex")
         self.assertIsNone(adaptation_backend({"title": "adapt(kunlunxinplus): runtime"}))
+
+
+    def test_sglang_feature_titles_and_vendor_first_descriptions(self):
+        for alias, backend in (("hygon", "hygon"), ("iluvatar", "corex"), ("mthreads", "musa")):
+            self.assertEqual(adaptation_backend({"title": f"feat({alias}): upgrade empty runtime to SGLang 0.5.18"}), backend)
+            self.assertEqual(adaptation_backend({"body": f"Upgrade the {alias} empty backend to SGLang 0.5.18, adapt interfaces."}), backend)
+        self.assertEqual(adaptation_backend({"title": "feat(iluvatar): complete SGLang 0.5.18 empty runtime adaptation"}), "corex")
+        self.assertIsNone(adaptation_backend({"title": "feat(musa): add operator helper"}))

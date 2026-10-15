@@ -4,7 +4,7 @@ import re
 ALIASES = {
     "cuda": ("cuda", "nvidia"), "ascend": ("ascend",),
     "metax": ("metax",), "corex": ("corex", "iluvatar"),
-    "hygon": ("hygon",), "musa": ("musa", "moore threads"),
+    "hygon": ("hygon",), "musa": ("musa", "moore threads", "mthreads"),
     "thead": ("thead", "t-head"), "enflame": ("enflame",),
     "kunlunxin": ("kunlunxin",),
 }
@@ -38,6 +38,9 @@ def adaptation_backend(pr):
     title = str(pr.get("title") or "")[:1000].casefold()
     targets = set()
     scoped = re.match(r"^(?:adapt|upgrade|migrate|port)\(([^)]+)\)!?:", title)
+    feature = re.match(r"^feat\(([^)]+)\)!?:\s*(.+)", title)
+    if feature and re.search(r"\b(?:upgrade|adaptation|adapt|support)\b", feature[2]) and re.search(r"\b(?:sglang|vllm)\s+\d", feature[2]):
+        targets.update(_backends(feature[1]))
     if scoped:
         targets.update(_backends(scoped[1]))
     for line in _purpose(pr.get("body")):
@@ -45,6 +48,8 @@ def adaptation_backend(pr):
             statement = sentence.strip(" -*").casefold()
             if re.match(r"^(?:(?:this pr|this change)\s+)?(?:adapt|adapts|upgrade|upgrades|migrate|migrates|port|ports)\s+(?:the\s+)?(?:vllm(?:-plugin-fl)?|sglang(?:-plugin-fl)?|plugin|backend)\b", statement):
                 targets.update(_backends(statement))
+            elif re.match(r"^(?:(?:this pr|this change)\s+)?(?:upgrade|upgrades|adapt|adapts)\s+(?:the\s+)?", statement) and re.search(r"\b(?:backend|runtime|target)\s+(?:from|to)\s+(?:sglang|vllm)\s+\d", statement):
+                targets.update(_backends(statement.split(",")[0]))
             elif re.match(r"^(?:本pr|本次|此pr)?(?:将)?(?:vllm(?:-plugin-fl)?|sglang(?:-plugin-fl)?|插件).*(?:适配|升级|迁移)", statement):
                 targets.update(_backends(statement))
     if len(targets) != 1:

@@ -553,8 +553,17 @@ class BranchMonitor:
             return {"status": "unknown", "scope": scope, "detail": "No candidate branch CI data", "url": None, "commit": head_sha}
         head_sha = head_sha.lower()
         try:
-            data = self._api(f"commits/{head_sha}/check-runs?per_page=100", force)
-            checks = self._ci_test_jobs(backend, data.get("check_runs", []))
+            checks = []
+            for page in range(1, 11):
+                suffix = "" if page == 1 else f"&page={page}"
+                data = self._api(f"commits/{head_sha}/check-runs?per_page=100{suffix}", force)
+                batch = data.get("check_runs", [])
+                checks.extend(batch)
+                if len(batch) < 100:
+                    break
+            else:
+                raise MonitorError("Too many PR checks to determine backend CI completely")
+            checks = self._ci_test_jobs(backend, checks)
             status = self._ci_status(checks)
             detail = ("已合入适配 PR" if merged_pr else "适配 PR") + f" 提交上的 {len(checks)} 个 backend 测试"
             return {"status": status, "scope": scope, "detail": detail,
