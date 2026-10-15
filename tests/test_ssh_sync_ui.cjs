@@ -1,5 +1,5 @@
 const assert=require('node:assert/strict'),fs=require('node:fs'),path=require('node:path'),vm=require('node:vm'),test=require('node:test');
-const text=fs.readFileSync(path.join(__dirname,'..','sessions.html'),'utf8'),source=[...text.matchAll(/<script\b[^>]*>([\s\S]*?)<\/script>/g)][0][1];
+const text=fs.readFileSync(path.join(__dirname,'..','web/templates/sessions.html'),'utf8'),source=[...text.matchAll(/<script\b[^>]*>([\s\S]*?)<\/script>/g)][0][1];
 const start=source.indexOf('  function renderSshSync('),end=source.indexOf('  function showProfiles(',start);assert(start>=0&&end>start);
 function ui(){
   const nodes=new Map(),calls=[],context={state:{readOnly:false,sshSync:null,sshSyncBusy:false,profiles:[{id:'old'}],creating:false,checking:false},

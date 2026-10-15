@@ -1,5 +1,5 @@
 import unittest
-from pr_discovery import adaptation_backend
+from fl_dashboard.monitoring.pr_discovery import adaptation_backend
 
 class DiscoveryTests(unittest.TestCase):
     def test_description_identifies_arbitrary_branch(self):

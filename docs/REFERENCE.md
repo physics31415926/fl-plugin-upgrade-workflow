@@ -68,7 +68,7 @@ python -B <tools>/sglang_evidence.py --repo <clean-candidate> --branch <baseline
 
 ## 分支适配监控
 
-将 `branch-monitor.example.json` 复制为 `branch-monitor.json`，核对插件仓库路径、remote、分支、模型和 backend PR 编号。启动 `python flflow.py serve --config workflow.json --monitor-config branch-monitor.json` 后，首页 `/` 显示分支监控；原工作流控制页在 `/workflow`。页面可切换本地 remote-tracking 分支，并用“读取最新状态”更新目标分支 Git ref 与 GitHub CI。`branch-monitor.json` 是本机配置，已被 Git 忽略。
+将 `examples/branch-monitor.example.json` 复制为 `branch-monitor.json`，核对插件仓库路径、remote、分支、模型和 backend PR 编号。启动 `python flflow.py serve --config workflow.json --monitor-config branch-monitor.json` 后，首页 `/` 显示分支监控；原工作流控制页在 `/workflow`。页面可切换本地 remote-tracking 分支，并用“读取最新状态”更新目标分支 Git ref 与 GitHub CI。`branch-monitor.json` 是本机配置，已被 Git 忽略。
 
 监控服务优先通过已登录的 `gh api` 读取 GitHub 状态；若未安装或不可用，则用 GitHub HTTP API（可通过 `GH_TOKEN` 或 `GITHUB_TOKEN` 提高配额）。远端数据缓存 5 分钟；页面每 15 秒读取服务状态，点击“读取最新状态”会触发一次采集并直接显示返回结果。网络故障会明确显示错误，页面保留上次采集时间。
 
@@ -130,7 +130,7 @@ Ascend、MetaX 和 iluvatar 等候选 PR 显示在各自 backend 行。候选工
 
 “中断当前执行”中断 Codex 当前轮次；远端 tmux 安装、服务或测试仍可能运行。页面对活跃 Codex 任务的机器占用检查不能证明远端作业已经停止，复用机器前须检查实际 tmux 和 GPU 状态。任务会先检查环境，再进行适配和验收；一轮对话结束不等于升级完成或 Gate 通过。收集结果时应保留实际测试提交、模型、模式、命令、时间和原始 JSON，并按上面的证据格式导入分支面板。
 
-`/workflow` 保留基于配置命令的编排器。运行前需将 `workflow.example.json` 中的仓库路径、commit、命令和模型清单替换为真实配置；它只运行明确配置的命令。
+`/workflow` 保留基于配置命令的编排器。运行前需将 `examples/workflow.example.json` 中的仓库路径、commit、命令和模型清单替换为真实配置；它只运行明确配置的命令。
 
 ### 任务归属与执行位置
 
@@ -182,10 +182,10 @@ flowchart LR
 
 需要 Python 3.11+、Git、插件仓库和目标 vLLM 源码 checkout。示例的适配命令使用 `codex exec`，因此实际运行它还需要已登录的 Codex CLI。执行 GPU 测试的环境需要对应的设备、驱动、依赖和模型文件。
 
-1. 复制 `workflow.example.json` 为自己的 `workflow.json`。
+1. 复制 `examples/workflow.example.json` 为自己的 `workflow.json`。
 2. 填写插件仓库根目录 `repo`、上游 vLLM 仓库根目录 `upstream_repo` 和独立的 `work_dir`。后者不能放在两个仓库内部。
 3. 填写插件当前干净 checkout 的完整 `plugin_base_sha`，以及目标 vLLM ref 与它解析出的完整 `target_vllm_commit`。例如：`git -C <repo> rev-parse HEAD` 和 `git -C <upstream_repo> rev-parse "<target-ref>^{commit}"`。
-4. 按设备填写每个平台的 `adapt_command`、`test_commands`、`device` 和 E2E case 清单。`cases.metax.example.json` 故意为空，填入实际可运行的 case 前，严格验收会失败。
+4. 按设备填写每个平台的 `adapt_command`、`test_commands`、`device` 和 E2E case 清单。`examples/cases.metax.example.json` 故意为空，填入实际可运行的 case 前，严格验收会失败。
 5. 将远程 backend 的测试命令替换为自己的 SSH/CI 适配器。它必须让目标机器取得**当前工作树提交**、等待远端测试真正结束、将证据 JSON 写回本地 `{evidence_file}`。远端长任务用 tmux，SSH 命令不能只是启动会话就返回成功。取消远端任务也需要适配器处理。
 
 When pinning source file byte length or SHA across Windows/Linux, use the fixed commit Git blob raw bytes (`git show <commit>:<path>`), and independently check the actual remote provider. Working-tree copies may convert line endings; never silently normalize mismatches to pass a guard. One matching file does not refresh the complete source observation clock.

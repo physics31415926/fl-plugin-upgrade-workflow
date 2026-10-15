@@ -7,29 +7,29 @@ const root = path.resolve(__dirname, '..');
 function source(name) { return [...fs.readFileSync(path.join(root,name),'utf8').matchAll(/<script\b[^>]*>([\s\S]*?)<\/script>/g)].map(match=>match[1]).join('\n'); }
 function between(text,start,end) { const first=text.indexOf(start),last=text.indexOf(end,first);assert(first>=0&&last>first);return text.slice(first,last); }
 
-test('all dashboard scripts parse', () => { for(const name of ['index.html','sessions.html','overview.html','workflow.html']) new vm.Script(source(name),{filename:name}); });
+test('all dashboard scripts parse', () => { for(const name of ['web/templates/index.html','web/templates/sessions.html','web/templates/overview.html','web/templates/workflow.html']) new vm.Script(source(name),{filename:name}); });
 test('detail APIs and evidence retain SGLang identity with existing query fields', () => {
-  const text=source('index.html');const context={URL,URLSearchParams,window:{location:{href:'http://127.0.0.1:8766/monitor?project=sglang',search:'?project=sglang'}}};vm.createContext(context);
+  const text=source('web/templates/index.html');const context={URL,URLSearchParams,window:{location:{href:'http://127.0.0.1:8766/monitor?project=sglang',search:'?project=sglang'}}};vm.createContext(context);
   vm.runInContext(between(text,'  let projectId =','  const labels =')+'\nglobalThis.route=appUrl;',context);
   const result=new URL(context.route('api/branch-evidence?branch=dev%2F0.5.18&backend=cuda&model=Qwen3.6-27B&mode=eager&scenario=concurrent_text_16'));
   assert.equal(result.searchParams.get('project'),'sglang');assert.equal(result.searchParams.get('branch'),'dev/0.5.18');assert.equal(result.searchParams.get('scenario'),'concurrent_text_16');
   const task=new URL(context.route('sessions?session=example&branch=dev%2F0.5.18'));assert.equal(task.searchParams.get('session'),'example');assert.equal(task.searchParams.get('project'),'sglang');
 });
 test('session follow-ups and navigation retain project without overwriting branch', () => {
-  const text=source('sessions.html');const context={URL,URLSearchParams,location:{href:'http://127.0.0.1:8766/sessions?project=sglang',search:'?project=sglang'}};vm.createContext(context);
+  const text=source('web/templates/sessions.html');const context={URL,URLSearchParams,location:{href:'http://127.0.0.1:8766/sessions?project=sglang',search:'?project=sglang'}};vm.createContext(context);
   vm.runInContext(between(text,"  let projectId =",'  const labels =')+'\nglobalThis.route=projectUrl;globalThis.monitor=monitorUrl;',context);
   assert.equal(new URL(context.route('/api/codex-sessions/id/message')).searchParams.get('project'),'sglang');
   const target=new URL(context.monitor('dev/0.5.18','session-example'));assert.equal(target.pathname,'/monitor');assert.equal(target.searchParams.get('branch'),'dev/0.5.18');assert.equal(target.searchParams.get('session'),'session-example');assert.equal(target.searchParams.get('project'),'sglang');
 });
 test('overview uses separate repo branches and preserves stale acceptance status', () => {
-  const text=source('overview.html');const context={URL,location:{href:'https://example.invalid/team/dashboard/'}};vm.createContext(context);
+  const text=source('web/templates/overview.html');const context={URL,location:{href:'https://example.invalid/team/dashboard/'}};vm.createContext(context);
   vm.runInContext(between(text,'  function appUrl(', '  function badge(')+'\nglobalThis.route=appUrl;globalThis.ci=effectiveCi;globalThis.gate=effectiveGate;',context);
   const a=new URL(context.route('monitor','vllm','0.4.0-dev')),b=new URL(context.route('monitor','sglang','dev/0.5.18'));assert.equal(a.pathname,'/team/dashboard/monitor');assert.equal(a.searchParams.get('project'),'vllm');assert.equal(b.searchParams.get('branch'),'dev/0.5.18');
   assert.equal(context.ci({ci:{status:'passed',scope:'branch',commit:'old'}},'new'),'stale');assert.equal(context.gate({gate:{status:'passed',latest_commit:'old'}},'new'),'stale');assert.equal(context.gate({gate:{status:'recorded_pass',tree_matches_head:true,latest_commit:'old'}},'new'),'recorded_pass');
 });
 
 test('SGLang source cases only appear for their own model and runtime mode', () => {
-  const text=source('index.html'),context={};vm.createContext(context);
+  const text=source('web/templates/index.html'),context={};vm.createContext(context);
   vm.runInContext(between(text,'  function expectedRows(', '  function renderMatrix(')+'\nglobalThis.rows=expectedRows;',context);
   const data={models:['model-a','model-b'],modes:['eager','graph'],cases:[{scenario:'a',models:['model-a'],modes:['eager']},{scenario:'b',models:['model-b'],modes:['eager']} ]};
   const result=context.rows(data,{results:[]});assert.equal(result.find(group=>group.model==='model-a'&&group.mode==='eager').rows.length,1);assert.equal(result.find(group=>group.model==='model-b'&&group.mode==='eager').rows[0].descriptor.scenario,'b');assert.equal(result.find(group=>group.mode==='graph').rows.length,0);
@@ -39,7 +39,7 @@ test('SGLang source cases only appear for their own model and runtime mode', () 
 function gateDisplayFor(name, field = 'gate') {
   const text=source(name),context={URL,location:{href:'https://example.invalid/dashboard/'}};
   vm.createContext(context);
-  const implementation=name==='overview.html'
+  const implementation=name==='web/templates/overview.html'
     ? between(text,'  function appUrl(', '  function badge(')
     : between(text,'  const labels =', '  const scenarioLabels =')
       +between(text,'  const isPassed =', '  function prStatusText(')
@@ -47,7 +47,7 @@ function gateDisplayFor(name, field = 'gate') {
   vm.runInContext(implementation+'\nglobalThis.gate=effectiveGate;globalThis.ci=effectiveCi;',context);
   return context[field];
 }
-for(const page of ['overview.html','index.html']) {
+for(const page of ['web/templates/overview.html','web/templates/index.html']) {
   test(`${page}: historical passed or partial acceptance displays passed with old or missing raw Gate`, () => {
     const display=gateDisplayFor(page);
     for(const acceptanceStatus of ['passed','partial']) {
@@ -96,7 +96,7 @@ test('overview hides branch-wide CI while preserving backend CI and coverage', (
     addEventListener(name,listener) { (this.listeners||={})[name]=listener; }
   }
   const textOf=node=>node.textContent+node.childNodes.map(textOf).join('');
-  const text=source('overview.html'),context={URL,location:{href:'https://example.invalid/dashboard/'},document:{createElement:tag=>new Node(tag)}};
+  const text=source('web/templates/overview.html'),context={URL,location:{href:'https://example.invalid/dashboard/'},document:{createElement:tag=>new Node(tag)}};
   vm.createContext(context);
   const implementation=between(text,'  const labels=', '  function makeCard(')
     +between(text,'  function acceptanceLink(', '  function isActiveTask(')
@@ -130,7 +130,7 @@ test('overview hides branch-wide CI while preserving backend CI and coverage', (
   }
 });
 
-for (const page of ['overview.html','index.html']) {
+for (const page of ['web/templates/overview.html','web/templates/index.html']) {
   test(`${page}: merged adaptation backend CI keeps its PR result across later branch revisions`, () => {
     const display = gateDisplayFor(page, 'ci');
     const backend = {integration:{status:'merged'},ci:{status:'passed',scope:'merged-pr',commit:'tested-pr'},

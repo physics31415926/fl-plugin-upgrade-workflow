@@ -10,7 +10,7 @@ import subprocess
 import unittest
 from unittest.mock import Mock, patch
 
-import start_dashboard
+import fl_dashboard.deployment.start_dashboard as start_dashboard
 # Load the adjacent fixture by filename: an installed top-level "tests"
 # package must not shadow this repository during unittest discovery.
 _fixture_spec = importlib.util.spec_from_file_location("dashboard_configure_fixtures", Path(__file__).with_name("test_configure.py"))

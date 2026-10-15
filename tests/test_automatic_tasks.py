@@ -10,12 +10,12 @@ import threading
 import unittest
 from unittest.mock import Mock, patch
 
-import automatic_tasks as automatic
-from codex_sessions import CodexSessionManager, SessionError
-from composite_sessions import CompositeSessionManager
-import flflow
-from project_registry import ProjectContext, ProjectRegistry, RemoteSessionManager
-from share_server import make_server as make_shared_server
+import fl_dashboard.tasks.automatic_tasks as automatic
+from fl_dashboard.agents.codex_sessions import CodexSessionManager, SessionError
+from fl_dashboard.agents.composite_sessions import CompositeSessionManager
+import fl_dashboard.services.flflow as flflow
+from fl_dashboard.projects.project_registry import ProjectContext, ProjectRegistry, RemoteSessionManager
+from fl_dashboard.services.share_server import make_server as make_shared_server
 
 
 def output(hardware="", source=False, home="/home/test", tmux=True):
@@ -227,7 +227,7 @@ class AutomaticTasksTests(unittest.TestCase):
         with self.assertRaisesRegex(SessionError, "proof"):
             automatic.consume_automatic_task(value, self.manager)
         value = self.normalize()
-        with patch("automatic_tasks.time.monotonic", return_value=10**12), self.assertRaisesRegex(SessionError, "expired"):
+        with patch("fl_dashboard.tasks.automatic_tasks.time.monotonic", return_value=10**12), self.assertRaisesRegex(SessionError, "expired"):
             automatic.consume_automatic_task(value, self.manager)
 
     def test_manual_strict_preflight_remains_required(self):
@@ -343,7 +343,7 @@ class AutomaticTasksTests(unittest.TestCase):
 
     def test_http_automatic_create_consumes_proof_and_explicit_start(self):
         server = self.serve()
-        with patch("automatic_tasks.subprocess.run", self.runner), patch("automatic_tasks.shutil.which", return_value="mock-ssh"):
+        with patch("fl_dashboard.tasks.automatic_tasks.subprocess.run", self.runner), patch("fl_dashboard.tasks.automatic_tasks.shutil.which", return_value="mock-ssh"):
             code, result = self.request(server, {**self.payload, "start": True})
         self.assertEqual(code, 200, result)
         self.manager._workers[result["id"]].join(3)
@@ -353,7 +353,7 @@ class AutomaticTasksTests(unittest.TestCase):
 
     def test_http_manual_passthrough_and_forged_proof_no_ssh(self):
         server = self.serve()
-        with patch("automatic_tasks.subprocess.run", self.runner):
+        with patch("fl_dashboard.tasks.automatic_tasks.subprocess.run", self.runner):
             code, result = self.request(server, {"backend": "cuda", "ssh_alias": "gpu", "remote_workspace": "/work"})
             self.assertEqual(code, 200, result)
             for body in ({"_automatic_proof": "forged"}, {"automatic_context": {"probe": {"ok": True}}}):
@@ -362,7 +362,7 @@ class AutomaticTasksTests(unittest.TestCase):
 
     def test_http_automatic_is_unavailable_on_shared_dashboard(self):
         server = self.serve(shared=True)
-        with patch("automatic_tasks.subprocess.run", self.runner):
+        with patch("fl_dashboard.tasks.automatic_tasks.subprocess.run", self.runner):
             code, result = self.request(server, self.payload)
         self.assertEqual(code, 405, result)
         self.runner.assert_not_called()

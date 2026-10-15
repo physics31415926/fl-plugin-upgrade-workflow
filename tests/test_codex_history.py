@@ -8,8 +8,8 @@ import threading
 import unittest
 from unittest import mock
 
-from codex_sessions import CodexSessionManager, SessionError
-from flflow import make_server
+from fl_dashboard.agents.codex_sessions import CodexSessionManager, SessionError
+from fl_dashboard.services.flflow import make_server
 
 
 class EventHistoryTest(unittest.TestCase):
@@ -145,7 +145,7 @@ class EventHistoryTest(unittest.TestCase):
         self.write([self.record(0)])
         actual = self.path.stat()
         metadata = mock.Mock(st_mode=stat.S_IFIFO, st_dev=actual.st_dev, st_ino=actual.st_ino, st_size=actual.st_size)
-        with mock.patch("codex_sessions.os.fstat", return_value=metadata):
+        with mock.patch("fl_dashboard.agents.codex_sessions.os.fstat", return_value=metadata):
             page = self.manager.event_history(self.sid)
         self.assertEqual(page["status"], "unavailable")
         self.assertEqual(page["warnings"], ["history_unavailable"])

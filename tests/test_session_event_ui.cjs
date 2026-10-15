@@ -8,7 +8,7 @@ const vm = require('node:vm');
 const test = require('node:test');
 
 const repository = path.resolve(__dirname, '..');
-const html = fs.readFileSync(path.join(repository, 'sessions.html'), 'utf8');
+const html = fs.readFileSync(path.join(repository, 'web/templates/sessions.html'), 'utf8');
 const source = [...html.matchAll(/<script\b[^>]*>([\s\S]*?)<\/script>/g)][0][1];
 const sourceBetween = (start, end) => {
   const first = source.indexOf(start), last = source.indexOf(end, first);
@@ -117,14 +117,14 @@ test('history corruption and ended pagination are visible without offering task 
 });
 
 test('both inline page scripts compile without executing their startup code', () => {
-  for (const name of ['index.html', 'sessions.html']) {
+  for (const name of ['web/templates/index.html', 'web/templates/sessions.html']) {
     const text = fs.readFileSync(path.join(repository, name), 'utf8');
     for (const match of text.matchAll(/<script\b[^>]*>([\s\S]*?)<\/script>/g)) new vm.Script(match[1], {filename: name});
   }
 });
 
 test('homepage requests compact cards and pauses automatic polling while hidden', () => {
-  const page = fs.readFileSync(path.join(repository, 'index.html'), 'utf8');
+  const page = fs.readFileSync(path.join(repository, 'web/templates/index.html'), 'utf8');
   const script = [...page.matchAll(/<script\b[^>]*>([\s\S]*?)<\/script>/g)][0][1].replace(/\r\n/g, '\n');
   assert.match(script, /fetch\(appUrl\("api\/codex-sessions\?view=cards"\)/);
   assert.doesNotMatch(script, /session\.(?:events|prompt)\b/);

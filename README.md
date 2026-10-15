@@ -6,7 +6,7 @@
 
 *只读总览快照。在线状态以最新采集结果为准。*
 
-- 双仓库独立选择分支，自动关联规范命名的适配 PR。
+- 双仓库独立选择分支，结合 PR 标题与描述关联适配 PR。
 - 本机选择设备和 Codex、Claude 或 FlagScale Agent 即可创建任务；远端目录自动分配，补充说明可选。
 - Codex 任务可在客户端继续同一会话，看板保留进展；长日志中的活跃任务持续显示。
 - 验收结果优先读取 PR 描述，点击在页面内查看测试表格；保留本地存档与原生子会话进展。
@@ -50,3 +50,7 @@ python -B start_dashboard.py
 - [高级配置与验收参考](docs/REFERENCE.md)：agent 配置、原生任务接入、结果归档、命令编排与异常恢复。
 
 Claude 与 FlagScale 的 API key 独立配置，使用 Windows 当前用户的 DPAPI 加密保存；局域网入口提供脱敏状态与验收表格。
+
+## 代码结构与扩展
+
+业务代码位于 fl_dashboard/，按 monitoring、projects、agents、tasks、services、deployment 分工；页面在 web/templates/，示例配置在 examples/。根目录保留兼容启动入口，已有部署命令不变。新增同类仓库只需增加项目配置；新监控类型通过可信采集器注册接入，默认只读。详见 [结构与扩展指南](docs/ARCHITECTURE.md)。

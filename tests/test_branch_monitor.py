@@ -8,7 +8,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from branch_monitor import BranchMonitor, MonitorError
+from fl_dashboard.monitoring.branch_monitor import BranchMonitor, MonitorError
 
 
 SCENARIOS = {
@@ -953,7 +953,7 @@ class BranchMonitorTests(unittest.TestCase):
         return BranchMonitor(config, transport=self._transport)
 
     def _write_sglang_run(self, monitor, model, *, run_id='run-1', only=None, commit=None):
-        from sglang_evidence import request_specs, _input
+        from fl_dashboard.monitoring.sglang_evidence import request_specs, _input
         run = self.evidence / 'cuda' / model / 'eager' / run_id
         (run / 'results').mkdir(parents=True, exist_ok=True)
         manifest = {'schema_version': 1, 'engine': 'sglang', 'run_id': run_id, 'backend': 'cuda',
@@ -990,7 +990,7 @@ class BranchMonitorTests(unittest.TestCase):
         self.assertTrue(all('请求' in case['label'] for case in status['cases']))
         self.assertTrue(all(case['source_blob'] == git(self.repo, 'rev-parse', self.head + ':' + case['source']) for case in status['cases']))
         mixed = next(case for case in status['cases'] if case['scenario'] == 'qwen3_6_27b_concurrent_mixed')
-        from sglang_evidence import request_specs
+        from fl_dashboard.monitoring.sglang_evidence import request_specs
         self.assertEqual([spec['kind'] for spec in request_specs(mixed)], ['text', 'text', 'vl', 'vl'])
         pytest_case = next(case for case in status['cases'] if case['family'] == 'pytest_concurrent')
         self.assertEqual(pytest_case['environment']['FL_CONCURRENT_N'], '4')
@@ -1101,7 +1101,7 @@ class BranchMonitorTests(unittest.TestCase):
     def test_sglang_collector_calls_original_offline_source_and_archives_outputs_without_gpu(self):
         from unittest.mock import patch
         from types import SimpleNamespace
-        from sglang_evidence import collect
+        from fl_dashboard.monitoring.sglang_evidence import collect
         monitor = self._sglang_fixture(sources=['examples'])
         selected = [case for case in monitor._cases(self.head) if case['model'] == MODELS[0] and case['family'] == 'offline']
         cache = {}
@@ -1133,7 +1133,7 @@ class BranchMonitorTests(unittest.TestCase):
     def test_sglang_collector_refuses_existing_manifest_identity_change(self):
         from unittest.mock import patch
         from types import SimpleNamespace
-        from sglang_evidence import collect
+        from fl_dashboard.monitoring.sglang_evidence import collect
         monitor = self._sglang_fixture(sources=['examples'])
         selected = [case for case in monitor._cases(self.head) if case['model'] == MODELS[0] and case['family'] == 'offline']
         output_dir = self.evidence / 'cuda' / MODELS[0] / 'eager'
@@ -1148,13 +1148,13 @@ class BranchMonitorTests(unittest.TestCase):
     def test_sglang_collector_records_actual_pytest_model_and_rejects_mismatch(self):
         from unittest.mock import patch
         from types import SimpleNamespace
-        from sglang_evidence import collect
+        from fl_dashboard.monitoring.sglang_evidence import collect
         monitor = self._sglang_fixture()
         case = next(case for case in monitor._cases(self.head) if case['model'] == MODELS[0] and case['family'] == 'pytest_concurrent')
         cfg = SimpleNamespace(model='/actual/different-model', engine_kwargs=lambda: {'model_path': '/actual/different-model'})
         module = SimpleNamespace(_CFG=cfg)
         loader_spec = SimpleNamespace(loader=SimpleNamespace(exec_module=lambda _: None))
-        with patch('sglang_evidence.importlib.util.spec_from_file_location', return_value=loader_spec), patch('sglang_evidence.importlib.util.module_from_spec', return_value=module), patch.dict('os.environ'):
+        with patch('fl_dashboard.monitoring.sglang_evidence.importlib.util.spec_from_file_location', return_value=loader_spec), patch('fl_dashboard.monitoring.sglang_evidence.importlib.util.module_from_spec', return_value=module), patch.dict('os.environ'):
             result = collect(self.repo, self.head, '0.4.0-dev', 'cuda', case, '/models/' + MODELS[0], self.evidence, 'actual-model')
         self.assertEqual(result['status'], 'failed')
         value = json.loads((self.evidence / 'actual-model' / 'results' / (case['scenario'] + '.json')).read_text(encoding='utf-8'))
@@ -1165,7 +1165,7 @@ class BranchMonitorTests(unittest.TestCase):
     def test_sglang_collector_records_actual_returned_request_inputs(self):
         from unittest.mock import patch
         from types import SimpleNamespace
-        from sglang_evidence import collect
+        from fl_dashboard.monitoring.sglang_evidence import collect
         monitor = self._sglang_fixture()
         case = next(case for case in monitor._cases(self.head) if case['model'] == MODELS[0] and case['family'] == 'pytest_concurrent' and case['request_kind'] == 'text')
         model_path = '/models/' + MODELS[0]
@@ -1174,7 +1174,7 @@ class BranchMonitorTests(unittest.TestCase):
                                  _run_text_concurrent=lambda _: [('different actual prompt', '50')] * case['requests'])
         module.test_concurrent = lambda: module._run_text_concurrent(None)
         loader_spec = SimpleNamespace(loader=SimpleNamespace(exec_module=lambda _: None))
-        with patch('sglang_evidence.importlib.util.spec_from_file_location', return_value=loader_spec), patch('sglang_evidence.importlib.util.module_from_spec', return_value=module), patch.dict('sys.modules', {'sglang_fl': SimpleNamespace(is_plugin_loaded=lambda: True, is_plugin_active=lambda: True)}), patch.dict('os.environ'):
+        with patch('fl_dashboard.monitoring.sglang_evidence.importlib.util.spec_from_file_location', return_value=loader_spec), patch('fl_dashboard.monitoring.sglang_evidence.importlib.util.module_from_spec', return_value=module), patch.dict('sys.modules', {'sglang_fl': SimpleNamespace(is_plugin_loaded=lambda: True, is_plugin_active=lambda: True)}), patch.dict('os.environ'):
             result = collect(self.repo, self.head, '0.4.0-dev', 'cuda', case, model_path, self.evidence, 'actual-inputs')
         self.assertEqual(result['status'], 'failed')
         value = json.loads((self.evidence / 'actual-inputs' / 'results' / (case['scenario'] + '.json')).read_text(encoding='utf-8'))

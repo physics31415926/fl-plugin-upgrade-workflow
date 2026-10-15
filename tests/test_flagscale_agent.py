@@ -8,10 +8,10 @@ import threading
 import unittest
 from unittest.mock import patch
 
-from agent_settings import AgentSettingsStore, FlagScaleSettingsStore, validate_flagscale_settings
-from codex_sessions import CodexSessionManager, SessionError
-from flagscale_adapter import FlagScaleClient, FlagScaleSessionManager, flagscale_availability, CAPABILITIES, KEY_ENV
-from flagscale_worker import outcome
+from fl_dashboard.agents.agent_settings import AgentSettingsStore, FlagScaleSettingsStore, validate_flagscale_settings
+from fl_dashboard.agents.codex_sessions import CodexSessionManager, SessionError
+from fl_dashboard.agents.flagscale_adapter import FlagScaleClient, FlagScaleSessionManager, flagscale_availability, CAPABILITIES, KEY_ENV
+from fl_dashboard.agents.flagscale_worker import outcome
 
 
 DUMMY_KEY = "explicit-dummy-flagscale-key-for-tests-only"

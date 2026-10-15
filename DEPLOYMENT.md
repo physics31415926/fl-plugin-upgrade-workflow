@@ -244,7 +244,7 @@ python -B flflow.py serve --projects-config projects.json --host 127.0.0.1 --por
 
 `python` 指向真实 Python 可执行文件；Windows 启动器要求 `.exe`，不接受 shell shim。`arguments` 是 argv 数组，不是 shell 命令。旧 Windows 启动器还支持单独的 `program` 字段指定 `flflow.py`，此时 `arguments` 从 `serve` 开始。私有启动配置放在 `runs/` 下，并仅由本机维护者编辑。
 
-双仓库可参照 `projects.example.json` 配置各自的监控文件。共享服务不连接配置中的 `sessions_api_url`，不提供会话控制；原生任务和已落盘 agent 任务只投影脱敏状态。
+双仓库可参照 `examples/projects.example.json` 配置各自的监控文件。共享服务不连接配置中的 `sessions_api_url`，不提供会话控制；原生任务和已落盘 agent 任务只投影脱敏状态。
 
 ### 只读服务与 Linux 常驻
 

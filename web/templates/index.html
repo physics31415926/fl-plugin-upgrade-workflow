@@ -545,7 +545,7 @@
     put("head", shortSha(data.head));
     byId("head").title = safe(data.head);
     put("vllm-version", data.upstream_version || data.vllm_version);
-    put("engine-name", data.engine === "sglang" ? "SGLang" : "vLLM");
+    put("engine-name", ({sglang:"SGLang",vllm:"vLLM"}[data.engine] || data.engine || "Monitor"));
     put("observed-at", dateText(data.observed_at));
     const integrated = (Array.isArray(data.backends) ? data.backends : []).filter(b => b.integration?.status === "merged");
     const outcomes = integrated.map(b => effectiveCi(b, data.head));

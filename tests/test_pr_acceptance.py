@@ -5,7 +5,7 @@ from pathlib import Path
 import shutil
 import unittest
 
-from pr_acceptance import acceptance_summary, parse_pr_description
+from fl_dashboard.monitoring.pr_acceptance import acceptance_summary, parse_pr_description
 
 
 def table(*rows):

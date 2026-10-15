@@ -11,8 +11,8 @@ import threading
 import unittest
 from unittest.mock import patch
 
-from acceptance_records import AcceptanceRecords
-from branch_monitor import BranchMonitor, MonitorError
+from fl_dashboard.monitoring.acceptance_records import AcceptanceRecords
+from fl_dashboard.monitoring.branch_monitor import BranchMonitor, MonitorError
 
 
 BRANCH = "0.4.0-dev"
@@ -137,7 +137,7 @@ class AcceptanceRecordStoreTests(unittest.TestCase):
 
     def test_non_text_and_oversized_archives_do_not_become_available(self):
         for data in (b"\xff\xfe invalid UTF-8", b"x" * 65):
-            with self.subTest(data=data), patch("acceptance_records.MAX_ARCHIVE_BYTES", 64):
+            with self.subTest(data=data), patch("fl_dashboard.monitoring.acceptance_records.MAX_ARCHIVE_BYTES", 64):
                 self.write_note(archive=self.write_archive(data))
                 self.assertFalse(self.store.entries("ascend", BRANCH)[0]["archive_available"])
 
@@ -349,7 +349,7 @@ class AcceptanceMonitorIntegrationTests(unittest.TestCase):
                 self.monitor.acceptance_record(**kwargs)
 
     def test_localhost_http_archive_endpoint_reads_verified_original_without_network(self):
-        import flflow
+        import fl_dashboard.services.flflow as flflow
         original = self.write_record()
         server = flflow.make_server(None, "127.0.0.1", 0, monitor=self.monitor)
         worker = threading.Thread(target=server.serve_forever, daemon=True)

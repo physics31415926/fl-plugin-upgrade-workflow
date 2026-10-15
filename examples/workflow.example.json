@@ -26,7 +26,7 @@
         },
         {
           "scope": "e2e",
-          "argv": ["python", "{tool_dir}/strict_test.py", "--platform", "cuda", "--device", "a100", "--scope", "e2e", "--cases-json", "{tool_dir}/cases.cuda.example.json", "--evidence-file", "{evidence_file}", "--target-vllm-commit", "{target_vllm_commit}", "--plugin-commit", "{plugin_commit}"],
+          "argv": ["python", "{tool_dir}/strict_test.py", "--platform", "cuda", "--device", "a100", "--scope", "e2e", "--cases-json", "{tool_dir}/examples/cases.cuda.example.json", "--evidence-file", "{evidence_file}", "--target-vllm-commit", "{target_vllm_commit}", "--plugin-commit", "{plugin_commit}"],
           "evidence_file": "{work_dir}/evidence/{platform}-{scope}-{attempt}.json"
         },
         {
@@ -56,7 +56,7 @@
         },
         {
           "scope": "e2e",
-          "argv": ["python", "{tool_dir}/strict_test.py", "--platform", "metax", "--device", "c550", "--scope", "e2e", "--cases-json", "{tool_dir}/cases.metax.example.json", "--evidence-file", "{evidence_file}", "--target-vllm-commit", "{target_vllm_commit}", "--plugin-commit", "{plugin_commit}"],
+          "argv": ["python", "{tool_dir}/strict_test.py", "--platform", "metax", "--device", "c550", "--scope", "e2e", "--cases-json", "{tool_dir}/examples/cases.metax.example.json", "--evidence-file", "{evidence_file}", "--target-vllm-commit", "{target_vllm_commit}", "--plugin-commit", "{plugin_commit}"],
           "evidence_file": "{work_dir}/evidence/{platform}-{scope}-{attempt}.json"
         },
         {

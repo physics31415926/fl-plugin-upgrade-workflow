@@ -98,7 +98,7 @@ class SSHProfileSync:
 
     def _save(self):
         if self.state_path:
-            from codex_sessions import atomic_json
+            from fl_dashboard.agents.codex_sessions import atomic_json
             atomic_json(self.state_path, self.state)
 
     def checked(self, alias):

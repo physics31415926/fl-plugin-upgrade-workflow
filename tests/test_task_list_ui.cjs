@@ -4,9 +4,9 @@ const path=require('node:path');
 const vm=require('node:vm');
 const test=require('node:test');
 const root=path.resolve(__dirname,'..');
-const html=fs.readFileSync(path.join(root,'sessions.html'),'utf8');
+const html=fs.readFileSync(path.join(root,'web/templates/sessions.html'),'utf8');
 function script(name){return [...fs.readFileSync(path.join(root,name),'utf8').matchAll(/<script\b[^>]*>([\s\S]*?)<\/script>/g)].map(match=>match[1]).join('\n');}
-const source=script('sessions.html');
+const source=script('web/templates/sessions.html');
 function between(text,start,end){const a=text.indexOf(start),b=text.indexOf(end,a);assert(a>=0&&b>a,`source exists: ${start}`);return text.slice(a,b);}
 class Element {
   constructor(tag){this.tag=tag;this.children=[];this.parent=null;this.listeners={};this.hidden=false;this.checked=false;this._text='';}
@@ -96,10 +96,10 @@ test('completed turns leave the active list without switching an open task detai
   assert.equal(context.current().status,'completed');assert.equal(context.state.sessions.length,1);
 });
 
-for(const page of ['overview.html','index.html']) {
+for(const page of ['web/templates/overview.html','web/templates/index.html']) {
   test(`${page}: task visibility hides ended and historical tasks but keeps pending approvals and stale active tasks`,()=>{
     const text=script(page),context={};vm.createContext(context);
-    const end=page==='overview.html'?'  function renderTasks(':'  function renderObservedTasks(';
+    const end=page==='web/templates/overview.html'?'  function renderTasks(':'  function renderObservedTasks(';
     vm.runInContext(between(text,'  function isActiveTask(',end)+'\nglobalThis.active=isActiveTask;',context);
     for(const status of ['prepared','starting','running','waiting_approval','waiting_input','interrupting'])assert.equal(context.active({status}),true,status);
     for(const status of ['completed','failed','interrupted','disconnected','unknown',undefined])assert.equal(context.active({status}),false,String(status));

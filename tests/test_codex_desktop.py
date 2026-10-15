@@ -9,8 +9,8 @@ import time
 import unittest
 from unittest.mock import Mock, patch
 
-from codex_sessions import CodexSessionManager, SessionError, now, require_free_machine
-from codex_desktop import DesktopRolloutObserver
+from fl_dashboard.agents.codex_sessions import CodexSessionManager, SessionError, now, require_free_machine
+from fl_dashboard.agents.codex_desktop import DesktopRolloutObserver
 
 
 THREAD = "01a124ca-a49b-7753-af99-1b23be9d5e79"
@@ -374,7 +374,7 @@ class DesktopTests(unittest.TestCase):
             self.assertEqual(row["status"], "unknown")
 
     def test_lan_post_never_calls_control_manager_or_desktop_launcher(self):
-        from share_server import BoundedHTTPServer, make_server, load_tls_context
+        from fl_dashboard.services.share_server import BoundedHTTPServer, make_server, load_tls_context
         from tests.test_share_server import FakeMonitor, SnapshotCache, EXPLICIT_DUMMY_TLS_CERT, EXPLICIT_DUMMY_TLS_KEY
         cache = SnapshotCache(FakeMonitor(), refresh_interval=0)
         index = self.root / "index.html"
@@ -382,14 +382,14 @@ class DesktopTests(unittest.TestCase):
         cert, key = self.root / "explicit_dummy-cert.pem", self.root / "explicit_dummy-key.pem"
         cert.write_text(EXPLICIT_DUMMY_TLS_CERT, encoding="ascii")
         key.write_text(EXPLICIT_DUMMY_TLS_KEY, encoding="ascii")
-        with patch("share_server.BoundedHTTPServer", side_effect=lambda address, handler:
+        with patch("fl_dashboard.services.share_server.BoundedHTTPServer", side_effect=lambda address, handler:
                    BoundedHTTPServer(("127.0.0.1", address[1]), handler)):
             server = make_server(cache, "192.168.10.20", 0, index_path=index, anonymous_lan=True,
                                  tls_context=load_tls_context(cert, key))
         worker = threading.Thread(target=server.serve_forever, daemon=True)
         worker.start()
         try:
-            with patch.object(self.manager, "desktop") as control, patch("codex_desktop.open_desktop_url") as open_url:
+            with patch.object(self.manager, "desktop") as control, patch("fl_dashboard.agents.codex_desktop.open_desktop_url") as open_url:
                 connection = HTTPSConnection("127.0.0.1", server.server_port, timeout=3,
                                              context=ssl.create_default_context(cafile=str(cert)))
                 connection.request("POST", "/api/codex-sessions/" + TASK + "/desktop", body="{}", headers={"Content-Type": "application/json"})

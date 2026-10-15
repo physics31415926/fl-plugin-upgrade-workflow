@@ -11,9 +11,9 @@ import threading
 import unittest
 from unittest.mock import patch
 
-from native_task_observer import NativeTaskObserver
-from project_registry import ProjectContext, ProjectRegistry
-from share_server import BoundedHTTPServer, ProjectSnapshotCache, SnapshotCache, load_tls_context, main, make_server, sanitize_snapshot
+from fl_dashboard.tasks.native_task_observer import NativeTaskObserver
+from fl_dashboard.projects.project_registry import ProjectContext, ProjectRegistry
+from fl_dashboard.services.share_server import BoundedHTTPServer, ProjectSnapshotCache, SnapshotCache, load_tls_context, main, make_server, sanitize_snapshot
 
 
 # Public explicit_dummy credentials created only for tests; never deploy these.
@@ -107,8 +107,8 @@ class TLSConfigurationTests(unittest.TestCase):
     def test_tls_parameters_must_be_paired_before_monitors_or_workers_start(self):
         self.assertIsNone(load_tls_context())
         for flags in (["--tls-cert", "dummy-cert.pem"], ["--tls-key", "dummy-key.pem"]):
-            with self.subTest(flags=flags), patch("share_server.ProjectRegistry.from_config") as registry, \
-                    patch("share_server.ProjectSnapshotCache") as cache, redirect_stderr(io.StringIO()) as errors:
+            with self.subTest(flags=flags), patch("fl_dashboard.services.share_server.ProjectRegistry.from_config") as registry, \
+                    patch("fl_dashboard.services.share_server.ProjectSnapshotCache") as cache, redirect_stderr(io.StringIO()) as errors:
                 with self.assertRaises(SystemExit) as raised:
                     main(["--projects-config", "unused.json", *flags])
                 self.assertEqual(raised.exception.code, 2)
@@ -121,8 +121,8 @@ class TLSConfigurationTests(unittest.TestCase):
             invalid = Path(temp) / "invalid.pem"
             invalid.write_text("explicit_dummy invalid PEM", encoding="ascii")
             for certificate in (invalid, Path(temp) / "missing.pem"):
-                with self.subTest(certificate=certificate), patch("share_server.BranchMonitor") as monitor, \
-                        patch("share_server.SnapshotCache") as cache, redirect_stderr(io.StringIO()) as errors:
+                with self.subTest(certificate=certificate), patch("fl_dashboard.services.share_server.BranchMonitor") as monitor, \
+                        patch("fl_dashboard.services.share_server.SnapshotCache") as cache, redirect_stderr(io.StringIO()) as errors:
                     with self.assertRaises(SystemExit) as raised:
                         main(["--monitor-config", "unused.json", "--tls-cert", str(certificate), "--tls-key", str(invalid)])
                     self.assertEqual(raised.exception.code, 2)
@@ -138,9 +138,9 @@ class TLSConfigurationTests(unittest.TestCase):
                  ("192.168.10.20", None, []), ("192.168.10.20", context, ["--trusted-ingress"]))
         for host, tls_context, flags in cases:
             with self.subTest(host=host, flags=flags, tls=bool(tls_context)), \
-                    patch("share_server.load_tls_context", return_value=tls_context), \
-                    patch("share_server.ProjectRegistry.from_config") as registry, \
-                    patch("share_server.ProjectSnapshotCache") as cache, redirect_stderr(io.StringIO()):
+                    patch("fl_dashboard.services.share_server.load_tls_context", return_value=tls_context), \
+                    patch("fl_dashboard.services.share_server.ProjectRegistry.from_config") as registry, \
+                    patch("fl_dashboard.services.share_server.ProjectSnapshotCache") as cache, redirect_stderr(io.StringIO()):
                 with self.assertRaises(SystemExit) as raised:
                     main(["--projects-config", "unused.json", "--anonymous-lan", "--host", host, *flags])
                 self.assertEqual(raised.exception.code, 2)
@@ -150,10 +150,10 @@ class TLSConfigurationTests(unittest.TestCase):
     def test_anonymous_cli_ignores_inherited_password_environment(self):
         context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
         with patch.dict("os.environ", {"FLFLOW_SHARE_PASSWORD": "explicit_dummy inherited password"}), \
-                patch("share_server.load_tls_context", return_value=context), \
-                patch("share_server.ProjectRegistry.from_config") as registry, \
-                patch("share_server.ProjectSnapshotCache") as cache, \
-                patch("share_server.make_server") as factory, redirect_stdout(io.StringIO()):
+                patch("fl_dashboard.services.share_server.load_tls_context", return_value=context), \
+                patch("fl_dashboard.services.share_server.ProjectRegistry.from_config") as registry, \
+                patch("fl_dashboard.services.share_server.ProjectSnapshotCache") as cache, \
+                patch("fl_dashboard.services.share_server.make_server") as factory, redirect_stdout(io.StringIO()):
             main(["--projects-config", "unused.json", "--anonymous-lan", "--host", "192.168.10.20",
                   "--tls-cert", "dummy-cert.pem", "--tls-key", "dummy-key.pem"])
             registry.assert_called_once_with(Path("unused.json"), read_only=True)
@@ -212,7 +212,7 @@ class ShareServerTests(unittest.TestCase):
 
     def test_anonymous_factory_rejects_non_rfc1918_no_tls_and_conflicting_auth(self):
         context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
-        with patch("share_server.BoundedHTTPServer") as factory:
+        with patch("fl_dashboard.services.share_server.BoundedHTTPServer") as factory:
             for host in ("0.0.0.0", "127.0.0.1", "8.8.8.8", "100.64.0.1", "172.15.0.1", "172.32.0.1",
                          "192.169.0.1", "::1", "fd00::1", "dashboard.internal"):
                 with self.subTest(host=host), self.assertRaisesRegex(ValueError, "RFC1918"):
@@ -236,7 +236,7 @@ class ShareServerTests(unittest.TestCase):
         # Keep the actual TLS transport portable to CI without a private interface.
         def loopback_transport(address, handler):
             return BoundedHTTPServer(("127.0.0.1", address[1]), handler)
-        with patch("share_server.BoundedHTTPServer", side_effect=loopback_transport) as factory:
+        with patch("fl_dashboard.services.share_server.BoundedHTTPServer", side_effect=loopback_transport) as factory:
             for host in ("10.0.0.1", "172.16.0.1", "172.31.255.254"):
                 server = make_server(self.cache, host, 0, index_path=self.index,
                                      anonymous_lan=True, tls_context=context)
@@ -339,7 +339,7 @@ class ShareServerTests(unittest.TestCase):
                 }
                 source["backends"][0]["acceptance"] = acceptance
                 backend = sanitize_snapshot(source)["backends"][0]
-                expected = dict(acceptance, archive_url=None, rows=[], rows_total=0, rows_truncated=False)
+                expected = dict(acceptance, archive_url=None, rows=[], rows_total=0, rows_truncated=False, acceptance_tables=[])
                 self.assertEqual(backend["acceptance"], expected)
                 self.assertEqual(backend["gate"]["passed"], 20)
                 self.assertEqual(backend["results"][0]["status"], "recorded_pass")
@@ -368,7 +368,7 @@ class ShareServerTests(unittest.TestCase):
         source["backends"][0]["acceptance"] = acceptance
         public = sanitize_snapshot(source)["backends"][0]["acceptance"]
         self.assertEqual(set(public), {"status", "source", "title", "summary", "pr_number",
-                                       "pr_url", "archive_available", "archive_url", "rows", "rows_total", "rows_truncated"})
+                                       "pr_url", "archive_available", "archive_url", "rows", "rows_total", "rows_truncated", "acceptance_tables"})
         self.assertIsNone(public["archive_url"])
         self.assertNotIn("explicit_dummy_private", json.dumps(public))
         private_values = (
@@ -592,7 +592,7 @@ class ShareServerTests(unittest.TestCase):
         (directory / "events.jsonl").write_text(private + " raw_event_message", encoding="utf-8")
 
     def test_persisted_codex_and_claude_tasks_are_safe_and_discovered_live_on_share(self):
-        from readonly_session_observer import ReadonlySessionObserver
+        from fl_dashboard.tasks.readonly_session_observer import ReadonlySessionObserver
         root = Path(self.temp.name)
         codex_root, claude_root = root / "codex store", root / "claude store"
         codex_id, claude_id, new_id = "0123456789abcdef" * 2, "fedcba9876543210" * 2, "01234567" * 4
@@ -662,7 +662,7 @@ class ShareServerTests(unittest.TestCase):
                                           authorization=self.auth(), body={})[0], 405)
 
     def test_persisted_only_project_advertises_readonly_task_observations(self):
-        from readonly_session_observer import ReadonlySessionObserver
+        from fl_dashboard.tasks.readonly_session_observer import ReadonlySessionObserver
         directory = Path(self.temp.name) / "not-created-store"
         readonly = ReadonlySessionObserver([{"provider": "claude", "directory": directory}])
         project = ProjectContext("vllm", "vLLM-Plugin-FL", default_branch=self.monitor.branch,

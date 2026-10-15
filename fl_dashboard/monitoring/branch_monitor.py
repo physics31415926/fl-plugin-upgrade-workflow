@@ -34,8 +34,8 @@ from typing import Any, Callable
 from urllib.parse import quote, urlencode
 from urllib.request import Request, urlopen
 
-from pr_acceptance import acceptance_summary
-from pr_discovery import adaptation_backend
+from fl_dashboard.monitoring.pr_acceptance import acceptance_summary
+from fl_dashboard.monitoring.pr_discovery import adaptation_backend
 
 
 SHA = re.compile(r"^[0-9a-f]{40}$")
@@ -241,7 +241,7 @@ class BranchMonitor:
 
     def _cases(self, sha: str) -> list[dict[str, Any]]:
         if self.engine == "sglang":
-            from sglang_evidence import discover_cases
+            from fl_dashboard.monitoring.sglang_evidence import discover_cases
             if sha not in self._sglang_case_cache:
                 self._sglang_case_cache[sha] = discover_cases(
                     self._show,
@@ -590,7 +590,7 @@ class BranchMonitor:
         return found
 
     def _acceptance_records(self, backend: str, branch: str, sha: str, pr: dict | None) -> list[dict]:
-        from acceptance_records import AcceptanceRecords
+        from fl_dashboard.monitoring.acceptance_records import AcceptanceRecords
         store = AcceptanceRecords(self.evidence_dir, self.engine, self.github_repo)
         records = []
         current_tree = None
@@ -609,7 +609,7 @@ class BranchMonitor:
         return records
 
     def acceptance_record(self, backend: str, record_id: str, branch: str | None = None) -> dict:
-        from acceptance_records import AcceptanceRecords
+        from fl_dashboard.monitoring.acceptance_records import AcceptanceRecords
         branch = branch or self.branch
         self._validate_branch(branch)
         try:
@@ -669,7 +669,7 @@ class BranchMonitor:
         return self._result(self.evidence_dir / record["backend"] / "acceptance.json", manifest, scenario, requests)
 
     def _sglang_result(self, manifest_path: Path, manifest: dict[str, Any], case: dict[str, Any] | None) -> tuple[str, str, Path | None, int]:
-        from sglang_evidence import validate_result
+        from fl_dashboard.monitoring.sglang_evidence import validate_result
         if (manifest.get("schema_version") != 1 or manifest.get("engine") != "sglang" or
                 not isinstance(manifest.get("run_id"), str) or not manifest["run_id"] or not case):
             return "failed", "Invalid SGLang manifest schema, engine, or source case", None, 0

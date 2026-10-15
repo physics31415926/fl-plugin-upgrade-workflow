@@ -11,7 +11,7 @@ from pathlib import Path
 import re
 import threading
 from urllib.parse import urlsplit
-from codex_sessions import SessionError, atomic_json
+from fl_dashboard.agents.codex_sessions import SessionError, atomic_json
 
 DEFAULTS = {
     "base_url": "https://api.anthropic.com",

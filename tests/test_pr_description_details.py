@@ -1,6 +1,6 @@
 import unittest
-from pr_acceptance import description_blocks, acceptance_summary
-from share_server import sanitize_snapshot
+from fl_dashboard.monitoring.pr_acceptance import description_blocks, acceptance_summary
+from fl_dashboard.services.share_server import sanitize_snapshot
 
 class DescriptionDetailTests(unittest.TestCase):
     def test_preserves_unclassified_tables_and_limitations(self):

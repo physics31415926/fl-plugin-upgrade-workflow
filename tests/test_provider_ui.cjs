@@ -3,7 +3,7 @@ const fs=require('node:fs');
 const path=require('node:path');
 const vm=require('node:vm');
 const test=require('node:test');
-const html=fs.readFileSync(path.join(__dirname,'..','sessions.html'),'utf8');
+const html=fs.readFileSync(path.join(__dirname,'..','web/templates/sessions.html'),'utf8');
 const source=[...html.matchAll(/<script\b[^>]*>([\s\S]*?)<\/script>/g)][0][1];
 function between(start,end){const a=source.indexOf(start),b=source.indexOf(end,a);assert(a>=0&&b>a);return source.slice(a,b);}
 function ui(){

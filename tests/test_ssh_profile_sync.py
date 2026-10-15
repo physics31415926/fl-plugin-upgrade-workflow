@@ -6,9 +6,9 @@ import tempfile
 import threading
 import unittest
 
-from flflow import make_server
-from project_registry import ProjectContext, ProjectRegistry
-from ssh_profile_sync import SOURCE, SSHProfileSync, read_config
+from fl_dashboard.services.flflow import make_server
+from fl_dashboard.projects.project_registry import ProjectContext, ProjectRegistry
+from fl_dashboard.tasks.ssh_profile_sync import SOURCE, SSHProfileSync, read_config
 
 
 class Profiles:

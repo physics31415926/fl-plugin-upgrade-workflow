@@ -10,9 +10,7 @@ import tempfile
 import unittest
 from unittest.mock import patch
 
-import configure
-
-
+import fl_dashboard.deployment.configure as configure
 @unittest.skipUnless(shutil.which("git"), "Git is required for checkout fixtures")
 class ConfigureTests(unittest.TestCase):
     def setUp(self):
@@ -31,6 +29,7 @@ class ConfigureTests(unittest.TestCase):
                            api_key="DEMONSTRATION_ONLY", ssh_profiles={"demo": {}},
                            case_dir="examples" if project_id == "sglang" else "tools/adaptation-gate-cases",
                            case_sources=["examples"] if project_id == "sglang" else ["tools/adaptation-gate-cases"])
+            (self.app / source).parent.mkdir(parents=True, exist_ok=True)
             (self.app / source).write_text(json.dumps(example), encoding="utf-8")
         (self.app / "flflow.py").write_text("# Fixture launcher target\n", encoding="utf-8")
         self.git(self.app, "add", ".")
@@ -102,7 +101,7 @@ class ConfigureTests(unittest.TestCase):
 
     def test_generated_configuration_loads_read_only_registry(self):
         self.generate()
-        from project_registry import ProjectRegistry
+        from fl_dashboard.projects.project_registry import ProjectRegistry
         registry = ProjectRegistry.from_config(self.app / "runs" / "configured" / "projects.json", read_only=True)
         try:
             self.assertEqual(["vllm", "sglang"], [row["id"] for row in registry.metadata()["projects"]])

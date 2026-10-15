@@ -27,7 +27,7 @@ import threading
 import time
 import uuid
 
-from codex_desktop import desktop as handoff_desktop, refresh_desktop, remember_thread, serialized_control
+from fl_dashboard.agents.codex_desktop import desktop as handoff_desktop, refresh_desktop, remember_thread, serialized_control
 
 
 logger = logging.getLogger(__name__)
@@ -1151,7 +1151,7 @@ done
             raise SessionError("Invalid branch")
         # Only this process can issue a successful read-only bootstrap proof.
         # Consume it once, before preflight/Git, and never persist the token.
-        from automatic_tasks import consume_automatic_task
+        from fl_dashboard.tasks.automatic_tasks import consume_automatic_task
         payload, automatic_context = consume_automatic_task(payload, self)
         with self._lock:
             self._require_new_session(machine["backend"], branch)
@@ -1289,7 +1289,7 @@ done
                 "pytest 并发场景还需 definition_files 绑定实际模型 YAML 和 plugin_utils 的 Git blob。"
                 "source_blob 与 definition_files 使用 git rev-parse <actual-commit>:<source-path> 的真实 Git blob ID；"
                 "面板会独立复核原场景输入次序、请求数、非空输出与 expected，不能只信 checks 或退出码。\n"
-                f"本机 SGLang 采集器：{Path(__file__).resolve().with_name('sglang_evidence.py')}。"
+                f"本机 SGLang 采集器：{Path(__file__).resolve().parents[2] / 'sglang_evidence.py'}。"
                 "远端运行前将此独立采集器原样复制到本任务工具目录，保持目标插件仓库 clean；"
                 "输出放在候选仓库之外的任务私有证据目录。采集器原样调用所选源码 examples 和 pytest 并发函数，保留原 assert，"
                 "自动发现该候选支持的场景、执行并生成上述 manifest 与原始逐请求 JSON；不得自行合成通过结果。"
@@ -1393,7 +1393,7 @@ done
         """Refresh app-managed paths after an update, without running the CLI."""
         if not self._uses_codex_runtime:
             return self.executable
-        from codex_runtime import resolve_codex_executable
+        from fl_dashboard.agents.codex_runtime import resolve_codex_executable
         executable = resolve_codex_executable(self._configured_executable, base_dir=self.base_dir)
         try:
             stamp = Path(executable).stat().st_mtime_ns if executable else None

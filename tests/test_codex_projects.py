@@ -5,7 +5,7 @@ import unittest
 from unittest.mock import patch
 from types import SimpleNamespace
 
-from codex_sessions import CodexSessionManager, SessionError
+from fl_dashboard.agents.codex_sessions import CodexSessionManager, SessionError
 import test_codex_sessions as fixtures
 
 FakeClient = fixtures.FakeClient

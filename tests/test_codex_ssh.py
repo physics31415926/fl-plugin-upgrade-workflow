@@ -5,7 +5,7 @@ import sys
 import threading
 from unittest import TestCase, mock
 
-from codex_sessions import CodexSessionManager, SessionError
+from fl_dashboard.agents.codex_sessions import CodexSessionManager, SessionError
 from tests import test_codex_sessions as fixtures
 
 FakeClient = fixtures.FakeClient
@@ -27,7 +27,7 @@ class SSHDispatchTest(TestCase):
             "GATE=present", "TMUX=present", "MODEL_0=present", ""])
 
     def probe(self, profile, output=None, error="", returncode=0):
-        with mock.patch("codex_sessions.shutil.which", return_value="ssh"), mock.patch("codex_sessions.subprocess.run") as run:
+        with mock.patch("fl_dashboard.agents.codex_sessions.shutil.which", return_value="ssh"), mock.patch("fl_dashboard.agents.codex_sessions.subprocess.run") as run:
             output = output if output is not None else (self.success_output() if returncode == 0 else "")
             run.return_value = subprocess.CompletedProcess([], returncode, output.encode("utf-8"), error.encode("utf-8"))
             result = self.manager.check_machine({"profile_id": profile["id"]})
@@ -62,7 +62,7 @@ class SSHDispatchTest(TestCase):
     def test_probe_preserves_host_verification_and_quotes_remote_parameters(self):
         profile = self.direct_profile()
         workspace = "/work/plugin' ; touch /tmp/should-never-run ; '"
-        with mock.patch("codex_sessions.shutil.which", return_value="ssh"), mock.patch("codex_sessions.subprocess.run") as run:
+        with mock.patch("fl_dashboard.agents.codex_sessions.shutil.which", return_value="ssh"), mock.patch("fl_dashboard.agents.codex_sessions.subprocess.run") as run:
             run.return_value = subprocess.CompletedProcess([], 0, self.success_output(dirty=True).encode("utf-8"), b"")
             result = self.manager.check_machine({"profile_id": profile["id"], "remote_workspace": workspace})
         self.assertTrue(result["ok"])
@@ -91,7 +91,7 @@ class SSHDispatchTest(TestCase):
             received.append(json.loads(child_result.stdout.decode("utf-8")))
             return subprocess.CompletedProcess(arguments, 0, self.success_output().encode("utf-8"), b"")
 
-        with mock.patch("codex_sessions.shutil.which", return_value="ssh"), mock.patch("codex_sessions.subprocess.run", side_effect=receive_pipe):
+        with mock.patch("fl_dashboard.agents.codex_sessions.shutil.which", return_value="ssh"), mock.patch("fl_dashboard.agents.codex_sessions.subprocess.run", side_effect=receive_pipe):
             result = self.manager.check_machine({"profile_id": profile["id"]})
         self.assertTrue(result["ok"])
         self.assertEqual(received[0]["cr"], 0)

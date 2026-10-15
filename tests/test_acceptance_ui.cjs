@@ -29,7 +29,7 @@ function ui(name) {
     readOnly:false,safe:value=>value==null||value===''?'—':String(value),shortSha:value=>String(value||'').slice(0,10),reasonText:value=>value,scenarioLabels:{}};
   context.byId=id=>context.document.getElementById(id);
   vm.createContext(context);
-  if(name==='overview.html') {
+  if(name==='web/templates/overview.html') {
     vm.runInContext(between(source,'  const labels=', '  function makeCard(')
       +between(source,'  function acceptanceLink(', '  function isActiveTask(')
       +between(source,'  function renderSnapshot(', '  async function loadSessions(')
@@ -50,7 +50,7 @@ function ui(name) {
 }
 const pr='https://github.com/example/plugin/pull/123';
 const primary={status:'passed',source:'pr_description',summary:'作者报告：模型 A eager 8 请求通过',pr_number:123,pr_url:pr,title:'PR 测试结果'};
-for(const page of ['overview.html','index.html']) {
+for(const page of ['web/templates/overview.html','web/templates/index.html']) {
   test(`${page}: unified acceptance takes priority over raw and historical status without rewriting evidence`,()=>{
     const {context}=ui(page);
     for(const status of ['passed','partial','failed','pending','missing','reference','unknown']) {
@@ -92,7 +92,7 @@ function card() {
     counts:{merged:new Element('strong'),ci:new Element('strong'),gate:new Element('strong')},collection:new Element('div'),notice:new Element('div'),tbody:new Element('tbody'),detail:new Element('a'),taskLink:new Element('a')};
 }
 test('overview merges acceptance into one column and counts PR passes with no raw case list',()=>{
-  const {context}=ui('overview.html'),view=card();
+  const {context}=ui('web/templates/overview.html'),view=card();
   const data={branch:'dev/next',head:'current',cases:[],backends:[
     {id:'corex',label:'iluvatar',acceptance:{...primary,status:'failed'}},
     {id:'ascend',label:'Ascend',acceptance:{...primary,status:'partial'}},
@@ -108,12 +108,12 @@ test('overview merges acceptance into one column and counts PR passes with no ra
   const modal=context.document.body.childNodes[0];assert.equal(modal.tagName,'DIALOG');assert.equal(modal.modal,true);assert.equal(descendants(modal).find(node=>node.tagName==='A').href,pr);
   assert.match(first.textContent,/查看表格/);assert.match(first.textContent,/作者报告/);
   assert.equal(JSON.stringify(data),original);
-  const html=fs.readFileSync(path.join(root,'overview.html'),'utf8');
+  const html=fs.readFileSync(path.join(root,'web/templates/overview.html'),'utf8');
   assert.match(html,/'验收结果'/);assert.match(html,/'验收通过'/);
   assert.doesNotMatch(html,/'当前 Gate'|'实验验收记录'/);
 });
 test('detail presents PR summary first and folds unchanged raw stale cases into auxiliary evidence',()=>{
-  const {context,nodes}=ui('index.html');
+  const {context,nodes}=ui('web/templates/index.html');
   const data={head:'current',models:['Model A'],modes:['eager'],cases:[{scenario:'text_single',label:'Single request',requests:1}]};
   const backend={acceptance:primary,integration:{status:'merged'},gate:{status:'passed',latest_commit:'old',tree_matches_head:false,passed:1,total:1},
     results:[{model:'Model A',mode:'eager',scenario:'text_single',status:'passed',reason:'All requests passed'}],acceptance_records:[{status:'partial',summary:'历史子集',tested_commit:'historical',pr_url:pr,pr_number:123}]};
@@ -134,7 +134,7 @@ test('detail presents PR summary first and folds unchanged raw stale cases into 
   assert.match(empty.childNodes[1].textContent,/作者报告/);
 });
 
-for(const page of ['overview.html','index.html']) {
+for(const page of ['web/templates/overview.html','web/templates/index.html']) {
   test(`${page}: acceptance modal renders sanitized text rows, bounds scope, and restores keyboard focus`,()=>{
     const {context}=ui(page),opener=new Element('button'),rows=[{label:'Model A',configuration:'eager / single',result:'作者报告 1/1',status:'passed'},{label:'<img src=x onerror=alert(1)>',configuration:'graph',result:'未覆盖',status:'pending'}];
     context.readonly(true);context.fetch=()=>{throw Error('modal must not request archive data');};

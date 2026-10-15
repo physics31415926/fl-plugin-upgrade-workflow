@@ -1,5 +1,5 @@
 import unittest
-from pr_acceptance import public_acceptance_tables, parse_pr_description
+from fl_dashboard.monitoring.pr_acceptance import public_acceptance_tables, parse_pr_description
 
 class PublicAcceptanceTests(unittest.TestCase):
     def test_only_validation_tables_are_exported_and_secrets_redacted(self):

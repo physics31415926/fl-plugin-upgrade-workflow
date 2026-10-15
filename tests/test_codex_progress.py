@@ -4,7 +4,7 @@ from pathlib import Path
 import time
 from unittest import TestCase, mock
 
-from codex_sessions import atomic_json
+from fl_dashboard.agents.codex_sessions import atomic_json
 from tests import test_codex_sessions as fixtures
 
 

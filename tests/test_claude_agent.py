@@ -7,9 +7,9 @@ import tempfile
 import unittest
 from unittest.mock import patch
 
-from agent_settings import AgentSettingsStore, validate_base_url
-from claude_agent import ClaudeClient, ClaudeSessionManager, cli_availability
-from codex_sessions import CodexSessionManager, SessionError
+from fl_dashboard.agents.agent_settings import AgentSettingsStore, validate_base_url
+from fl_dashboard.agents.claude_agent import ClaudeClient, ClaudeSessionManager, cli_availability
+from fl_dashboard.agents.codex_sessions import CodexSessionManager, SessionError
 
 DUMMY_KEY = "explicit-dummy-claude-key-for-tests-only"
 

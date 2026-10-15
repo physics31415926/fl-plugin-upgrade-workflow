@@ -5,8 +5,8 @@ import tempfile
 import unittest
 from unittest.mock import patch
 
-import codex_runtime
-from codex_runtime import resolve_codex_executable
+import fl_dashboard.agents.codex_runtime as codex_runtime
+from fl_dashboard.agents.codex_runtime import resolve_codex_executable
 
 
 class CodexRuntimeTests(unittest.TestCase):

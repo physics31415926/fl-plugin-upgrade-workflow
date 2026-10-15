@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>FL 双仓库适配工作台</title>
+  <title>FL 多项目适配工作台</title>
   <style>
     :root {color-scheme:light;font:16px/1.5 system-ui,-apple-system,"Segoe UI",sans-serif;--bg:#f4f7fb;--ink:#18243a;--muted:#64748b;--line:#e1e8f0;--blue:#315bdb}
     *{box-sizing:border-box}body{margin:0;color:var(--ink);background:radial-gradient(circle at 86% -13%,#e7efff 0,transparent 32%),var(--bg)}
@@ -50,7 +50,7 @@
 <div class="shell">
   <header class="topbar"><div class="brand"><span class="mark" aria-hidden="true">FL</span><span>适配工作台</span></div><div class="top-status"><span class="mode-badge" id="access-mode" hidden>局域网只读</span><span class="sync" id="sync" role="status" aria-live="polite">正在连接监控服务…</span></div></header>
   <main>
-    <div class="intro"><div><h1>双仓库适配进展</h1><p>vLLM-Plugin-FL 与 SGLang-Plugin-FL</p></div><div class="intro-note">选择仓库和分支，查看适配进展。<br>点击验收结果可查看测试明细。</div></div>
+    <div class="intro"><div><h1>多项目适配进展</h1><p>vLLM-Plugin-FL 与 SGLang-Plugin-FL</p></div><div class="intro-note">选择仓库和分支，查看适配进展。<br>点击验收结果可查看测试明细。</div></div>
     <div id="error" class="error" role="alert" hidden></div>
     <div id="projects" class="projects" aria-label="仓库适配进展"><div class="empty">正在读取两个仓库的分支、PR 和验收状态…</div></div>
     <p class="footnote" id="footnote">每 15 秒读取监控状态。各仓库可独立选择分支和读取最新远端状态；验收范围与测试版本以 PR 描述或本地记录为准。</p>
@@ -85,7 +85,7 @@
   function timeText(value){if(!value)return '尚未采集';const date=new Date(value);return Number.isFinite(date.getTime())?date.toLocaleString('zh-CN',{hour12:false}):'时间未知';}
   async function request(url,options={}){const response=await fetch(url,{cache:'no-store',credentials:'same-origin',signal:AbortSignal.timeout(90000),...options});const value=await response.json();if(!response.ok)throw new Error(value.error||'读取失败（HTTP '+response.status+'）');return value;}
   function makeCard(project){
-    const root=el('article','project '+project.engine),header=el('div','project-head'),title=el('div','project-title'),heading=el('h2','',project.label),engine=el('span','engine',project.engine==='sglang'?'SGLang':'vLLM');title.append(heading,engine);
+    const root=el('article','project '+project.engine),header=el('div','project-head'),title=el('div','project-title'),heading=el('h2','',project.label),engine=el('span','engine',({sglang:'SGLang',vllm:'vLLM'}[project.engine]||project.engine||'Monitor'));title.append(heading,engine);
     const controls=el('div','controls'),field=el('div','field'),select=el('select'),label=el('label','','目标分支'),refresh=el('button','button','刷新状态'),createLink=el('a','button primary','＋ 新建任务'),controlActions=el('div','control-actions');select.id='branch-'+project.id;select.setAttribute('aria-label',project.label+' 目标分支');label.htmlFor=select.id;refresh.type='button';refresh.title='重新采集此分支的 PR、CI 和验收结果';refresh.setAttribute('aria-label',project.label+' 刷新状态');createLink.hidden=readOnly||project.sessions===false;field.append(label,select);controlActions.append(refresh,createLink);controls.append(field,controlActions);
     const meta=el('div','meta'),feedback=el('p','card-feedback','每 15 秒读取 · 每分钟采集');feedback.setAttribute('role','status');feedback.setAttribute('aria-live','polite');header.append(title,controls,meta,feedback);const metrics=el('div','metrics'),counts={};for(const [key,label]of [['merged','代码合入'],['ci','适配 CI 通过'],['gate','验收通过']]){const box=el('div','metric'),value=el('strong','','—');box.append(el('span','',label),value);metrics.append(box);counts[key]=value;}
     const collection=el('div','collection'),notice=el('div','notice');notice.hidden=true;notice.setAttribute('role','status');const tableWrap=el('div','table-wrap'),table=el('table'),thead=el('thead'),tr=el('tr');for(const text of ['Backend / PR','代码合入','适配 CI','验收结果']){const th=el('th','',text);th.scope='col';tr.append(th);}thead.append(tr);const tbody=el('tbody');table.append(thead,tbody);tableWrap.append(table);
@@ -174,7 +174,7 @@
 
   function renderSnapshot(card,data){
     card.snapshot=data;card.branch=data.branch||card.branch;const options=[...new Set([card.branch,...(data.branches||[])].filter(Boolean))],prior=JSON.stringify([...card.select.options].map(option=>option.value));if(prior!==JSON.stringify(options)){card.select.replaceChildren();for(const branch of options){const option=el('option','',branch);option.value=branch;card.select.append(option);}}card.select.value=card.branch;
-    card.engine.textContent=(data.engine==='sglang'?'SGLang':'vLLM')+(data.upstream_version||data.vllm_version?' '+(data.upstream_version||data.vllm_version):'');card.meta.replaceChildren();const head=githubLink(data.head_url,'HEAD '+String(data.head||'').slice(0,10))||el('span','mono','HEAD '+String(data.head||'未知').slice(0,10));head.title=data.head||'';card.meta.append(head,el('span','','采集于 '+timeText(data.observed_at)));
+    card.engine.textContent=({sglang:'SGLang',vllm:'vLLM'}[data.engine]||data.engine||'Monitor')+(data.upstream_version||data.vllm_version?' '+(data.upstream_version||data.vllm_version):'');card.meta.replaceChildren();const head=githubLink(data.head_url,'HEAD '+String(data.head||'').slice(0,10))||el('span','mono','HEAD '+String(data.head||'未知').slice(0,10));head.title=data.head||'';card.meta.append(head,el('span','','采集于 '+timeText(data.observed_at)));
     const backends=[...(data.backends||[])].sort((a,b)=>(a.id!=="cuda")-(b.id!=="cuda")||String(a.label||a.id).localeCompare(String(b.label||b.id),"en",{sensitivity:"base"})),total=backends.length;card.counts.merged.textContent=backends.filter(item=>item.integration?.status==='merged').length+' / '+total;card.counts.ci.textContent=backends.filter(item=>effectiveCi(item,data.head)==='passed').length+' / '+total;card.counts.gate.textContent=backends.filter(item=>['passed','recorded_pass'].includes(effectiveGate(item,data.head))).length+' / '+total;
     const coverage = backends.find(item => item.gate?.total)?.gate;
     card.collection.replaceChildren();if(coverage)card.collection.append(el('span','','逐项覆盖 '+coverage.total+' 场景 · '+coverage.requests_total+' 请求 / backend'));
@@ -224,7 +224,7 @@
   async function update(){
     if(loading)return;loading=true;try{const data=await request(appUrl('api/projects-status'));for(const entry of data.projects||[]){const card=cards.get(entry.id);if(!card||card.busy)continue;if(card.branch!==card.project.default_branch){await loadCard(card);continue;}if(entry.status){renderSnapshot(card,entry.status);renderTasks(card,entry.adaptation_tasks||entry.sessions);}if(entry.error)showError(card,entry.error);} $('sync').textContent='已连接 · 页面读取于 '+new Date().toLocaleTimeString('zh-CN',{hour12:false});$('error').hidden=true;}catch(error){$('sync').textContent='连接中断 · 正在等待重试';$('error').textContent=error.message+'；已有采集结果保留。';$('error').hidden=false;}finally{loading=false;}
   }
-  async function initialize(){try{const data=await request(appUrl('api/projects'));readOnly=data.read_only===true;$('access-mode').hidden=!readOnly;$('projects').replaceChildren();for(const project of data.projects||[]){const card=makeCard(project);cards.set(project.id,card);$('projects').append(card.root);}if(!cards.size)throw new Error('尚未配置监控仓库');if(readOnly)$('footnote').textContent='团队只读看板每 15 秒读取状态，后台定期重新采集。可分别刷新两个仓库；原生子任务状态只读展示；机器配置、任务控制与原始私有存档由维护者在本机管理。';await update();setInterval(()=>{if(!document.hidden)update();},15000);document.addEventListener('visibilitychange',()=>{if(!document.hidden)update();});}catch(error){$('error').textContent=error.message;$('error').hidden=false;$('sync').textContent='监控服务需要处理';}}
+  async function initialize(){try{const data=await request(appUrl('api/projects'));readOnly=data.read_only===true;$('access-mode').hidden=!readOnly;$('projects').replaceChildren();for(const project of data.projects||[]){const card=makeCard(project);cards.set(project.id,card);$('projects').append(card.root);}if(!cards.size)throw new Error('尚未配置监控仓库');if(readOnly)$('footnote').textContent='团队只读看板每 15 秒读取状态，后台定期重新采集。可分别刷新各个仓库；原生子任务状态只读展示；机器配置、任务控制与原始私有存档由维护者在本机管理。';await update();setInterval(()=>{if(!document.hidden)update();},15000);document.addEventListener('visibilitychange',()=>{if(!document.hidden)update();});}catch(error){$('error').textContent=error.message;$('error').hidden=false;$('sync').textContent='监控服务需要处理';}}
   window.addEventListener('resize',scheduleAlignment);
   if(document.fonts)document.fonts.ready.then(scheduleAlignment);
   initialize();

@@ -1,5 +1,5 @@
 const assert=require('node:assert/strict'),fs=require('node:fs'),path=require('node:path'),vm=require('node:vm'),test=require('node:test');
-const html=fs.readFileSync(process.env.FL_SESSION_DRAFT_SOURCE||path.join(__dirname,'..','sessions.html'),'utf8');
+const html=fs.readFileSync(process.env.FL_SESSION_DRAFT_SOURCE||path.join(__dirname,'..','web/templates/sessions.html'),'utf8');
 const start='  // BEGIN session message drafts',end='  // END session message drafts';
 const begin=html.indexOf(start),finish=html.indexOf(end,begin);
 assert(begin>=0&&finish>begin,'session message draft helper exists');

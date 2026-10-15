@@ -9,7 +9,7 @@ from pathlib import Path
 import re
 import time
 
-from native_task_observer import NativeTaskError, NativeTaskObserver
+from fl_dashboard.tasks.native_task_observer import NativeTaskError, NativeTaskObserver
 
 
 UUID = re.compile(r"[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}\Z")
@@ -42,7 +42,7 @@ def thread_name(manager, session):
 
 def remember_thread(manager, session, result, client):
     """Persist identity before optional naming, so a title error never duplicates it."""
-    from codex_sessions import SessionError
+    from fl_dashboard.agents.codex_sessions import SessionError
     with manager._lock:
         session["thread_id"] = result["thread"]["id"]
         session["model"] = result.get("model")
@@ -166,7 +166,7 @@ def open_desktop_url(url):
 
 @contextmanager
 def request_timeout(client, deadline):
-    from codex_sessions import SessionError
+    from fl_dashboard.agents.codex_sessions import SessionError
     remaining = deadline - time.monotonic()
     if remaining <= 0:
         raise SessionError("Codex desktop handoff timed out")
@@ -181,7 +181,7 @@ def request_timeout(client, deadline):
 
 
 def desktop_metadata(manager, session, client, deadline):
-    from codex_sessions import SessionError
+    from fl_dashboard.agents.codex_sessions import SessionError
     tid = session["thread_id"]
     for method, params, field in (
             ("thread/read", {"threadId": tid, "includeTurns": False}, "desktop_metadata_error"),
@@ -210,7 +210,7 @@ def desktop_metadata(manager, session, client, deadline):
 
 def desktop(manager, session_id, *, launcher=None, timeout=15):
     """Stop only this local turn, persist transfer, then open the same thread ID."""
-    from codex_sessions import SessionError
+    from fl_dashboard.agents.codex_sessions import SessionError
     if not isinstance(timeout, (int, float)) or isinstance(timeout, bool) or not 0 < timeout <= 30:
         raise SessionError("Invalid desktop handoff timeout")
     launcher = launcher or open_desktop_url

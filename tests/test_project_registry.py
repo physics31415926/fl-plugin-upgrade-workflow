@@ -6,10 +6,10 @@ import threading
 import unittest
 from unittest.mock import Mock, patch
 
-import flflow
-from project_registry import ProjectContext, ProjectError, ProjectRegistry, RemoteSessionManager
-from codex_sessions import SessionError
-from share_server import ProjectSnapshotCache, make_server as make_share_server
+import fl_dashboard.services.flflow as flflow
+from fl_dashboard.projects.project_registry import ProjectContext, ProjectError, ProjectRegistry, RemoteSessionManager
+from fl_dashboard.agents.codex_sessions import SessionError
+from fl_dashboard.services.share_server import ProjectSnapshotCache, make_server as make_share_server
 
 
 class FakeMonitor:
@@ -283,7 +283,7 @@ class ProjectRegistryTests(unittest.TestCase):
         forbidden=Mock(side_effect=AssertionError("No executor or credential store may be constructed"))
         original_import=builtins.__import__
         def safe_import(name,*args,**kwargs):
-            if name.split(".")[0] in {"flagscale_adapter","flagscale_worker","claude_agent","codex_sessions","agent_settings","composite_sessions"}:
+            if name.rsplit(".",1)[-1] in {"flagscale_adapter","flagscale_worker","claude_agent","codex_sessions","agent_settings","composite_sessions"}:
                 raise AssertionError("Readonly imported an executor or credential module")
             return original_import(name,*args,**kwargs)
         with patch("builtins.__import__",side_effect=safe_import):

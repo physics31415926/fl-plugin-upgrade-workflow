@@ -11,9 +11,9 @@ import sys
 import threading
 import uuid
 
-from agent_settings import FlagScaleSettingsStore, validate_flagscale_settings, FLAGSCALE_DEFAULTS
-from claude_agent import process_environment
-from codex_sessions import CodexSessionManager, SessionError
+from fl_dashboard.agents.agent_settings import FlagScaleSettingsStore, validate_flagscale_settings, FLAGSCALE_DEFAULTS
+from fl_dashboard.agents.claude_agent import process_environment
+from fl_dashboard.agents.codex_sessions import CodexSessionManager, SessionError
 
 KEY_ENV = "FLFLOW_FLAGSCALE_API_KEY"
 CAPABILITIES = {"supports_resume": False, "supports_mid_turn_steer": False,

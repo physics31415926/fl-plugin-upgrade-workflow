@@ -9,7 +9,7 @@ import threading
 import time
 from unittest import TestCase, mock
 
-from codex_sessions import AppServerClient, SessionError, atomic_json
+from fl_dashboard.agents.codex_sessions import AppServerClient, SessionError, atomic_json
 from tests import test_codex_sessions as fixtures
 
 
@@ -35,7 +35,7 @@ class AtomicSaveTest(TestCase):
                     raise windows_lock(5 if len(attempts) == 1 else 32)
                 original_replace(source, target)
 
-            with mock.patch("codex_sessions.os.replace", side_effect=replace), mock.patch("codex_sessions.time.sleep") as sleep:
+            with mock.patch("fl_dashboard.agents.codex_sessions.os.replace", side_effect=replace), mock.patch("fl_dashboard.agents.codex_sessions.time.sleep") as sleep:
                 atomic_json(path, {"new": True})
             self.assertEqual(json.loads(path.read_text()), {"new": True})
             self.assertEqual(len(attempts), 3)
@@ -47,7 +47,7 @@ class AtomicSaveTest(TestCase):
             path = Path(directory) / "state.json"
             atomic_json(path, {"old": True})
             for error, count in ((windows_lock(33), 4), (OSError(errno.ENOSPC, "full"), 1)):
-                with self.subTest(error=type(error).__name__), mock.patch("codex_sessions.os.replace", side_effect=error) as replace, mock.patch("codex_sessions.time.sleep") as sleep:
+                with self.subTest(error=type(error).__name__), mock.patch("fl_dashboard.agents.codex_sessions.os.replace", side_effect=error) as replace, mock.patch("fl_dashboard.agents.codex_sessions.time.sleep") as sleep:
                     with self.assertRaises(OSError):
                         atomic_json(path, {"new": True})
                 self.assertEqual(replace.call_count, count)
@@ -81,7 +81,7 @@ class ReaderTest(TestCase):
         frames = io.StringIO(json.dumps({"method": "item/commandExecution/outputDelta", "params": {"delta": "output"}}) + "\n" +
                              json.dumps({"id": 1, "result": {"turn": {"id": "actual-turn"}}}) + "\n")
         client = self.client(frames, callback)
-        with self.assertLogs("codex_sessions", level="WARNING") as logs:
+        with self.assertLogs("fl_dashboard.agents.codex_sessions", level="WARNING") as logs:
             client._read()
         self.assertEqual(client._pending[1].result(), {"turn": {"id": "actual-turn"}})
         self.assertEqual(records[0]["method"], "connection/callbackError")
@@ -93,7 +93,7 @@ class ReaderTest(TestCase):
     def test_even_failed_diagnostic_callback_keeps_protocol_responses_alive(self):
         client = self.client(io.StringIO('{"method":"notification"}\n{"id":1,"result":{"ok":true}}\n'),
                              mock.Mock(side_effect=windows_lock()))
-        with self.assertLogs("codex_sessions", level="WARNING"):
+        with self.assertLogs("fl_dashboard.agents.codex_sessions", level="WARNING"):
             client._read()
         self.assertEqual(client._pending[1].result(), {"ok": True})
         self.assertTrue(client.stderr)
@@ -160,7 +160,7 @@ class EventPersistenceTest(TestCase):
     def test_output_burst_is_throttled_and_quiet_final_frame_is_saved(self):
         session = self.session()
         ManualTimer.instances.clear()
-        with mock.patch("codex_sessions.threading.Timer", ManualTimer), mock.patch("codex_sessions.time.monotonic", return_value=100.1), mock.patch("codex_sessions.atomic_json", wraps=atomic_json) as save:
+        with mock.patch("fl_dashboard.agents.codex_sessions.threading.Timer", ManualTimer), mock.patch("fl_dashboard.agents.codex_sessions.time.monotonic", return_value=100.1), mock.patch("fl_dashboard.agents.codex_sessions.atomic_json", wraps=atomic_json) as save:
             for index in range(500):
                 self.event(session, delta="frame-" + str(index))
             self.assertEqual(save.call_count, 0)
@@ -178,7 +178,7 @@ class EventPersistenceTest(TestCase):
     def test_failed_approval_save_is_visible_and_retries_without_approval_or_status_loss(self):
         session = self.session()
         original = self.stored(session)
-        with mock.patch("codex_sessions.threading.Timer", ManualTimer), mock.patch("codex_sessions.atomic_json", side_effect=windows_lock()), self.assertLogs("codex_sessions", level="WARNING"):
+        with mock.patch("fl_dashboard.agents.codex_sessions.threading.Timer", ManualTimer), mock.patch("fl_dashboard.agents.codex_sessions.atomic_json", side_effect=windows_lock()), self.assertLogs("fl_dashboard.agents.codex_sessions", level="WARNING"):
             self.manager._event(session["id"], {"id": 9, "method": "item/commandExecution/requestApproval", "params": {"threadId": "thread-123", "command": "private-command"}})
             state = self.manager._copy(session["id"])
             self.assertEqual(state["status"], "waiting_approval")
@@ -206,7 +206,7 @@ class EventPersistenceTest(TestCase):
                 raise windows_lock()
             return original_open(path, *args, **kwargs)
 
-        with mock.patch("codex_sessions.threading.Timer", ManualTimer), mock.patch.object(Path, "open", open_file), self.assertLogs("codex_sessions", level="WARNING"):
+        with mock.patch("fl_dashboard.agents.codex_sessions.threading.Timer", ManualTimer), mock.patch.object(Path, "open", open_file), self.assertLogs("fl_dashboard.agents.codex_sessions", level="WARNING"):
             self.manager._event(session["id"], {"id": 3, "method": "item/commandExecution/requestApproval", "params": {"threadId": "thread-123", "command": "read-only"}})
             state = self.stored(session)
             self.assertEqual(state["status"], "waiting_approval")
@@ -220,7 +220,7 @@ class EventPersistenceTest(TestCase):
 
     def test_completion_is_immediate_and_cancelled_tail_timer_cannot_replace_new_timer(self):
         session = self.session()
-        with mock.patch("codex_sessions.threading.Timer", ManualTimer), mock.patch("codex_sessions.time.monotonic", return_value=100.1):
+        with mock.patch("fl_dashboard.agents.codex_sessions.threading.Timer", ManualTimer), mock.patch("fl_dashboard.agents.codex_sessions.time.monotonic", return_value=100.1):
             self.event(session, delta="first")
             old_timer = self.manager._save_timers[session["id"]]
             self.event(session, "turn/completed", turn={"status": "completed"})
@@ -235,7 +235,7 @@ class EventPersistenceTest(TestCase):
 
     def test_close_cancels_timers_and_flushes_last_output(self):
         session = self.session()
-        with mock.patch("codex_sessions.threading.Timer", ManualTimer), mock.patch("codex_sessions.time.monotonic", return_value=100.1):
+        with mock.patch("fl_dashboard.agents.codex_sessions.threading.Timer", ManualTimer), mock.patch("fl_dashboard.agents.codex_sessions.time.monotonic", return_value=100.1):
             self.event(session, delta="last-output")
             timer = self.manager._save_timers[session["id"]]
             self.manager.close()
@@ -253,7 +253,7 @@ class EventPersistenceTest(TestCase):
             if value["events"][-1]["params"].get("delta") == "quiet-tail":
                 saved.set()
 
-        with mock.patch("codex_sessions.atomic_json", side_effect=save):
+        with mock.patch("fl_dashboard.agents.codex_sessions.atomic_json", side_effect=save):
             self.event(session, delta="quiet-tail")
             self.assertTrue(saved.wait(3), "tail timer did not persist the quiet final frame")
             with self.manager._lock:

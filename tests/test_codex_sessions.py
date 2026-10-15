@@ -8,7 +8,7 @@ import threading
 import unittest
 from unittest.mock import patch
 
-from codex_sessions import CodexSessionManager, SessionError, atomic_json
+from fl_dashboard.agents.codex_sessions import CodexSessionManager, SessionError, atomic_json
 
 
 class FakeProcess:

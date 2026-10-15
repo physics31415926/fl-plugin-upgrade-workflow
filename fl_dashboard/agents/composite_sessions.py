@@ -5,7 +5,7 @@ import copy
 import re
 import threading
 
-from codex_sessions import SessionError
+from fl_dashboard.agents.codex_sessions import SessionError
 
 
 PUBLIC_SETTINGS_FIELDS = {"provider", "base_url", "model", "permission_mode", "allowed_tools", "max_turns",

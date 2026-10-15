@@ -10,8 +10,8 @@ import subprocess
 import threading
 import uuid
 
-from codex_sessions import CodexSessionManager, SessionError
-from agent_settings import AgentSettingsStore, validate_public_settings
+from fl_dashboard.agents.codex_sessions import CodexSessionManager, SessionError
+from fl_dashboard.agents.agent_settings import AgentSettingsStore, validate_public_settings
 
 
 def find_claude_executable(config=None):

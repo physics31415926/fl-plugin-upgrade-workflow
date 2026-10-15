@@ -20,7 +20,7 @@ import subprocess
 import threading
 import time
 
-from codex_sessions import CodexSessionManager, SessionError
+from fl_dashboard.agents.codex_sessions import CodexSessionManager, SessionError
 
 _RESERVED = {"_automatic_proof", "automatic_context"}
 _FIELDS = ("profile_id", "backend", "branch", "ssh_alias", "remote_workspace",
@@ -341,7 +341,7 @@ def normalize_automatic_task(project, payload, *, runner=None, ssh_executable=No
     workspace = probe["home"].rstrip("/") + "/.flflow/tasks/" + project_id + "/" + secrets.token_hex(8) + "/candidate"
     context = {"schema_version": 1, "project_id": project_id, "provider": provider,
                "backend_source": backend_source, "workspace_exists": False, "probe": probe}
-    from project_registry import RemoteSessionManager
+    from fl_dashboard.projects.project_registry import RemoteSessionManager
     legacy_remote = isinstance(target, RemoteSessionManager)
     value = {"provider": provider, "profile_id": profile_id, "role": "compute", "backend": backend,
              "branch": branch, "ssh_alias": profile["ssh_alias"], "remote_workspace": workspace,

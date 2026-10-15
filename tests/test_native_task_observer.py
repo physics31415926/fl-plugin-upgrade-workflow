@@ -4,8 +4,8 @@ from pathlib import Path
 import tempfile
 import unittest
 
-from native_task_observer import NativeTaskError, NativeTaskObserver
-from project_registry import ProjectContext
+from fl_dashboard.tasks.native_task_observer import NativeTaskError, NativeTaskObserver
+from fl_dashboard.projects.project_registry import ProjectContext
 
 
 THREAD = "11111111-1111-1111-1111-111111111111"

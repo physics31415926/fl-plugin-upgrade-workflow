@@ -5,8 +5,8 @@ import tempfile
 import unittest
 from unittest.mock import Mock
 
-from project_registry import ProjectContext
-from readonly_session_observer import ReadonlySessionObserver
+from fl_dashboard.projects.project_registry import ProjectContext
+from fl_dashboard.tasks.readonly_session_observer import ReadonlySessionObserver
 
 
 class ReadonlySessionObserverTests(unittest.TestCase):

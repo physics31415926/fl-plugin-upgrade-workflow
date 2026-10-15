@@ -5,10 +5,10 @@ import tempfile
 import unittest
 from unittest.mock import Mock, patch
 
-from codex_sessions import CodexSessionManager, SessionError, now
-from composite_sessions import CompositeSessionManager
-from claude_agent import ClaudeSessionManager
-from flagscale_adapter import FlagScaleSessionManager
+from fl_dashboard.agents.codex_sessions import CodexSessionManager, SessionError, now
+from fl_dashboard.agents.composite_sessions import CompositeSessionManager
+from fl_dashboard.agents.claude_agent import ClaudeSessionManager
+from fl_dashboard.agents.flagscale_adapter import FlagScaleSessionManager
 
 
 class RecordingClient:
@@ -62,7 +62,7 @@ class CodexLaunchRecoveryTests(unittest.TestCase):
         self.manager = CodexSessionManager(config, self.root)
         self.manager.client_factory = RecordingClient
         self.addCleanup(self.manager.close)
-        self.resolver = patch("codex_runtime.resolve_codex_executable", return_value=str(self.current)).start()
+        self.resolver = patch("fl_dashboard.agents.codex_runtime.resolve_codex_executable", return_value=str(self.current)).start()
         self.addCleanup(patch.stopall)
         RecordingClient.instances.clear()
         RecordingClient.account = {"type": "chatgpt"}
@@ -219,7 +219,7 @@ class CodexLaunchRecoveryTests(unittest.TestCase):
                 manager._require_free_machine = Mock()
                 manager._check_connection = Mock(side_effect=AssertionError("unexpected SSH"))
                 manager._run = Mock(side_effect=AssertionError("unexpected model worker"))
-                with patch("codex_sessions.threading.Thread") as worker:
+                with patch("fl_dashboard.agents.codex_sessions.threading.Thread") as worker:
                     result = manager._launch(session["id"], "synthetic task instructions")
                 self.assertEqual(result["status"], "starting")
                 self.assertEqual(manager.executable, str(native))

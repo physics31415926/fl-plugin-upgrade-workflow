@@ -1,5 +1,5 @@
 import unittest
-from branch_monitor import BranchMonitor
+from fl_dashboard.monitoring.branch_monitor import BranchMonitor
 
 class BackendScopeTests(unittest.TestCase):
     def monitor(self):

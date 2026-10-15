@@ -1,8 +1,8 @@
 import json
 import unittest
 
-from pr_acceptance import detail_text, parse_pr_description
-from share_server import sanitize_snapshot
+from fl_dashboard.monitoring.pr_acceptance import detail_text, parse_pr_description
+from fl_dashboard.services.share_server import sanitize_snapshot
 
 
 class AcceptanceDetailTests(unittest.TestCase):
@@ -19,7 +19,7 @@ class AcceptanceDetailTests(unittest.TestCase):
         body = "## Tests\n- [x] Validation <b>passed</b>; test output reviewed"
         result = parse_pr_description(body)
         self.assertEqual("passed", result["status"])
-        self.assertEqual("测试说明", result["rows"][0]["label"])
+        self.assertEqual("Validation", result["rows"][0]["label"])
         self.assertNotIn("<", result["rows"][0]["result"])
 
     def test_cells_redact_private_paths_addresses_credentials_and_shell_commands(self):

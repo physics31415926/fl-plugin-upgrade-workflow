@@ -9,6 +9,7 @@ from pathlib import Path
 import re
 import threading
 from urllib.parse import parse_qs, urlencode, urlsplit
+from fl_dashboard.monitoring.registry import create_monitor, monitor_type
 
 
 class ProjectError(ValueError):
@@ -113,7 +114,7 @@ class RemoteSessionManager:
 
     @staticmethod
     def _fail(message):
-        from codex_sessions import SessionError
+        from fl_dashboard.agents.codex_sessions import SessionError
         raise SessionError(message)
 
     @staticmethod
@@ -179,7 +180,7 @@ class RemoteSessionManager:
         self._fail("Unknown session")
 
     def _require_free_machine(self, machine, excluding=None):
-        from codex_sessions import require_free_machine
+        from fl_dashboard.agents.codex_sessions import require_free_machine
         require_free_machine(machine, self.peer_managers,
                              excluding_manager=self, excluding_session=excluding)
 
@@ -289,28 +290,27 @@ class ProjectRegistry:
                     flagscale_sessions_factory=None, flagscale_settings_factory=None):
         # Imports are lazy: a public share never imports or creates control sessions.
         if monitor_factory is None:
-            from branch_monitor import BranchMonitor
-            monitor_factory = BranchMonitor
+            monitor_factory = create_monitor
         if not read_only and sessions_factory is None:
-            from codex_sessions import CodexSessionManager
+            from fl_dashboard.agents.codex_sessions import CodexSessionManager
             sessions_factory = CodexSessionManager
         if not read_only and workflow_factory is None:
-            from flflow import Engine
+            from fl_dashboard.services.flflow import Engine
             workflow_factory = Engine
         path = Path(path).expanduser().resolve()
         settings_store = flagscale_settings_store = None
         if not read_only:
             if settings_factory is None:
-                from agent_settings import AgentSettingsStore
+                from fl_dashboard.agents.agent_settings import AgentSettingsStore
                 settings_factory = AgentSettingsStore
             if claude_sessions_factory is None:
-                from claude_agent import ClaudeSessionManager
+                from fl_dashboard.agents.claude_agent import ClaudeSessionManager
                 claude_sessions_factory = ClaudeSessionManager
             if flagscale_settings_factory is None:
-                from agent_settings import FlagScaleSettingsStore
+                from fl_dashboard.agents.agent_settings import FlagScaleSettingsStore
                 flagscale_settings_factory = FlagScaleSettingsStore
             if flagscale_sessions_factory is None:
-                from flagscale_adapter import FlagScaleSessionManager
+                from fl_dashboard.agents.flagscale_adapter import FlagScaleSessionManager
                 flagscale_sessions_factory = FlagScaleSessionManager
             settings_directory = path.parent / "runs" / "agent-settings"
             settings_store = settings_factory(settings_directory)
@@ -343,8 +343,8 @@ class ProjectRegistry:
                     if key in config:
                         config[key] = str(cls._path(config_path.parent, config[key], key))
                 project.engine_name = config.get("engine", project.engine_name)
-                if project.engine_name not in ("vllm", "sglang"):
-                    raise ProjectError("engine must be vllm or sglang")
+                adapter = monitor_type(project.engine_name)
+                config["tasks_enabled"] = adapter.supports_tasks and config.get("tasks_enabled", True) is True
                 config["engine"] = project.engine_name
                 project.default_branch = config.get("branch", "0.4.0-dev" if project.engine_name == "vllm" else "main")
                 config.setdefault("branch", project.default_branch)
@@ -383,7 +383,7 @@ class ProjectRegistry:
                 if config is not None:
                     if config.get("external_tasks"):
                         try:
-                            from native_task_observer import NativeTaskObserver
+                            from fl_dashboard.tasks.native_task_observer import NativeTaskObserver
                             project.native_tasks = NativeTaskObserver(config["external_tasks"], base)
                         except (ValueError, OSError) as exc:
                             project.native_tasks_error = f"Native task observer unavailable: {exc}"
@@ -392,7 +392,7 @@ class ProjectRegistry:
                     except Exception as exc:
                         project.monitor_error = f"Project monitor unavailable: {exc}"
                     if read_only:
-                        from readonly_session_observer import ReadonlySessionObserver
+                        from fl_dashboard.tasks.readonly_session_observer import ReadonlySessionObserver
                         project.readonly_sessions = ReadonlySessionObserver([
                             {"provider": "codex", "directory": config["sessions_dir"]},
                             {"provider": "claude", "directory": config["claude_sessions_dir"]},
@@ -400,8 +400,8 @@ class ProjectRegistry:
                     else:
                         project.agent_settings = settings_store
                         project.flagscale_settings = flagscale_settings_store
-                    if not read_only and project.monitor is not None:
-                        from composite_sessions import CompositeSessionManager
+                    if not read_only and project.monitor is not None and config.get("tasks_enabled", True):
+                        from fl_dashboard.agents.composite_sessions import CompositeSessionManager
                         codex, claude, flagscale, provider_errors = None, None, None, {}
                         try:
                             codex = (RemoteSessionManager(config, base) if "sessions_api_url" in config
@@ -430,7 +430,7 @@ class ProjectRegistry:
                                 flagscale_settings=flagscale_settings_store, errors=provider_errors)
                         else:
                             project.sessions_error = "Project agent session providers are unavailable"
-                if workflow_path is not None and not read_only:
+                if workflow_path is not None and not read_only and config is not None and config.get("tasks_enabled", True):
                     try:
                         project.workflow = workflow_factory(workflow_path)
                     except Exception as exc:

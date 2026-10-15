@@ -1,5 +1,5 @@
 const assert=require('node:assert/strict'),fs=require('node:fs'),path=require('node:path'),vm=require('node:vm'),test=require('node:test');
-const html=fs.readFileSync(path.join(__dirname,'..','sessions.html'),'utf8'),source=[...html.matchAll(/<script\b[^>]*>([\s\S]*?)<\/script>/g)][0][1];
+const html=fs.readFileSync(path.join(__dirname,'..','web/templates/sessions.html'),'utf8'),source=[...html.matchAll(/<script\b[^>]*>([\s\S]*?)<\/script>/g)][0][1];
 function between(start,end){const a=source.indexOf(start),b=source.indexOf(end,a);assert(a>=0&&b>a,`source exists: ${start}`);return source.slice(a,b);}
 function ui(info={available:true,authenticated:true,error:null}){
   const nodes=new Map(),calls=[],notices=[],session={id:'original-task',provider:'codex',status:'failed',thread_id:null,backend:'enflame',branch:'target-demo',worktree:'/local/original-worktree'};

@@ -7,10 +7,10 @@ import threading
 import unittest
 from unittest.mock import Mock
 
-from codex_sessions import SessionError, require_free_machine
-from composite_sessions import CompositeSessionManager
-import flflow
-from project_registry import ProjectContext, ProjectRegistry, RemoteSessionManager
+from fl_dashboard.agents.codex_sessions import SessionError, require_free_machine
+from fl_dashboard.agents.composite_sessions import CompositeSessionManager
+import fl_dashboard.services.flflow as flflow
+from fl_dashboard.projects.project_registry import ProjectContext, ProjectRegistry, RemoteSessionManager
 
 
 class FakeSettings:
