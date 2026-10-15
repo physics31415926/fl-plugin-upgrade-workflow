@@ -173,7 +173,10 @@ def parse_pr_description(body) -> dict | None:
                 configuration = " · ".join(cell for i, cell in enumerate(cells) if i not in (0, result_index))
                 result = _without_ci_clauses(cells[result_index])
             else:
-                label, configuration, result = "测试说明", "", candidate
+                result = candidate
+                text = detail_text(candidate, 4000)
+                label = re.split(r"[:：]|\b(?:passed|failed|PASS|FAIL|successful)\b", text, maxsplit=1, flags=re.I)[0].strip(" ;,-")
+                label, configuration = label or text or "验收项", ""
             rows.append({"label": detail_text(label, 160) or "测试结果",
                          "configuration": detail_text(configuration, 300),
                          "result": detail_text(result), "status": status})
@@ -237,6 +240,35 @@ def description_blocks(body):
             table = None
             blocks.append({"type": "paragraph", "text": detail_text(line, 4000)})
     return blocks
+
+
+def public_acceptance_tables(blocks):
+    """Export only redacted tables under explicit test headings; no PR prose."""
+    result = []
+    active = False
+    remaining = 65536
+    for block in blocks[:4000] if isinstance(blocks, list) else []:
+        if not isinstance(block, dict) or remaining <= 0:
+            continue
+        if block.get("type") == "heading":
+            title = block.get("text", "")
+            active = isinstance(title, str) and bool(TEST_CONTEXT.search(title)) and not CI_ONLY.search(title)
+        elif active and block.get("type") == "table":
+            rows = []
+            for row in block.get("rows", [])[:200] if isinstance(block.get("rows"), list) else []:
+                if not isinstance(row, list) or remaining <= 0:
+                    continue
+                cells = []
+                for value in row[:12]:
+                    if remaining <= 0:
+                        break
+                    text = detail_text(value, min(1200, remaining))
+                    remaining -= len(text)
+                    cells.append(text)
+                rows.append(cells)
+            if rows:
+                result.append({"type":"table", "rows":rows})
+    return result
 
 
 def acceptance_summary(pr, pr_data, records, gate, *, branch: str, head: str) -> dict:

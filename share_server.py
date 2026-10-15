@@ -25,7 +25,7 @@ from urllib.parse import parse_qs, urlsplit
 
 from branch_monitor import BranchMonitor
 from project_registry import ProjectRegistry
-from pr_acceptance import detail_text
+from pr_acceptance import public_acceptance_tables, detail_text
 
 
 CAPABILITIES = {"read_only": True, "sessions": False, "refresh": True, "evidence": False}
@@ -124,6 +124,12 @@ paths, machine aliases, private IPs, source task IDs, or commands.
                 item["source"] = None
             item["pr_url"] = _public_pr_url(acceptance.get("pr_url"))
             item["archive_url"] = None
+            item["acceptance_tables"] = []
+            for table in public_acceptance_tables(acceptance.get("description_blocks")):
+                # Redact every public cell at the output boundary as well.
+                item["acceptance_tables"].append({"type": "table", "rows": [
+                    [detail_text(cell, 1200) for cell in row]
+                    for row in table["rows"]]})
             item["rows"] = []
             rows = acceptance.get("rows")
             for row in rows[:100] if isinstance(rows, list) else []:

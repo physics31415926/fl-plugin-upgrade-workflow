@@ -141,7 +141,7 @@ for(const page of ['overview.html','index.html']) {
     const original=JSON.stringify(rows),modal=context.dialog({...primary,rows,rows_total:120,rows_truncated:true,archive_available:true,archive_url:'/api/acceptance-record?record=private'},'NVIDIA',opener);
     assert.equal(modal.tagName,'DIALOG');assert.equal(modal.modal,true);assert.match(modal.attributes['aria-label'],/NVIDIA/);
     const table=descendants(modal).find(node=>node.tagName==='TABLE'),body=table.childNodes.find(node=>node.tagName==='TBODY');
-    assert.equal(body.childNodes.length,2);assert.equal(body.childNodes[0].childNodes[1].textContent,'eager / single');assert.equal(body.childNodes[1].childNodes[0].textContent,rows[1].label);
+    assert.equal(body.childNodes.length,2);assert.equal(body.childNodes[0].childNodes.length,2);assert.match(body.childNodes[0].childNodes[0].textContent,/Model A.*eager \/ single/);assert.equal(body.childNodes[0].childNodes[1].textContent,'作者报告 1/1');assert.ok(body.childNodes[1].childNodes[0].textContent.includes(rows[1].label));
     assert.equal(descendants(modal).filter(node=>node.tagName==='IMG').length,0);assert.match(modal.textContent,/PR 作者报告/);assert.match(modal.textContent,/2 条 \/ 共 120 条/);
     const links=descendants(modal).filter(node=>node.tagName==='A');assert.equal(links.length,1);assert.equal(links[0].href,pr);assert.match(links[0].textContent,/原 PR/);
     const close=descendants(modal).find(node=>node.tagName==='BUTTON');assert.equal(close.type,'button');assert.equal(close.autofocus,true);

@@ -188,7 +188,7 @@
       .backend-detail { padding: 14px; }
     }
   .acceptance-primary{border:1px solid var(--line);border-radius:10px;padding:14px 16px;background:#fff}.acceptance-primary p{font-size:13px;white-space:pre-wrap;overflow-wrap:anywhere;margin:9px 0}.acceptance-heading{display:flex;align-items:center;gap:10px;flex-wrap:wrap;font-size:13px;font-weight:650}.acceptance-evidence{margin:14px 0 20px}.acceptance-evidence>summary{cursor:pointer;color:var(--muted);font-size:12px}.record-entry>strong{margin-right:8px}.record-entry{padding:12px 0;border-bottom:1px solid var(--line);overflow-wrap:anywhere}.record-entry p{margin:6px 0}
-.acceptance-open{display:inline-flex;align-items:center;gap:7px;border:0;padding:0;background:transparent;color:inherit;cursor:pointer;text-align:left;font:inherit}.acceptance-open:focus-visible{outline:3px solid #95b5ff;outline-offset:4px}.acceptance-dialog{width:min(1000px,92vw);max-height:85vh;overflow:auto;border:1px solid var(--line);border-radius:14px;padding:22px;color:var(--ink);background:#fff;box-shadow:0 24px 80px #18243a33}.acceptance-dialog::backdrop{background:#18243a66}.acceptance-dialog-head{display:flex;justify-content:space-between;align-items:center;gap:18px}.acceptance-dialog h2{font-size:20px;margin:0}.acceptance-dialog p{font-size:13px;white-space:pre-wrap;overflow-wrap:anywhere}.acceptance-dialog .acceptance-table-wrap{overflow-x:auto}.acceptance-dialog table{width:100%;border-collapse:collapse;font-size:13px}.acceptance-dialog th,.acceptance-dialog td{padding:10px 12px;text-align:left;vertical-align:top;border-bottom:1px solid var(--line);overflow-wrap:anywhere;white-space:pre-wrap}.acceptance-dialog th{white-space:nowrap;color:var(--muted)}.acceptance-dialog caption{text-align:left;font-size:12px;color:var(--muted);padding:8px 0}.acceptance-dialog td:last-child{white-space:nowrap}.acceptance-dialog .dialog-close{padding:6px 11px;cursor:pointer;border:1px solid var(--line);border-radius:7px;background:#fff;color:var(--ink);font:inherit}.acceptance-dialog .original-pr{display:inline-block;margin-top:14px;font-size:13px}
+.acceptance-open{display:inline-flex;align-items:center;gap:7px;border:0;padding:0;background:transparent;color:inherit;cursor:pointer;text-align:left;font:inherit}.acceptance-open:focus-visible{outline:3px solid #95b5ff;outline-offset:4px}.acceptance-dialog{width:min(1000px,92vw);max-height:85vh;overflow:auto;border:1px solid var(--line);border-radius:14px;padding:22px;color:var(--ink);background:#fff;box-shadow:0 24px 80px #18243a33}.acceptance-dialog::backdrop{background:#18243a66}.acceptance-dialog-head{display:flex;justify-content:space-between;align-items:center;gap:18px}.acceptance-dialog h2{font-size:20px;margin:0}.acceptance-dialog p{font-size:13px;white-space:pre-wrap;overflow-wrap:anywhere}.acceptance-dialog .acceptance-table-wrap{overflow-x:auto}.acceptance-dialog table{width:100%;border-collapse:collapse;font-size:13px}.acceptance-dialog th,.acceptance-dialog td{padding:10px 12px;text-align:left;vertical-align:top;border-bottom:1px solid var(--line);overflow-wrap:anywhere;white-space:pre-wrap}.acceptance-dialog th{white-space:nowrap;color:var(--muted)}.acceptance-dialog caption{text-align:left;font-size:12px;color:var(--muted);padding:8px 0}.acceptance-dialog td:last-child{white-space:pre-wrap}.acceptance-dialog .dialog-close{padding:6px 11px;cursor:pointer;border:1px solid var(--line);border-radius:7px;background:#fff;color:var(--ink);font:inherit}.acceptance-dialog .original-pr{display:inline-block;margin-top:14px;font-size:13px}
 .backend-row{padding:17px}.backend-row .backend-toggle{padding:0}.backend-expand{border:0;background:transparent;color:var(--muted);cursor:pointer;font-size:21px;padding:0}.backend-expand[aria-expanded="true"]{transform:rotate(90deg)}
 
     /* A compact toolbar leaves more room for tasks and adaptation results. */
@@ -660,17 +660,20 @@
     if (rows.length) {
       const wrap = el("div", "acceptance-table-wrap"), table = el("table"), head = el("thead"), header = el("tr"), body = el("tbody");
       table.append(el("caption", "", result.source === "pr_description" ? "PR 作者报告的验收明细" : "已有验收记录"));
-      for (const name of ["验收项", "配置 / 场景", "结果说明", "状态"]) {const cell = el("th", "", name);cell.scope = "col";header.append(cell);}head.append(header);
+      for (const name of ["验收项", "结果"]) {const cell = el("th", "", name);cell.scope = "col";header.append(cell);}head.append(header);
       for (const row of rows) {
-        const item = el("tr");item.append(el("td", "", row.label || "验收项"), el("td", "", row.configuration || "—"), el("td", "", row.result || "—"));
-        const status = el("td");status.append(badge(row.status, acceptanceText(row.status)));item.append(status);body.append(item);
+        const item = el("tr"),name=el("td","",row.label||"验收项"),outcome=el("td");
+        if(row.configuration)name.append(el("div","",row.configuration));
+        outcome.append(el("span","",row.result||acceptanceText(row.status)));
+        item.append(name,outcome);body.append(item);
       }
       table.append(head, body);wrap.append(table);dialog.append(wrap);
       if (result.rows_truncated || Number(result.rows_total) > rows.length) dialog.append(el("p", "", "当前展示 " + rows.length + " 条" + (Number.isInteger(result.rows_total) && result.rows_total > rows.length ? " / 共 " + result.rows_total + " 条" : "") + "；完整范围请查看原 PR。"));
     } else dialog.append(el("p", "empty", "暂无可识别的验收表格。可查看原 PR，或在分支详情中查看本地记录与逐项结果。"));
-    const blocks = Array.isArray(result.description_blocks) ? result.description_blocks.slice(0,4000) : [];
+    const blocks = Array.isArray(result.description_blocks) ? result.description_blocks.slice(0,4000) : (Array.isArray(result.acceptance_tables) ? result.acceptance_tables : []);
     if(blocks.length){
-      const section=el("section","pr-description");
+      const section=el("details","pr-description");
+      section.append(el("summary","","展开 PR 补充记录"));
       section.append(el("h3","","PR 描述记录"),el("p","","按原文顺序保留环境、测试、补充验证和限制说明，不额外计入通过数量。敏感信息已隐藏，代码块请查看原 PR。"));
       for(const block of blocks){
         if(block.type==="heading")section.append(el("h4","",block.text||""));
