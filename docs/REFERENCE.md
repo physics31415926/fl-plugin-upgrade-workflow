@@ -68,7 +68,7 @@ python -B <tools>/sglang_evidence.py --repo <clean-candidate> --branch <baseline
 
 ## 分支适配监控
 
-将 `examples/branch-monitor.example.json` 复制为 `branch-monitor.json`，核对插件仓库路径、remote、分支、模型和 backend PR 编号。启动 `python flflow.py serve --config workflow.json --monitor-config branch-monitor.json` 后，首页 `/` 显示分支监控；原工作流控制页在 `/workflow`。页面可切换本地 remote-tracking 分支，并用“读取最新状态”更新目标分支 Git ref 与 GitHub CI。`branch-monitor.json` 是本机配置，已被 Git 忽略。
+将 `examples/branch-monitor.example.json` 复制为 `branch-monitor.json`，核对插件仓库路径、remote、分支、模型和 backend PR 编号。启动 `python scripts/flflow.py serve --config workflow.json --monitor-config branch-monitor.json` 后，首页 `/` 显示分支监控；原工作流控制页在 `/workflow`。页面可切换本地 remote-tracking 分支，并用“读取最新状态”更新目标分支 Git ref 与 GitHub CI。`branch-monitor.json` 是本机配置，已被 Git 忽略。
 
 监控服务优先通过已登录的 `gh api` 读取 GitHub 状态；若未安装或不可用，则用 GitHub HTTP API（可通过 `GH_TOKEN` 或 `GITHUB_TOKEN` 提高配额）。远端数据缓存 5 分钟；页面每 15 秒读取服务状态，点击“读取最新状态”会触发一次采集并直接显示返回结果。网络故障会明确显示错误，页面保留上次采集时间。
 
@@ -195,9 +195,9 @@ When pinning source file byte length or SHA across Windows/Linux, use the fixed 
 ## 启动与控制
 
 ```text
-python flflow.py validate --config workflow.json
-python flflow.py start --config workflow.json --dry-run
-python flflow.py serve --config workflow.json --host 127.0.0.1 --port 8765
+python scripts/flflow.py validate --config workflow.json
+python scripts/flflow.py start --config workflow.json --dry-run
+python scripts/flflow.py serve --config workflow.json --host 127.0.0.1 --port 8765
 ```
 
 `validate` 检查配置和仓库位置。`--dry-run` 还会检查插件基线及上游目标 SHA，但状态是 `simulated`，不算验收。服务启动后，在 Codex 内置 Browser 打开 `http://127.0.0.1:8765/` 查看分支监控，打开 `/sessions` 跟进 Codex 任务，或在 `/workflow` 用“启动、暂停后续阶段、继续、重试失败项、取消”控制编排器并查看日志。编排器也可使用 CLI：`start`、`status`、`pause`、`resume`、`cancel`、`retry-failed`，均带 `--config workflow.json`。

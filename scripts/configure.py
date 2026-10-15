@@ -1,5 +1,8 @@
 """Compatibility entry point; implementation lives in fl_dashboard.deployment.configure."""
 import sys
+from pathlib import Path
+import sys
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from importlib import import_module
 
 implementation = import_module("fl_dashboard.deployment.configure")

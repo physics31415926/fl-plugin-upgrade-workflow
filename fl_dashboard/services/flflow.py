@@ -219,7 +219,7 @@ class Engine:
         self.cfg = validate_config(self.config_path)
         self.config_sha256 = self.cfg["_config_sha256"]
         tool_dir = APP_ROOT
-        protected_tools = [tool_dir / "strict_test.py", *tool_dir.glob("cases*.json"), *(tool_dir / "examples").glob("cases*.json")]
+        protected_tools = [tool_dir / "scripts" / "strict_test.py", *tool_dir.glob("cases*.json"), *(tool_dir / "examples").glob("cases*.json")]
         self.protected_tool_hashes = {
             path: hashlib.sha256(path.read_bytes()).hexdigest() for path in protected_tools if path.is_file()
         }

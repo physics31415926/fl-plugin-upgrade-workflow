@@ -2,9 +2,9 @@
 
 在同一页面跟踪 **vLLM-Plugin-FL** 和 **SGLang-Plugin-FL** 的适配进展，查看各 backend 的 PR、CI、验收结果和 agent 任务。
 
-![双仓库适配进展快照](docs/images/dashboard-demo.png)
+![双仓库适配进展快照](docs/images/dashboard-demo.jpg)
 
-*只读总览快照。在线状态以最新采集结果为准。*
+*当前版本总览快照（2026-10-15）。在线状态以最新采集结果为准。*
 
 - 双仓库独立选择分支，结合 PR 标题与描述关联适配 PR。
 - 本机选择设备和 Codex、Claude 或 FlagScale Agent 即可创建任务；远端目录自动分配，补充说明可选。
@@ -22,15 +22,15 @@
 在本项目目录运行（Windows / Linux / macOS；系统只有 `python3` 时替换命令中的 `python`）：
 
 ```sh
-python -B configure.py
-python -B start_dashboard.py
+python -B dashboard.py configure
+python -B dashboard.py start
 ```
 
-向导选择一个或两个项目，填写插件 checkout 路径、remote、目标分支和端口；自动生成配置后，启动器会检查配置及端口。打开 [本机看板](http://127.0.0.1:8766/)，保留启动终端；按 `Ctrl+C` 停止。端口冲突可用 `python -B start_dashboard.py --port 9000`。
+向导选择一个或两个项目，填写插件 checkout 路径、remote、目标分支和端口；自动生成配置后，启动器会检查配置及端口。打开 [本机看板](http://127.0.0.1:8766/)，保留启动终端；按 `Ctrl+C` 停止。端口冲突可用 `python -B dashboard.py start --port 9000`。
 
 配置保存在 Git 忽略的 `runs/configured/`，各项目的会话与验收目录独立。向导不会覆盖已有配置；需要另一套配置时指定 `--output-dir`。已有 `projects.json` 的部署可继续使用原启动命令。迁移到另一台机器后重新运行向导，验收存档另行导入。
 
-局域网部署沿用这份项目配置，单独启动免登录只读 HTTPS 服务。证书、防火墙、非交互配置及 Windows 登录后常驻的可复制步骤见 [部署指南](DEPLOYMENT.md)。
+局域网部署沿用这份项目配置，单独启动免登录只读 HTTPS 服务。证书、防火墙、非交互配置及 Windows 登录后常驻的可复制步骤见 [部署指南](docs/DEPLOYMENT.md)。
 
 ## 页面入口
 
@@ -46,11 +46,11 @@ python -B start_dashboard.py
 
 ## 更多配置
 
-- [部署指南](DEPLOYMENT.md)：配置向导、无人值守配置、HTTPS、免登录只读和后台常驻。
+- [部署指南](docs/DEPLOYMENT.md)：配置向导、无人值守配置、HTTPS、免登录只读和后台常驻。
 - [高级配置与验收参考](docs/REFERENCE.md)：agent 配置、原生任务接入、结果归档、命令编排与异常恢复。
 
 Claude 与 FlagScale 的 API key 独立配置，使用 Windows 当前用户的 DPAPI 加密保存；局域网入口提供脱敏状态与验收表格。
 
 ## 代码结构与扩展
 
-业务代码位于 fl_dashboard/，按 monitoring、projects、agents、tasks、services、deployment 分工；页面在 web/templates/，示例配置在 examples/。根目录保留兼容启动入口，已有部署命令不变。新增同类仓库只需增加项目配置；新监控类型通过可信采集器注册接入，默认只读。详见 [结构与扩展指南](docs/ARCHITECTURE.md)。
+业务代码位于 fl_dashboard/，按 monitoring、projects、agents、tasks、services、deployment 分工；页面在 web/templates/，示例配置在 examples/。根目录仅保留 dashboard.py 统一入口，命令脚本集中在 scripts/。新增同类仓库只需增加项目配置；新监控类型通过可信采集器注册接入，默认只读。详见 [结构与扩展指南](docs/ARCHITECTURE.md)。

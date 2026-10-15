@@ -1,10 +1,11 @@
 param(
-    [string]$ConfigPath = (Join-Path $PSScriptRoot 'runs\lan\deployment.json')
+    [string]$ConfigPath = (Join-Path (Split-Path $PSScriptRoot -Parent) 'runs\lan\deployment.json')
 )
 
 $ErrorActionPreference = 'Stop'
+$AppRoot = Split-Path $PSScriptRoot -Parent
 trap {
-    $_.Exception.Message | Add-Content -LiteralPath (Join-Path $PSScriptRoot 'runs\lan\launcher-errors.log')
+    $_.Exception.Message | Add-Content -LiteralPath (Join-Path (Split-Path $PSScriptRoot -Parent) 'runs\lan\launcher-errors.log')
     exit 1
 }
 $config = Get-Content -LiteralPath $ConfigPath -Raw | ConvertFrom-Json
@@ -20,7 +21,7 @@ if ($config.anonymous_lan -ne $true) {
 }
 
 try {
-    Set-Location -LiteralPath $PSScriptRoot
+    Set-Location -LiteralPath $AppRoot
     $arguments = @(
         '-u', '-B', ('"' + (Join-Path $PSScriptRoot 'share_server.py') + '"'),
         '--projects-config', ('"' + $config.projects_config + '"'),
@@ -35,7 +36,7 @@ try {
         $arguments += @('--username', ('"' + $config.username + '"'))
     }
     $service = Start-Process -FilePath $config.python -ArgumentList $arguments `
-        -WorkingDirectory $PSScriptRoot -WindowStyle Hidden -Wait -PassThru `
+        -WorkingDirectory $AppRoot -WindowStyle Hidden -Wait -PassThru `
         -RedirectStandardOutput $config.log_file -RedirectStandardError ($config.log_file + '.stderr')
     exit $service.ExitCode
 } finally {

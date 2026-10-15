@@ -344,7 +344,7 @@ def configure(args, *, app_root: Path = APP_ROOT) -> tuple[list[Path], int]:
     documents["projects.json"] = {"projects": rows}
     documents["launch.json"] = {
         "python": str(Path(sys.executable).resolve()),
-        "arguments": ["-u", "-B", str(app_root / "flflow.py"), "serve", "--projects-config",
+        "arguments": ["-u", "-B", str(app_root / "scripts" / "flflow.py"), "serve", "--projects-config",
                       str(output / "projects.json"), "--host", "127.0.0.1", "--port", str(port)],
         "working_directory": str(app_root),
         "log_file": str(output / "runs" / "local" / "dashboard.log"),
@@ -373,7 +373,7 @@ def main(argv=None) -> int:
     output = paths[0].parent
     default_output = APP_ROOT / "runs" / "configured"
     launch = output / "launch.json"
-    command = ["python", "-B", "start_dashboard.py"]
+    command = ["python", "-B", "scripts/start_dashboard.py"]
     if output != default_output:
         command.extend(["--config", str(launch)])
     print("Start from the app directory:")
@@ -383,7 +383,7 @@ def main(argv=None) -> int:
         quoted = str(launch).replace("'", "''")
         print(f"  powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\\start_local_dashboard.ps1 -ConfigPath '{quoted}'")
     print(f"Open http://127.0.0.1:{port}/")
-    print("Rerun python -B configure.py to choose a different configuration directory; use --overwrite only to replace its files.")
+    print("Rerun python -B scripts/configure.py to choose a different configuration directory; use --overwrite only to replace its files.")
     return 0
 
 

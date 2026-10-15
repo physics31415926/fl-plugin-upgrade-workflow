@@ -16,7 +16,7 @@
 | tests/ | Python 契约测试、浏览器脚本回归 |
 | runs/ | Git 忽略的本机状态、凭据与日志 |
 
-根目录的 flflow.py、share_server.py、configure.py、start_dashboard.py、sglang_evidence.py 是兼容启动入口；strict_test.py 保留为独立严格验收工具。现有启动命令、计划任务和运行配置路径无需迁移。内部代码使用 fl_dashboard 的完整模块导入，不从兼容入口导入实现。
+根目录只保留 dashboard.py 统一入口。scripts/ 存放独立命令与 Windows 启动脚本；使用旧根目录命令的部署需把脚本路径改到 scripts/，并更新计划任务的启动路径。
 
 项目注册负责隔离每个项目的配置、采集和错误。监控不依赖任务执行器；局域网模式保持延迟导入，不实例化 agent 或凭据存储。只读服务通过字段白名单输出状态，验收表格经过脱敏；增加新采集字段时必须同步检查这条边界。
 
@@ -54,4 +54,4 @@
 
 Windows PowerShell 可先用 Get-ChildItem tests -Filter '*.cjs' 收集路径，再传给 node --test。测试不使用真实 GPU 或 agent；项目注册测试包含第三种采集器、运行目录隔离和只读投影。改动启动路径时还需从其他工作目录检查兼容入口，并确认页面资源可加载。
 
-根目录的两份 `cases.*.example.json` 保留为旧工作流配置的兼容资源；新配置使用 `examples/` 下的版本。
+示例配置统一在 examples/；旧工作流中的 strict_test.py 路径改为 scripts/strict_test.py，cases.*.example.json 改为 examples/cases.*.example.json。本机运行配置仍由 Git 忽略。

@@ -1,4 +1,0 @@
-[
-  {"task": "inference", "model": "qwen3", "case": "06b_tp2"},
-  {"task": "serving", "model": "qwen3", "case": "next_tp8"}
-]

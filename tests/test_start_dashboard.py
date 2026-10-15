@@ -81,7 +81,7 @@ class StartDashboardTests(unittest.TestCase):
             self.launch.write_text(text, encoding="utf-8")
             with self.assertRaises(start_dashboard.StartupError):
                 start_dashboard.load_launch(self.launch, app_root=self.app)
-        with self.assertRaisesRegex(start_dashboard.StartupError, "Run python -B configure.py"):
+        with self.assertRaisesRegex(start_dashboard.StartupError, "Run python -B scripts/configure.py"):
             start_dashboard.load_launch(self.output / "missing.json", app_root=self.app)
         self.launch.write_text(json.dumps(self.documents["launch.json"]), encoding="utf-8-sig")
         self.assertEqual(8766, start_dashboard.load_launch(self.launch, app_root=self.app)[2])
@@ -89,7 +89,7 @@ class StartDashboardTests(unittest.TestCase):
     def test_prepare_local_command_and_port_override(self):
         with patch.object(start_dashboard, "check_projects") as projects, patch.object(start_dashboard, "check_port") as port:
             command, url = start_dashboard.prepare(self.args("--port", "9090"), app_root=self.app)
-        self.assertEqual(str(self.app / "flflow.py"), command[3])
+        self.assertEqual(str(self.app / "scripts" / "flflow.py"), command[3])
         self.assertEqual(["serve", "--projects-config", str(self.projects)], command[4:7])
         self.assertEqual(["--host", "127.0.0.1", "--port", "9090"], command[-4:])
         self.assertEqual("http://127.0.0.1:9090/", url)
@@ -133,10 +133,10 @@ class StartDashboardTests(unittest.TestCase):
                 patch.object(start_dashboard, "check_port") as port:
             command, url = start_dashboard.prepare(args, app_root=self.app)
         tls.assert_called_once_with(str(cert), str(key))
-        self.assertEqual(str(self.app / "share_server.py"), command[3])
+        self.assertEqual(str(self.app / "scripts" / "share_server.py"), command[3])
         self.assertNotIn("serve", command)
         self.assertIn("--anonymous-lan", command)
-        self.assertNotIn(str(self.app / "flflow.py"), command)
+        self.assertNotIn(str(self.app / "scripts" / "flflow.py"), command)
         self.assertEqual("0", command[-1])
         self.assertEqual("https://192.168.8.9:9443/", url)
         projects.assert_called_once_with(self.projects)

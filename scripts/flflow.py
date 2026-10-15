@@ -1,8 +1,11 @@
-"""Compatibility entry point; implementation lives in fl_dashboard.services.share_server."""
+"""Compatibility entry point; implementation lives in fl_dashboard.services.flflow."""
 import sys
+from pathlib import Path
+import sys
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from importlib import import_module
 
-implementation = import_module("fl_dashboard.services.share_server")
+implementation = import_module("fl_dashboard.services.flflow")
 if __name__ == "__main__":
     raise SystemExit(implementation.main())
 sys.modules[__name__] = implementation

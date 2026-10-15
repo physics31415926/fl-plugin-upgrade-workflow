@@ -13,7 +13,7 @@ import unittest
 from pathlib import Path
 
 
-SCRIPT = Path(__file__).resolve().parents[1] / "strict_test.py"
+SCRIPT = Path(__file__).resolve().parents[1] / "scripts" / "strict_test.py"
 SPEC = importlib.util.spec_from_file_location("strict_test", SCRIPT)
 assert SPEC and SPEC.loader
 strict_test = importlib.util.module_from_spec(SPEC)

@@ -1289,7 +1289,7 @@ done
                 "pytest 并发场景还需 definition_files 绑定实际模型 YAML 和 plugin_utils 的 Git blob。"
                 "source_blob 与 definition_files 使用 git rev-parse <actual-commit>:<source-path> 的真实 Git blob ID；"
                 "面板会独立复核原场景输入次序、请求数、非空输出与 expected，不能只信 checks 或退出码。\n"
-                f"本机 SGLang 采集器：{Path(__file__).resolve().parents[2] / 'sglang_evidence.py'}。"
+                f"本机 SGLang 采集器：{Path(__file__).resolve().parents[2] / 'scripts' / 'sglang_evidence.py'}。"
                 "远端运行前将此独立采集器原样复制到本任务工具目录，保持目标插件仓库 clean；"
                 "输出放在候选仓库之外的任务私有证据目录。采集器原样调用所选源码 examples 和 pytest 并发函数，保留原 assert，"
                 "自动发现该候选支持的场景、执行并生成上述 manifest 与原始逐请求 JSON；不得自行合成通过结果。"

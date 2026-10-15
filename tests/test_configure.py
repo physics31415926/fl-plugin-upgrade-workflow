@@ -31,7 +31,8 @@ class ConfigureTests(unittest.TestCase):
                            case_sources=["examples"] if project_id == "sglang" else ["tools/adaptation-gate-cases"])
             (self.app / source).parent.mkdir(parents=True, exist_ok=True)
             (self.app / source).write_text(json.dumps(example), encoding="utf-8")
-        (self.app / "flflow.py").write_text("# Fixture launcher target\n", encoding="utf-8")
+        (self.app / "scripts").mkdir()
+        (self.app / "scripts" / "flflow.py").write_text("# Fixture launcher target\n", encoding="utf-8")
         self.git(self.app, "add", ".")
         self.git(self.app, "commit", "-qm", "Generic fixture")
         self.repos = {}
@@ -93,7 +94,7 @@ class ConfigureTests(unittest.TestCase):
         self.assertEqual(6, len(set(directories)))
         launch = documents["launch.json"]
         self.assertEqual(str(self.app), launch["working_directory"])
-        self.assertIn(str(self.app / "flflow.py"), launch["arguments"])
+        self.assertIn(str(self.app / "scripts" / "flflow.py"), launch["arguments"])
         self.assertIn(str(self.app / "runs" / "configured" / "projects.json"), launch["arguments"])
         self.assertEqual(["--host", "127.0.0.1", "--port", "8766"], launch["arguments"][-4:])
         self.assertTrue(Path(launch["python"]).is_absolute())
@@ -286,7 +287,7 @@ class ConfigureTests(unittest.TestCase):
                 self.assertNotIn("codex_executable", config)
 
     def test_posix_display_command_preserves_shell_metacharacters(self):
-        command = ["python", "-B", "start_dashboard.py", "--config", "/private/$USER;folder with spaces/launch.json"]
+        command = ["python", "-B", "scripts/start_dashboard.py", "--config", "/private/$USER;folder with spaces/launch.json"]
         with patch.object(configure.os, "name", "posix"):
             rendered = configure.display_command(command)
         self.assertEqual(command, shlex.split(rendered))
@@ -299,7 +300,7 @@ class ConfigureTests(unittest.TestCase):
         with patch.object(configure, "cli_path", return_value=None), contextlib.redirect_stdout(stdout):
             self.assertEqual(0, configure.main(argv))
         text = stdout.getvalue()
-        self.assertIn("python -B start_dashboard.py --config", text)
+        self.assertIn("python -B scripts/start_dashboard.py --config", text)
         if os.name == "nt":
             self.assertIn("start_local_dashboard.ps1", text)
         else:

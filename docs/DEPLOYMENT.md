@@ -21,7 +21,7 @@ git -C 'C:\work\sglang-plugin-FL' fetch upstream
 在工作台目录打开终端，运行向导：
 
 ```powershell
-python -B configure.py
+python -B scripts/configure.py
 ```
 
 依次选择项目、插件路径、remote、目标分支、私有输出目录和本机端口。默认选择两个项目，输出到 `runs/configured/`，端口为 `8766`。生成内容包括 `projects.json`、所选项目的 `branch-monitor*.json` 和 `launch.json`；两边会话与验收目录独立，生成文件由 Git 忽略。
@@ -29,13 +29,13 @@ python -B configure.py
 只监控一个项目也可以，例如：
 
 ```powershell
-python -B configure.py --projects sglang
+python -B scripts/configure.py --projects sglang
 ```
 
 批量或重复部署时使用非交互参数；以下路径和分支仅为示例：
 
 ```powershell
-python -B configure.py --non-interactive --projects vllm sglang `
+python -B scripts/configure.py --non-interactive --projects vllm sglang `
   --vllm-repo 'C:\work\vllm-plugin-FL' --vllm-remote upstream --vllm-branch '0.4.0-dev' `
   --sglang-repo 'C:\work\sglang-plugin-FL' --sglang-remote upstream --sglang-branch 'dev/0.5.18' `
   --output-dir runs/configured --port 8766
@@ -52,8 +52,8 @@ python -B configure.py --non-interactive --projects vllm sglang `
 先检查生成配置，再启动前台服务：
 
 ```powershell
-python -B start_dashboard.py --check-only
-python -B start_dashboard.py
+python -B scripts/start_dashboard.py --check-only
+python -B scripts/start_dashboard.py
 ```
 
 默认读取 `runs/configured/launch.json`，打开 [本机看板](http://127.0.0.1:8766/)。启动器使用配置中的 Python 和 projects 文件；完整控制台只监听 `127.0.0.1`。终端保持运行，`Ctrl+C` 结束这次前台服务。
@@ -61,8 +61,8 @@ python -B start_dashboard.py
 使用其他输出目录或临时端口时：
 
 ```powershell
-python -B start_dashboard.py --config runs/configured-alt/launch.json --port 8876 --check-only
-python -B start_dashboard.py --config runs/configured-alt/launch.json --port 8876
+python -B scripts/start_dashboard.py --config runs/configured-alt/launch.json --port 8876 --check-only
+python -B scripts/start_dashboard.py --config runs/configured-alt/launch.json --port 8876
 ```
 
 `--port` 只覆盖本次启动参数，不修改配置文件。需要长期使用新端口时更新对应 `launch.json`。
@@ -76,11 +76,11 @@ python -B start_dashboard.py --config runs/configured-alt/launch.json --port 887
 先检查，再在另一个终端启动独立的只读服务：
 
 ```powershell
-python -B start_dashboard.py --lan --lan-ip 192.168.10.20 --lan-port 8767 `
+python -B scripts/start_dashboard.py --lan --lan-ip 192.168.10.20 --lan-port 8767 `
   --tls-cert runs/tls/dashboard-cert.pem --tls-key runs/tls/dashboard-key.pem `
   --refresh-interval 300 --check-only
 
-python -B start_dashboard.py --lan --lan-ip 192.168.10.20 --lan-port 8767 `
+python -B scripts/start_dashboard.py --lan --lan-ip 192.168.10.20 --lan-port 8767 `
   --tls-cert runs/tls/dashboard-cert.pem --tls-key runs/tls/dashboard-key.pem `
   --refresh-interval 300
 ```
@@ -145,7 +145,7 @@ New-NetFirewallRule -Name $ruleName -DisplayName 'FL dashboard LAN HTTPS' `
 
 ```powershell
 powershell.exe -NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass `
-  -File .\start_local_dashboard.ps1 -ConfigPath .\runs\configured\launch.json
+  -File .\scripts\start_local_dashboard.ps1 -ConfigPath .\runs\configured\launch.json
 ```
 
 启动器以隐藏窗口等待 Python，stdout / stderr 分别写入配置的日志；正常 stderr 不会使 Windows PowerShell 5.1 异常退出。默认生成日志为 `runs/configured/runs/local/dashboard.log`、同名 `.stderr` 和 `.launcher.log`。每次启动会重建 stdout / stderr 文件，需要保留时先归档。
@@ -155,10 +155,10 @@ powershell.exe -NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass `
 ```powershell
 $dashboardRoot = (Get-Location).ProviderPath
 $launchPath = (Resolve-Path -LiteralPath '.\runs\configured\launch.json').ProviderPath
-$launcherPath = (Resolve-Path -LiteralPath '.\start_local_dashboard.ps1').ProviderPath
+$launcherPath = (Resolve-Path -LiteralPath '.\scripts\start_local_dashboard.ps1').ProviderPath
 $deploymentUser = [Security.Principal.WindowsIdentity]::GetCurrent().Name
 $taskName = 'FLFlow-Configured-Local-8766'
-python -B start_dashboard.py --config $launchPath --check-only
+python -B scripts/start_dashboard.py --config $launchPath --check-only
 if ($LASTEXITCODE -ne 0) { throw 'Configuration or port check failed; do not register another owner.' }
 if (Get-ScheduledTask -TaskName $taskName -ErrorAction SilentlyContinue) {
     throw 'Task already exists; choose a distinct name or review it before updating.'
@@ -214,7 +214,7 @@ LAN 可继续使用 `start_lan_dashboard.ps1`，手动准备忽略的 `runs/lan/
 `anonymous_lan: true` 无需密码文件。先验证：
 
 ```powershell
-powershell.exe -NoProfile -File .\start_lan_dashboard.ps1 -ConfigPath .\runs\lan\deployment.json
+powershell.exe -NoProfile -File .\scripts\start_lan_dashboard.ps1 -ConfigPath .\runs\lan\deployment.json
 ```
 
 注册 LAN 任务时复用上面的计划任务代码，将 `$launchPath` 改为这个 deployment 文件、`$launcherPath` 改为 `start_lan_dashboard.ps1`，并将 `$taskName` 改为独立名称，例如 `FLFlow-Configured-LAN-8767`。其中 `--check-only` 检查改用上文 LAN 快捷启动命令及对应的 `launch.json`、地址和证书参数；deployment JSON 不传给 `start_dashboard.py`。先结束这次新部署的前台 LAN 服务，避免端口冲突；本机控制台继续独立运行。输出和错误分别写入 `log_file` 及同名 `.stderr`，启动异常记录在 `runs/lan/launcher-errors.log`。
@@ -228,7 +228,7 @@ powershell.exe -NoProfile -File .\start_lan_dashboard.ps1 -ConfigPath .\runs\lan
 已有 `projects.json` 可直接启动本机控制台：
 
 ```powershell
-python -B flflow.py serve --projects-config projects.json --host 127.0.0.1 --port 8766
+python -B scripts/flflow.py serve --projects-config projects.json --host 127.0.0.1 --port 8766
 ```
 
 要接入快捷启动器，可手动准备兼容的 launch JSON，再通过 `--config` 指定。Windows 的 `start_local_dashboard.ps1` 同样读取此格式：
@@ -236,7 +236,7 @@ python -B flflow.py serve --projects-config projects.json --host 127.0.0.1 --por
 ```json
 {
   "python": "<absolute Python executable>",
-  "arguments": ["-u", "-B", "<absolute flflow.py>", "serve", "--projects-config", "<absolute projects.json>", "--host", "127.0.0.1", "--port", "8766"],
+  "arguments": ["-u", "-B", "<absolute scripts/flflow.py>", "serve", "--projects-config", "<absolute projects.json>", "--host", "127.0.0.1", "--port", "8766"],
   "working_directory": "<repository directory>",
   "log_file": "<repository directory>/runs/local/dashboard.log"
 }
@@ -251,13 +251,13 @@ python -B flflow.py serve --projects-config projects.json --host 127.0.0.1 --por
 `share_server.py` 提供独立只读入口，不创建 Codex 执行器，不开放机器配置、会话控制、原始验收文件或本地日志。可先以前台运行单项目配置：
 
 ```sh
-python3 -B share_server.py --monitor-config branch-monitor.json --host 127.0.0.1 --port 8765
+python3 -B scripts/share_server.py --monitor-config branch-monitor.json --host 127.0.0.1 --port 8765
 ```
 
 Linux 上确认配置后可在 tmux 中常驻：
 
 ```sh
-tmux new-session -d -s flflow-dashboard 'exec python3 -B share_server.py --monitor-config branch-monitor.json --host 127.0.0.1 --port 8765'
+tmux new-session -d -s flflow-dashboard 'exec python3 -B scripts/share_server.py --monitor-config branch-monitor.json --host 127.0.0.1 --port 8765'
 tmux capture-pane -t flflow-dashboard -p
 ```
 
@@ -278,7 +278,7 @@ tmux capture-pane -t flflow-dashboard -p
 保留密码保护时，直接运行共享服务：
 
 ```sh
-python -B share_server.py --projects-config projects.json --host 0.0.0.0 --port 8767 --tls-cert runs/tls/dashboard-cert.pem --tls-key runs/tls/dashboard-key.pem
+python -B scripts/share_server.py --projects-config projects.json --host 0.0.0.0 --port 8767 --tls-cert runs/tls/dashboard-cert.pem --tls-key runs/tls/dashboard-key.pem
 ```
 
 部署环境先设置 `FLFLOW_SHARE_PASSWORD`，访问者使用默认用户名 `viewer` 或 `--username` 指定的用户名登录。`0.0.0.0` 表示所有 IPv4 接口，仍需限定防火墙允许的网段；免登录模式必须绑定具体 RFC1918 地址。
@@ -305,4 +305,4 @@ ssh -N -L 127.0.0.1:8765:127.0.0.1:8765 <development-host>
 
 Codex / Claude / FlagScale Agent 的创建、启动、跟进和配置只通过本机完整控制台使用。Claude 与 FlagScale 的 API key 分别使用当前 Windows 用户的 DPAPI 加密保存在忽略目录；服务或计划任务使用同一 Windows 用户。LAN 不初始化 agent 设置或执行器，`/api/agent-settings`、`/api/agent-providers` 及私有原件接口均不开放。
 
-原生子会话和已落盘任务的共享状态仅包含安全的 backend、分支、状态、阶段和时间。历史实验记录在 LAN 页面指向 GitHub PR，本机入口可读取经哈希验证的 UTF-8 存档。更多配置见 [高级配置与验收参考](docs/REFERENCE.md)。
+原生子会话和已落盘任务的共享状态仅包含安全的 backend、分支、状态、阶段和时间。历史实验记录在 LAN 页面指向 GitHub PR，本机入口可读取经哈希验证的 UTF-8 存档。更多配置见 [高级配置与验收参考](REFERENCE.md)。

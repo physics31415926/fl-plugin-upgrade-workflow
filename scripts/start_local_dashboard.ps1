@@ -1,8 +1,9 @@
 param(
-    [string]$ConfigPath = (Join-Path $PSScriptRoot 'runs\local\dashboard.json')
+    [string]$ConfigPath = (Join-Path (Split-Path $PSScriptRoot -Parent) 'runs\local\dashboard.json')
 )
 
 $ErrorActionPreference = 'Stop'
+$AppRoot = Split-Path $PSScriptRoot -Parent
 
 function ConvertTo-WindowsArgument([string]$Value) {
     # Start-Process joins ArgumentList itself; quote each native argv item first.
@@ -59,7 +60,7 @@ function Assert-DashboardPortAvailable([string[]]$Arguments, [int]$StartIndex) {
     }
 }
 
-$launcherLog = Join-Path $PSScriptRoot 'runs\local\launcher-errors.log'
+$launcherLog = Join-Path $AppRoot 'runs\local\launcher-errors.log'
 try {
     $config = Get-Content -LiteralPath $ConfigPath -Raw -Encoding UTF8 | ConvertFrom-Json
     foreach ($name in @('python', 'working_directory')) {
