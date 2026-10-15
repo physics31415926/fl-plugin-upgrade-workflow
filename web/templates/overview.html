@@ -204,6 +204,9 @@
       for(const row of root.querySelectorAll('tbody tr'))row.style.height='';
     }
     if(window.innerWidth<=820||roots.length<2)return;
+    const visualRows=new Map();
+    for(const root of roots){const top=Math.round(root.getBoundingClientRect().top);if(!visualRows.has(top))visualRows.set(top,[]);visualRows.get(top).push(root);}
+    for(const roots of visualRows.values()){
     for(const selector of ['.project-head','.metrics','.collection']){
       const nodes=roots.map(root=>root.querySelector(selector));
       const height=Math.max(...nodes.map(node=>node.getBoundingClientRect().height));
@@ -217,6 +220,7 @@
       const key=row.dataset.backend;if(!groups.has(key))groups.set(key,[]);groups.get(key).push(row);
     }));
     groups.forEach(rows=>{const height=Math.max(...rows.map(row=>row.getBoundingClientRect().height));rows.forEach(row=>row.style.height=height+'px');});
+  }
   }
   function scheduleAlignment(){if(typeof requestAnimationFrame==='function')requestAnimationFrame(alignProjects);}
   async function loadSessions(card){try{const data=await request(appUrl('api/adaptation-tasks',card.project.id));renderTasks(card,data.tasks);}catch(error){card.tasks.replaceChildren(el('div','empty','任务状态暂不可用：'+error.message));}}

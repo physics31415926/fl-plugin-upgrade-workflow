@@ -144,3 +144,19 @@ for (const page of ['web/templates/overview.html','web/templates/index.html']) {
     assert.equal(display({ci:{status:'passed',scope:'branch',commit:'old-head'}},'later-head'),'stale');
   });
 }
+
+
+test('overview aligns cards within each visual row when more projects are added', () => {
+  const html=source('web/templates/overview.html');
+  const makeRoot=(top,height)=>{
+    const nodes=new Map(['.project-head','.metrics','.collection','.notice','.table-wrap'].map(key=>[key,{style:{},getBoundingClientRect:()=>({top:top+height,height})}]));
+    return {nodes,getBoundingClientRect:()=>({top}),querySelector:key=>nodes.get(key),querySelectorAll:()=>[]};
+  };
+  const roots=[makeRoot(0,30),makeRoot(0,50),makeRoot(500,70)];
+  const context={cards:new Map(roots.map((root,i)=>[i,{root}])),window:{innerWidth:1200}};
+  vm.createContext(context);
+  vm.runInContext(between(html,'  function alignProjects(){','  function scheduleAlignment()')+'\nalignProjects();',context);
+  assert.equal(roots[0].nodes.get('.table-wrap').style.paddingTop,'20px');
+  assert.equal(roots[1].nodes.get('.table-wrap').style.paddingTop,'0px');
+  assert.equal(roots[2].nodes.get('.table-wrap').style.paddingTop,'0px');
+});
