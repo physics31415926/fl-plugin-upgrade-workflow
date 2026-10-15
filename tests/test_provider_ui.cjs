@@ -55,7 +55,7 @@ test('backend ordering keeps NVIDIA first and sorts iluvatar by display label',(
   const context={document:{querySelector:()=>null},$(){return{append(){}}}};
   vm.createContext(context);
   vm.runInContext(between('  const labels =', '  function providerName(')+'\nglobalThis.order=orderedBackends;',context);
-  assert.deepEqual(Array.from(context.order),['cuda','ascend','enflame','hygon','corex','kunlunxin','metax','musa','thead']);
+  assert.deepEqual(Array.from(context.order),['cuda','ascend','enflame','hygon','corex','kunlunxin','metax','musa','thead','tsingmicro']);
   const staticOptions=html.match(/<select id="backend"[^>]*>([\s\S]*?)<\/select>/)[1];
   assert.deepEqual([...staticOptions.matchAll(/<option value="([^"]+)"/g)].map(match=>match[1]),Array.from(context.order));
 });

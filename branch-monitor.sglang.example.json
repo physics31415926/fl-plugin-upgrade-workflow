@@ -23,7 +23,8 @@
     "hygon": "Hygon",
     "thead": "THead",
     "enflame": "Enflame",
-    "kunlunxin": "Kunlunxin"
+    "kunlunxin": "Kunlunxin",
+    "tsingmicro": "Tsingmicro / 清微"
   },
   "backend_ci_platforms": {
     "corex": "iluvatar"

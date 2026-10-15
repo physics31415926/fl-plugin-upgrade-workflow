@@ -886,7 +886,7 @@
     return labels[status] || (monitor ? '待确认（历史记录）' : '待确认');
   }
   const activeTasks = new Set(["starting","running","waiting_input","waiting_approval","interrupting"]);
-  const machineLabels = {cuda:"NVIDIA / CUDA",ascend:"Ascend / 昇腾",metax:"MetaX / 沐曦",corex:"iluvatar / 天数智芯",hygon:"Hygon / 海光",musa:"MUSA / 摩尔线程",enflame:"Enflame / 燧原",kunlunxin:"Kunlunxin / 昆仑芯",thead:"T-Head / 平头哥"};
+  const machineLabels = {cuda:"NVIDIA / CUDA",ascend:"Ascend / 昇腾",metax:"MetaX / 沐曦",corex:"iluvatar / 天数智芯",hygon:"Hygon / 海光",musa:"MUSA / 摩尔线程",enflame:"Enflame / 燧原",kunlunxin:"Kunlunxin / 昆仑芯",thead:"T-Head / 平头哥",tsingmicro:"Tsingmicro / 清微"};
   let machineProfilesKey = null;
   function machineHealth(profile){
     const full=profile.last_check,connection=profile.last_connection_check,time=record=>{const value=Date.parse(record?.checked_at);return Number.isNaN(value)?-Infinity:value;};

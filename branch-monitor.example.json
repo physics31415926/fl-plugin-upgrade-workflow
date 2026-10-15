@@ -21,7 +21,8 @@
     "musa": "Moore Threads",
     "thead": "THead",
     "enflame": "Enflame",
-    "kunlunxin": "Kunlunxin"
+    "kunlunxin": "Kunlunxin",
+    "tsingmicro": "Tsingmicro / 清微"
   },
   "backend_prs": {
     "cuda": 484,

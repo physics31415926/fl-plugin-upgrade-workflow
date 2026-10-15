@@ -6,7 +6,7 @@ ALIASES = {
     "metax": ("metax",), "corex": ("corex", "iluvatar"),
     "hygon": ("hygon",), "musa": ("musa", "moore threads", "mthreads"),
     "thead": ("thead", "t-head"), "enflame": ("enflame",),
-    "kunlunxin": ("kunlunxin",),
+    "kunlunxin": ("kunlunxin",), "tsingmicro": ("tsingmicro", "清微"),
 }
 PURPOSE = {"summary", "description", "overview", "purpose", "摘要", "描述", "概述", "适配说明"}
 

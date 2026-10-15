@@ -239,7 +239,7 @@ def require_free_machine(machine, managers, *, excluding_manager=None, excluding
 
 class CodexSessionManager:
     ACTIVE = {"starting", "running", "waiting_approval", "waiting_input", "interrupting"}
-    BACKENDS = {"cuda", "ascend", "metax", "corex", "hygon", "musa", "enflame", "kunlunxin", "thead"}
+    BACKENDS = {"cuda", "ascend", "metax", "corex", "hygon", "musa", "enflame", "kunlunxin", "thead", "tsingmicro"}
     HISTORY_RECORD_LIMIT = 80
     HISTORY_BYTE_LIMIT = 256 * 1024
     HISTORY_SCAN_LIMIT = 240
