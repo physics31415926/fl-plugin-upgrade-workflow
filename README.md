@@ -40,6 +40,8 @@ python -B dashboard.py start
 | `/monitor?project=vllm` | 分支、PR、CI 和逐项验收详情 |
 | `/sessions?project=vllm` | 验证机器、agent 配置与适配任务 |
 
+版本标签随所选分支变化，读取该分支提交的 `pyproject.toml` 中对应引擎的精确依赖版本；尚未更新依赖声明的升级目标不会自动推断。
+
 查看 SGLang 时将 `project=vllm` 改为 `project=sglang`。任务列表默认只显示活跃任务；历史任务可在任务页查看。
 
 代码合入、CI 和验收结果分别展示。验收结果汇总 PR 作者在描述中报告的测试结论：通过、部分通过、未通过或待验收，点击在当前页面展开验收表格，可继续查看原 PR。PR 暂无可识别结果时，使用关联同一 PR 的本地记录或逐项结果；原始场景和测试版本保留在分支详情中。

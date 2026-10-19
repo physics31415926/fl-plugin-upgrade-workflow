@@ -544,7 +544,8 @@
     put("branch-ref", data.branch_ref);
     put("head", shortSha(data.head));
     byId("head").title = safe(data.head);
-    put("vllm-version", data.upstream_version || data.vllm_version);
+    put("vllm-version", data.upstream_version || data.vllm_version || "版本未识别");
+    byId("vllm-version").title = "升级目标版本来自所选分支 pyproject.toml 的依赖声明";
     put("engine-name", ({sglang:"SGLang",vllm:"vLLM"}[data.engine] || data.engine || "Monitor"));
     put("observed-at", dateText(data.observed_at));
     const integrated = (Array.isArray(data.backends) ? data.backends : []).filter(b => b.integration?.status === "merged");
@@ -855,9 +856,16 @@
       const response = await fetch(appUrl("api/branch-status?branch=" + encodeURIComponent(branch)), {cache:"no-store"});
       const data = await response.json().catch(() => ({}));
       if (!response.ok) throw new Error(errorMessage(data.error) || "状态接口返回 " + response.status);
-      if (generation === branchGeneration) applySnapshot(data, branch);
+      if (generation === branchGeneration) {
+        if (data.branch && data.branch !== branch) throw new Error("返回的分支与所选分支不一致，请重试");
+        applySnapshot(data, branch);
+      }
     } catch (error) {
-      showNotice("无法读取分支状态：" + error.message);
+      if (generation === branchGeneration) {
+        const previous = latestBranchSnapshot?.branch;
+        if (previous !== branch) put("vllm-version", "版本未识别");
+        showNotice("无法读取分支状态：" + error.message + (previous && previous !== branch ? "；下方保留 " + previous + " 的上次采集结果。" : ""));
+      }
     } finally {
       fetching = false;
       if (generation !== branchGeneration) loadBranch(byId("branch-select").value);
@@ -893,7 +901,7 @@
       byId("branch-select").disabled = false;
     }
   }
-  byId("branch-select").addEventListener("change", () => { branchGeneration++; loadBranch(byId("branch-select").value); loadTasks(); });
+  byId("branch-select").addEventListener("change", () => { branchGeneration++; put("vllm-version", "读取中…"); loadBranch(byId("branch-select").value); loadTasks(); });
   byId("refresh-remote").addEventListener("click", refreshRemote);
   const taskLabels = {prepared:"待启动",starting:"连接并启动中",running:"执行中",waiting_input:"等待回答",waiting_approval:"等待授权",interrupting:"正在中断",interrupted:"已中断",completed:"本轮结束",failed:"本轮异常",disconnected:"连接中断"};
   function sessionProgress(session) { return typeof session.progress_summary === 'string' && session.progress_summary.trim() ? session.progress_summary.trim() : session.last_agent_message || ''; }
