@@ -24,6 +24,9 @@ class DiscoveryTests(unittest.TestCase):
     def test_alias_and_word_boundaries(self):
         self.assertEqual(adaptation_backend({"title": "upgrade(iluvatar): runtime"}), "corex")
         self.assertIsNone(adaptation_backend({"title": "adapt(kunlunxinplus): runtime"}))
+        for alias in ("sunrise", "曦望"):
+            self.assertEqual(adaptation_backend({"title": f"upgrade({alias}): runtime"}), "sunrise")
+        self.assertIsNone(adaptation_backend({"title": "upgrade(sunriseplus): runtime"}))
 
 
     def test_sglang_feature_titles_and_vendor_first_descriptions(self):

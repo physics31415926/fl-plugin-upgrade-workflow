@@ -24,7 +24,8 @@
     "thead": "THead",
     "enflame": "Enflame",
     "kunlunxin": "Kunlunxin",
-    "tsingmicro": "Tsingmicro / 清微"
+    "tsingmicro": "Tsingmicro / 清微",
+    "sunrise": "Sunrise / 曦望"
   },
   "backend_ci_platforms": {
     "corex": "iluvatar"

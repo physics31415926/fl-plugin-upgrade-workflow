@@ -45,7 +45,7 @@ PLATFORM = re.compile(r"^[a-z][a-z0-9_-]{0,63}$")
 CASE_DIR = "tools/adaptation-gate-cases"
 LABELS = {"cuda": "NVIDIA", "ascend": "Ascend", "metax": "MetaX", "corex": "iluvatar",
           "hygon": "Hygon", "musa": "MUSA", "thead": "THead",
-          "enflame": "Enflame", "kunlunxin": "Kunlunxin", "tsingmicro": "Tsingmicro / 清微"}
+          "enflame": "Enflame", "kunlunxin": "Kunlunxin", "tsingmicro": "Tsingmicro / 清微", "sunrise": "Sunrise / 曦望"}
 
 
 class MonitorError(RuntimeError):

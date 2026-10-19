@@ -42,6 +42,7 @@ _HINTS = {
     "musa": r"\b(?:musa|moorethreads|mtt)\b|摩尔线程",
     "enflame": r"\b(?:enflame|topsrider|gcu)\b|燧原",
     "tsingmicro": r"\btsingmicro\b|清微",
+    "sunrise": r"\bsunrise\b|曦望",
     "kunlunxin": r"\b(?:kunlunxin|kunlun)\b|昆仑芯",
     "thead": r"\b(?:thead|t-head|hanguang)\b|平头哥|含光",
 }
