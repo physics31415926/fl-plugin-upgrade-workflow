@@ -318,18 +318,27 @@ class BranchMonitor:
             raise MonitorError("GitHub API response must be an object")
         return value
 
-    def _open_prs(self, branch: str, force: bool) -> list[dict[str, Any]]:
-        pulls = []
-        for page in range(1, 4):
-            query = urlencode({"state": "open", "base": branch, "sort": "updated",
-                               "direction": "desc", "per_page": 100, "page": page})
-            values = self._api_json(f"pulls?{query}", force)
-            if not isinstance(values, list):
-                raise MonitorError("GitHub PR list must be an array")
-            pulls.extend(value for value in values if isinstance(value, dict) and
-                         value.get("state") == "open" and value.get("base", {}).get("ref") == branch)
-            if len(values) < 100:
-                return pulls
+    def _candidate_prs(self, branch: str, force: bool,
+                       errors: list[str] | None = None) -> list[dict[str, Any]]:
+        # Include merged adaptations so discovery survives a merge or restart.
+        # If history exceeds the bound, still collect the complete open set;
+        # an incomplete historical page must not choose an arbitrary old merge.
+        for state in ("all", "open"):
+            pulls = []
+            for page in range(1, 4):
+                query = urlencode({"state": state, "base": branch, "sort": "updated",
+                                   "direction": "desc", "per_page": 100, "page": page})
+                values = self._api_json(f"pulls?{query}", force)
+                if not isinstance(values, list):
+                    raise MonitorError("GitHub PR list must be an array")
+                pulls.extend(value for value in values if isinstance(value, dict) and
+                             (value.get("state") == "open" or
+                              (state == "all" and value.get("state") == "closed" and value.get("merged_at"))) and
+                             isinstance(value.get("base"), dict) and value["base"].get("ref") == branch)
+                if len(values) < 100:
+                    return pulls
+            if state == "all" and errors is not None:
+                errors.append("Merged PR history exceeds the discovery limit; configure an explicit backend PR for older merges")
         raise MonitorError("Too many open PRs; configure an explicit backend PR")
 
     @staticmethod
@@ -405,7 +414,9 @@ class BranchMonitor:
     @staticmethod
     def _matches_pr_selector(pr: dict[str, Any], branch: str, selector: dict[str, Any]) -> bool:
         base, candidate_head = pr.get("base"), pr.get("head")
-        if (pr.get("state") != "open" or type(pr.get("number")) is not int or pr["number"] <= 0 or
+        eligible = pr.get("state") == "open" or (pr.get("state") == "closed" and
+                    (pr.get("merged") is True or bool(pr.get("merged_at"))))
+        if (not eligible or type(pr.get("number")) is not int or pr["number"] <= 0 or
                 not isinstance(base, dict) or base.get("ref") != branch or
                 not isinstance(candidate_head, dict) or not isinstance(candidate_head.get("ref"), str)):
             return False
@@ -416,7 +427,7 @@ class BranchMonitor:
                  any(term.casefold() in str(pr.get("title", "")).casefold() for term in selector["title_terms"])))
 
     def _pr(self, backend: str, branch: str, force: bool, errors: list[str],
-            open_prs: list[dict[str, Any]] | None = None, head: str | None = None) -> tuple[dict[str, Any] | None, dict[str, Any] | None]:
+            candidate_prs: list[dict[str, Any]] | None = None, head: str | None = None) -> tuple[dict[str, Any] | None, dict[str, Any] | None]:
         value = self.backend_prs.get(backend)
         number = value.get("number") if isinstance(value, dict) else value
         number = number if type(number) is int and number > 0 else None
@@ -438,22 +449,32 @@ class BranchMonitor:
         mapped_merged = (number is None and backend not in self.backend_pr_discovery and
                          branch == self.branch and head and isinstance(mapped_commit, str) and
                          self._ancestor(mapped_commit.lower(), head))
-        if selector and open_prs is not None and not accepted and not configured_open and not mapped_merged:
-            candidates = list({pr["number"]: pr for pr in open_prs
+        if selector and candidate_prs is not None and not accepted and not configured_open and not mapped_merged:
+            candidates = list({pr["number"]: pr for pr in candidate_prs
                                if self._matches_pr_selector(pr, branch, selector)}.values())
-            configured = next((pr for pr in candidates if pr.get("number") == number), None)
-            candidate = configured or (candidates[0] if len(candidates) == 1 else None)
+            active = [pr for pr in candidates if pr.get("state") == "open"]
+            merged = [pr for pr in candidates if pr.get("state") == "closed" and head and
+                      self._ancestor(pr.get("merge_commit_sha"), head)]
+            configured = next((pr for pr in active if pr.get("number") == number), None)
+            # Keep tracking the current adaptation while open; after merging,
+            # recover it from GitHub history, including after a service restart.
+            candidate = configured or (active[0] if len(active) == 1 else None)
+            if not active and merged:
+                candidate = max(merged, key=lambda pr: (str(pr.get("merged_at") or ""), pr["number"]))
             if candidate and candidate.get("number") != number:
                 try:
                     replacement = self._api(f"pulls/{candidate['number']}", force)
                     if (replacement.get("number") == candidate["number"] and
-                            self._matches_pr_selector(replacement, branch, selector)):
+                            self._matches_pr_selector(replacement, branch, selector) and
+                            (replacement.get("state") == "open" or
+                             (replacement.get("merged") is True and head and
+                              self._ancestor(replacement.get("merge_commit_sha"), head)))):
                         number, data, selected_by = candidate["number"], replacement, "discovered"
                     else:
                         errors.append(f"Discovered {backend} PR no longer matches the target branch or selector")
                 except (KeyError, OSError, ValueError, MonitorError) as exc:
                     errors.append(f"Discovered {backend} PR unavailable: {exc}")
-            elif not configured and len(candidates) > 1:
+            elif not configured and len(active) > 1:
                 errors.append(f"Multiple open {backend} adaptation PRs target this branch; configure the intended PR number")
         if number is None:
             return None, None
@@ -858,15 +879,15 @@ class BranchMonitor:
         registry_backends = [self._ci_backend_ids.get(platform, platform) for platform in registry]
         backend_ids = list(dict.fromkeys([*registry_backends, *self.backend_labels, *self.backend_prs,
                                           *self.merged_commits, *self.backend_pr_discovery]))
-        open_prs = None
+        candidate_prs = None
         if backend_ids and self.github_repo:
             try:
-                open_prs = self._open_prs(branch, force)
+                candidate_prs = self._candidate_prs(branch, force, errors)
             except (OSError, ValueError, MonitorError) as exc:
                 errors.append(f"Backend PR discovery unavailable: {exc}")
         backends = []
         for backend in backend_ids:
-            pr, pr_data = self._pr(backend, branch, force, errors, open_prs, sha)
+            pr, pr_data = self._pr(backend, branch, force, errors, candidate_prs, sha)
             integration = self._integration(backend, branch, sha, pr_data)
             ci = self._backend_ci(backend, integration, jobs, branch_ci, pr_data, force, errors, branch=branch)
             current_ci = self._branch_backend_ci(backend, jobs, branch_ci) if integration["status"] == "merged" else ci
