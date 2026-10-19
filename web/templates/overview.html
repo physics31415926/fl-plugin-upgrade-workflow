@@ -165,7 +165,7 @@
     if(readOnly&&!matching.length)return;card.tasks.append(el('h3','','适配任务'));
     if(!matching.length){card.tasks.append(el('div','empty','此分支暂无活跃任务'));return;}
     for(const session of matching.slice(0,6)){
-      const box=el('div','task'),copy=el('div','task-copy'),backend=card.snapshot?.backends?.find(item=>item.id===session.backend)?.label||({corex:'iluvatar',iluvatar:'iluvatar'}[session.backend])||session.backend;
+      const box=el('div','task'),copy=el('div','task-copy'),backend=card.snapshot?.backends?.find(item=>item.id===session.backend)?.label||({corex:'iluvatar / 天数智芯',iluvatar:'iluvatar / 天数智芯'}[session.backend])||session.backend;
       const title=backend+' · '+(taskLabels[session.status]||session.status||'状态未知');
       if(!readOnly&&session.controllable!==false){const anchor=el('a','',title);anchor.href=appUrl('sessions?session='+encodeURIComponent(session.id),card.project.id,session.branch);copy.append(anchor);}else copy.append(el('strong','',title));
       copy.append(el('p','',session.source==='codex_native'?'Codex 原生子会话 · 只读跟踪':(({claude:'Claude',flagscale:'FlagScale Agent'}[session.provider]||'Codex')+' 看板任务')));

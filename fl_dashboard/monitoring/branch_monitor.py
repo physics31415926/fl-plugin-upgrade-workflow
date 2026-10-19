@@ -43,9 +43,19 @@ REF = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._/-]*$")
 REPO = re.compile(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")
 PLATFORM = re.compile(r"^[a-z][a-z0-9_-]{0,63}$")
 CASE_DIR = "tools/adaptation-gate-cases"
-LABELS = {"cuda": "NVIDIA", "ascend": "Ascend", "metax": "MetaX", "corex": "iluvatar",
-          "hygon": "Hygon", "musa": "MUSA", "thead": "THead",
-          "enflame": "Enflame", "kunlunxin": "Kunlunxin", "tsingmicro": "Tsingmicro / 清微", "sunrise": "Sunrise / 曦望"}
+LABELS = {
+    "cuda": "NVIDIA / 英伟达",
+    "ascend": "Ascend / 昇腾",
+    "enflame": "Enflame / 燧原",
+    "hygon": "Hygon / 海光",
+    "corex": "iluvatar / 天数智芯",
+    "kunlunxin": "Kunlunxin / 昆仑芯",
+    "metax": "MetaX / 沐曦",
+    "musa": "Moore Threads / 摩尔线程",
+    "sunrise": "Sunrise / 曦望",
+    "thead": "T-Head / 平头哥",
+    "tsingmicro": "Tsingmicro / 清微"
+}
 
 
 class MonitorError(RuntimeError):
