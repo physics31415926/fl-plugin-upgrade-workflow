@@ -86,7 +86,7 @@ test('all-ended list offers history and only selects a record after explicit opt
   context.$('view-all').listeners.click();
   assert.equal(context.state.selected,'history');assert.deepEqual(listed(),['history']);
   context.$('view-active').listeners.click();
-  assert.deepEqual(listed(),[]);assert.equal(context.current().id,'history','hiding a selected card keeps its resumable detail');
+  assert.deepEqual(listed(),[]);assert.equal(context.current(),undefined,'manual navigation to an empty view clears the panel');
 });
 
 test('completed turns leave the active list without switching an open task detail',()=>{
@@ -110,12 +110,12 @@ for(const page of ['web/templates/overview.html','web/templates/index.html']) {
 }
 
 
-test('search and status/agent filters leave selected task and source data intact',()=>{
+test('manual filters select a matching task and leave source data intact',()=>{
   const sessions=[task('one','running',{provider:'claude',name:'升级尝试',branch:'dev/0.28'}),task('two','waiting_approval',{provider:'codex'}),task('three','failed',{provider:'flagscale'})];
   const {context,listed}=ui(sessions);context.state.selected='two';context.$('view-all').listeners.click();
-  context.$('task-search').value='0.28';context.$('task-search').listeners.input();assert.deepEqual(listed(),['one']);assert.equal(context.current().id,'two');
+  context.$('task-search').value='0.28';context.$('task-search').listeners.input();assert.deepEqual(listed(),['one']);assert.equal(context.current().id,'one');
   context.$('task-search').value='';context.$('task-search').listeners.input();context.$('task-status').value='waiting';context.$('task-status').listeners.change();assert.deepEqual(listed(),['two']);
-  context.$('task-status').value='';context.$('task-status').listeners.change();context.$('task-agent').value='flagscale';context.$('task-agent').listeners.change();assert.deepEqual(listed(),['three']);assert.equal(context.current().id,'two');
+  context.$('task-status').value='';context.$('task-status').listeners.change();context.$('task-agent').value='flagscale';context.$('task-agent').listeners.change();assert.deepEqual(listed(),['three']);assert.equal(context.current().id,'three');
   assert.equal(context.state.sessions.length,3);
 });
 
@@ -125,10 +125,10 @@ test('card refresh includes task name and provider changes',()=>{
   session.name='renamed';session.provider='claude';context.renderList();assert.match(card.button.textContent,/renamed/);assert.doesNotMatch(card.button.textContent,/original/);assert.match(card.contentKey,/claude/);
 });
 
-test('trash has a separate list and preserves explicitly selected identity',()=>{
+test('view changes keep selection inside the displayed list',()=>{
   const deleted=task('d'.repeat(32),'completed',{deleted_at:'2026-10-20T12:00:00Z'}),{context,listed}=ui([task('one','running')]);context.state.deletedSessions=[deleted];
-  context.$('view-trash').listeners.click();assert.deepEqual(listed(),[deleted.id]);context.state.selected=deleted.id;assert.equal(context.current(),deleted);
-  assert.equal(context.selectSessionId([...context.state.sessions,deleted],deleted.id,{}),deleted.id);context.$('view-all').listeners.click();assert.deepEqual(listed(),['one']);assert.equal(context.current(),deleted);
+  context.state.selected='one';context.$('view-trash').listeners.click();assert.deepEqual(listed(),[deleted.id]);assert.equal(context.current(),deleted);
+  assert.equal(context.selectSessionId([...context.state.sessions,deleted],deleted.id,{}),deleted.id);context.$('view-all').listeners.click();assert.deepEqual(listed(),['one']);assert.equal(context.current().id,'one');
 });
 
 test('deletion requires confirmation and rechecks current status before writing',async()=>{
@@ -165,4 +165,37 @@ test('an old poll cannot resurrect a deleted task and management waits for a fre
   vm.runInContext(between(source,'  async function refresh(', '  async function act('),context);
   const poll=context.refresh(true),management=context.manageTask('delete',session.id);await Promise.resolve();finishOld({sessions:[session],deleted_sessions:[]});
   await Promise.all([poll,management]);assert.equal(requests,2);assert.equal(context.state.sessions.length,0);assert.equal(context.current().deleted_at,deleted.deleted_at);assert.equal(context.state.refreshPromise,null);
+});
+
+
+function realDetail(context){
+  for(const name of ['syncMessageDraft','renderProvenance','renderPolicy','renderTaskActions','renderPersistenceNotice','renderPending','renderEvents','renderEventHistory'])context[name]=()=>{};
+  context.errorMessage=value=>value||'';context.claudeDenied=()=>false;
+  vm.runInContext(between(source,'  function renderDetail(', '  async function refresh('),context);
+}
+
+test('the panel follows card selection after leaving trash and clears for empty filters',()=>{
+  const deleted=task('d'.repeat(32),'completed',{deleted_at:'2026-10-20T12:00:00Z',name:'deleted'}),{context}=ui([task('one','running',{name:'first task'}),task('two','prepared',{name:'second task'})]);context.state.deletedSessions=[deleted];realDetail(context);
+  context.$('view-trash').listeners.click();assert.equal(context.$('deleted-task-detail').hidden,false);assert.equal(context.$('session-detail').hidden,true);
+  context.$('view-active').listeners.click();assert.equal(context.$('deleted-task-detail').hidden,true);assert.equal(context.$('detail-title').textContent,'first task');
+  context.sessionListCards.get('two').button.listeners.click();assert.equal(context.$('detail-title').textContent,'second task');assert.equal(context.$('session-detail').hidden,false);assert.equal(context.$('deleted-task-detail').hidden,true);
+  context.$('task-search').value='no-match';context.$('task-search').listeners.input();assert.equal(context.state.selected,null);assert.equal(context.$('session-detail').hidden,true);assert.equal(context.$('deleted-task-detail').hidden,true);assert.equal(context.$('no-selection').hidden,false);
+});
+
+test('polling cannot bring back a trash deep link after manual navigation',async()=>{
+  const deleted=task('d'.repeat(32),'completed',{deleted_at:'2026-10-20T12:00:00Z'}),session=task('one','running'),{context}=ui([session]);context.state.deletedSessions=[deleted];context.selectionTarget.session=deleted.id;
+  for(const name of ['renderSshSync','renderProviderSettings','renderFlagscaleSettings','showProfiles','renderHealth','checkButtons'])context[name]=()=>{};
+  context.request=async()=>({sessions:[session],deleted_sessions:[deleted]});vm.runInContext(between(source,'  async function refresh(', '  async function act('),context);
+  await context.refresh(true);assert.equal(context.state.view,'trash');assert.equal(context.current(),deleted);
+  context.$('view-active').listeners.click();await context.refresh(true);assert.equal(context.state.view,'active');assert.equal(context.current(),session);
+  context.$('task-search').value='nothing';context.$('task-search').listeners.input();await context.refresh(true);assert.equal(context.state.selected,null);assert.equal(context.current(),undefined);
+});
+
+for(const action of ['delete','restore'])test(`late ${action} response does not replace the user's newer task selection`,async()=>{
+  const original=task('a'.repeat(32),'completed',action==='restore'?{deleted_at:'2026-10-20T12:00:00Z'}:{}),other=task('b'.repeat(32),'running'),{context}=ui(action==='delete'?[original,other]:[other]);
+  if(action==='restore'){context.state.deletedSessions=[original];context.$('view-trash').listeners.click();}else context.$('view-all').listeners.click();
+  context.state.selected=original.id;let finish;context.post=()=>new Promise(resolve=>finish=resolve);
+  const operation=context.manageTask(action,original.id);context.$('view-active').listeners.click();context.sessionListCards.get(other.id).button.listeners.click();
+  finish({...original,deleted_at:action==='delete'?'2026-10-20T12:01:00Z':undefined});await operation;
+  assert.equal(context.state.view,'active');assert.equal(context.current().id,other.id);assert.equal(context.state.selected,other.id);
 });

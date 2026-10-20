@@ -150,7 +150,7 @@ Grep</textarea><small class="hint">SSH 命令可显式配置 Bash(ssh *)。未�
   }
   const labels = {cuda:'NVIDIA / 英伟达',ascend:'Ascend / 昇腾',metax:'MetaX / 沐曦',corex:'iluvatar / 天数智芯',hygon:'Hygon / 海光',musa:'Moore Threads / 摩尔线程',enflame:'Enflame / 燧原',kunlunxin:'Kunlunxin / 昆仑芯',thead:'T-Head / 平头哥',tsingmicro:'Tsingmicro / 清微',sunrise:'Sunrise / 曦望'};
     const statuses = {prepared:'待启动',starting:'正在启动',running:'执行中',waiting_approval:'等待授权',waiting_input:'等待回答',interrupting:'正在中断',completed:'本轮已结束',interrupted:'已中断',failed:'本轮异常',disconnected:'连接中断'};
-    const state = {sessions:[],deletedSessions:[],view:"active",search:"",statusFilter:"",agentFilter:"",deleteTarget:null,sessionRevision:0,refreshPromise:null,profiles:[],policies:{},selected:null,showHistory:false,available:false,fetching:false,pendingKey:'',eventsKey:'',profileKey:'',listKey:'',actionBusy:false,creating:false,checking:false,checkedKey:'',providers:{},agentSettings:null,settingsInitialized:false,settingsBusy:false,flagscaleSettingsInitialized:false,flagscaleSettingsBusy:false,readOnly:false,loadingBranches:false,branchEdited:false,sshSync:null,sshSyncBusy:false};
+    const state = {sessions:[],deletedSessions:[],view:"active",search:"",statusFilter:"",agentFilter:"",deleteTarget:null,selectionRevision:0,sessionRevision:0,refreshPromise:null,profiles:[],policies:{},selected:null,showHistory:false,available:false,fetching:false,pendingKey:'',eventsKey:'',profileKey:'',listKey:'',actionBusy:false,creating:false,checking:false,checkedKey:'',providers:{},agentSettings:null,settingsInitialized:false,settingsBusy:false,flagscaleSettingsInitialized:false,flagscaleSettingsBusy:false,readOnly:false,loadingBranches:false,branchEdited:false,sshSync:null,sshSyncBusy:false};
   const sessionListCards = new Map();
   const orderedBackends=Object.keys(labels).sort((a,b)=>a==='cuda'?-1:b==='cuda'?1:labels[a].toLowerCase().localeCompare(labels[b].toLowerCase(),'en'));
   for(const backend of orderedBackends){const option=document.querySelector('#backend option[value="'+backend+'"]');if(option)$('backend').append(option);}
@@ -286,7 +286,7 @@ Grep</textarea><small class="hint">SSH 命令可显式配置 Bash(ssh *)。未�
     const labels=monitor?{pending:'待执行（历史记录）',in_progress:'未完成（历史记录）',completed:'已结束（历史记录）'}:{pending:'待执行',in_progress:'进行中',completed:'已完成'};
     return labels[status]||(monitor?'待确认（历史记录）':'待确认');
   }
-  function current() { return [...state.sessions,...state.deletedSessions].find(item => String(item.id) === state.selected); }
+  function current() { return [...state.sessions,...state.deletedSessions].find(item => String(item.id) === state.selected && (state.view==='trash'?!!item.deleted_at:!item.deleted_at)); }
   function working(session) { return ['starting','running','waiting_approval','waiting_input','interrupting'].includes(session?.status); }
   function startupFailed(session) { return !!session && session.status==='failed'&&!session.thread_id; }
   function desktopOwned(session) { return session?.execution_owner==='codex_desktop'; }
@@ -308,10 +308,15 @@ Grep</textarea><small class="hint">SSH 命令可显式配置 Bash(ssh *)。未�
       return !query||[session.name,session.id,session.backend,labels[session.backend],session.branch,session.ssh_alias,providerName(session.provider)].filter(Boolean).join(' ').toLocaleLowerCase().includes(query);
     }));
   }
+  function selectVisibleTask() {
+    state.selectionRevision++;
+    state.selected=selectSessionId(visibleSessions(),state.selected,{});
+    state.pendingKey='';state.eventsKey='';
+    renderList();renderDetail();
+  }
   function setTaskView(view) {
     state.view=view;state.showHistory=view==='all';
-    state.selected=selectSessionId([...state.sessions,...state.deletedSessions],state.selected,selectionTarget);
-    renderList();renderDetail();
+    selectVisibleTask();
   }
   function managedTask(session) { return !!session&&/^[0-9a-f]{32}$/.test(session.id); }
   function canDeleteTask(session) { return !state.readOnly&&managedTask(session)&&!session.deleted_at&&!working(session)&&!session.approval_cancel_pending&&(!desktopOwned(session)||session.desktop_lease_released===true); }
@@ -326,9 +331,10 @@ Grep</textarea><small class="hint">SSH 命令可显式配置 Bash(ssh *)。未�
     return adapt.concat(monitor);
   }
   function selectSessionId(sessions, selected, target) {
+    sessions=sessions.filter(session=>state.view==='trash'?!!session.deleted_at:!session.deleted_at);
     if(sessions.some(session=>String(session.id)===selected))return selected;
     if(target.session)return sessions.some(session=>String(session.id)===target.session)?target.session:null;
-    const match=visibleSessions(sessions.filter(session=>state.view==='trash'?!!session.deleted_at:!session.deleted_at)).find(session=>(!target.branch||session.branch===target.branch)&&(!target.backend||session.backend===target.backend));
+    const match=visibleSessions(sessions).find(session=>(!target.branch||session.branch===target.branch)&&(!target.backend||session.backend===target.backend));
     return match?String(match.id):null;
   }
   function missingSelectionMessage(target) {
@@ -530,7 +536,7 @@ Grep</textarea><small class="hint">SSH 命令可显式配置 Bash(ssh *)。未�
       const id=String(session.id);let entry=sessionListCards.get(id);
       if(!entry){
         const button=el('button','session-card');button.type='button';
-        button.addEventListener('click',()=>{state.selected=id;state.pendingKey='';state.eventsKey='';notice('session-notice','');notice('trash-notice','');renderList();renderDetail();});
+        button.addEventListener('click',()=>{state.selectionRevision++;state.selected=id;state.pendingKey='';state.eventsKey='';notice('session-notice','');notice('trash-notice','');renderList();renderDetail();});
         entry={button,contentKey:null};sessionListCards.set(id,entry);
       }
       const button=entry.button;button.className='session-card'+(id===state.selected?' selected':'');button.setAttribute('aria-pressed',String(id===state.selected));
@@ -711,7 +717,7 @@ Grep</textarea><small class="hint">SSH 命令可显式配置 Bash(ssh *)。未�
   // END session message drafts
 
   function renderDetail() {
-    const session=current(),missing=session?'':missingSelectionMessage(selectionTarget);
+    const session=current(),missing=session||state.selectionRevision?'':missingSelectionMessage(selectionTarget);
     syncMessageDraft(session);
     $('selection-notice').textContent=missing;$('selection-notice').hidden=!missing;
     const deleted=!!session?.deleted_at;
@@ -740,7 +746,7 @@ Grep</textarea><small class="hint">SSH 命令可显式配置 Bash(ssh *)。未�
     if(state.refreshPromise){if(!force)return state.refreshPromise;await state.refreshPromise;}
     const revision=state.sessionRevision;state.fetching=true;
     state.refreshPromise=(async()=>{
-    try{const data=await request(API);if(revision!==state.sessionRevision)return;state.sessions=Array.isArray(data.sessions)?data.sessions:[];state.deletedSessions=Array.isArray(data.deleted_sessions)?data.deleted_sessions:[];state.policies=data.backend_task_policies&&typeof data.backend_task_policies==='object'?data.backend_task_policies:{};state.profiles=Array.isArray(data.machine_profiles)?data.machine_profiles:[];renderSshSync(data.ssh_config_sync);state.available=!!data.available;state.providers=data.providers&&typeof data.providers==='object'?data.providers:{};renderProviderSettings(data.agent_settings);if(data.agent_settings_by_provider?.flagscale)renderFlagscaleSettings(data.agent_settings_by_provider.flagscale);state.selected=selectSessionId([...prioritizedSessions(state.sessions),...state.deletedSessions],state.selected,selectionTarget);showProfiles();renderHealth(data.health);renderList();renderDetail();$('sync-status').textContent='已更新 '+new Date().toLocaleTimeString('zh-CN',{hour12:false});checkButtons();if(!quiet)notice('global-notice','');}
+    try{const data=await request(API);if(revision!==state.sessionRevision)return;state.sessions=Array.isArray(data.sessions)?data.sessions:[];state.deletedSessions=Array.isArray(data.deleted_sessions)?data.deleted_sessions:[];state.policies=data.backend_task_policies&&typeof data.backend_task_policies==='object'?data.backend_task_policies:{};state.profiles=Array.isArray(data.machine_profiles)?data.machine_profiles:[];renderSshSync(data.ssh_config_sync);state.available=!!data.available;state.providers=data.providers&&typeof data.providers==='object'?data.providers:{};renderProviderSettings(data.agent_settings);if(data.agent_settings_by_provider?.flagscale)renderFlagscaleSettings(data.agent_settings_by_provider.flagscale);if(!state.selectionRevision&&selectionTarget.session&&state.deletedSessions.some(item=>String(item.id)===selectionTarget.session)){state.view='trash';state.showHistory=false;}state.selected=selectSessionId([...prioritizedSessions(state.sessions),...state.deletedSessions],state.selected,state.selectionRevision?{}:selectionTarget);showProfiles();renderHealth(data.health);renderList();renderDetail();$('sync-status').textContent='已更新 '+new Date().toLocaleTimeString('zh-CN',{hour12:false});checkButtons();if(!quiet)notice('global-notice','');}
     catch(error){$('sync-status').textContent='连接失败，将自动重试';notice('global-notice',error.message,true);}finally{state.fetching=false;}
     })();
     try{await state.refreshPromise;}finally{state.refreshPromise=null;}
@@ -776,6 +782,7 @@ Grep</textarea><small class="hint">SSH 命令可显式配置 Bash(ssh *)。未�
     if(state.readOnly||state.actionBusy||!['delete','restore'].includes(action))return false;
     const session=[...state.sessions,...state.deletedSessions].find(item=>String(item.id)===String(id));
     if(!managedTask(session)||action==='delete'&&!canDeleteTask(session)||action==='restore'&&!session.deleted_at)return false;
+    const selectionRevision=state.selectionRevision;
     state.actionBusy=true;renderDetail();
     try{
       const result=await post(API+'/'+encodeURIComponent(id)+'/'+action,{});
@@ -783,8 +790,10 @@ Grep</textarea><small class="hint">SSH 命令可显式配置 Bash(ssh *)。未�
       state.sessionRevision++;
       state.sessions=state.sessions.filter(item=>String(item.id)!==String(id));state.deletedSessions=state.deletedSessions.filter(item=>String(item.id)!==String(id));
       (action==='delete'?state.deletedSessions:state.sessions).unshift(result);
-      state.selected=String(id);state.pendingKey='';state.eventsKey='';state.view=action==='delete'?'trash':'all';state.showHistory=action==='restore';state.search='';state.statusFilter='';state.agentFilter='';
-      for(const field of ['task-search','task-status','task-agent'])$(field).value='';
+      if(state.selectionRevision===selectionRevision){
+        state.selectionRevision++;state.selected=String(id);state.pendingKey='';state.eventsKey='';state.view=action==='delete'?'trash':'all';state.showHistory=action==='restore';state.search='';state.statusFilter='';state.agentFilter='';
+        for(const field of ['task-search','task-status','task-agent'])$(field).value='';
+      }
       await refresh(true,true);renderList();notice('global-notice',action==='delete'?'任务已移入回收站，可点击「恢复任务」撤销。':'任务已恢复，可继续查看和管理。');return true;
     }catch(error){notice('global-notice',error.message,true);return false;}finally{state.actionBusy=false;renderDetail();}
   }
@@ -798,7 +807,7 @@ Grep</textarea><small class="hint">SSH 命令可显式配置 Bash(ssh *)。未�
       if(!body.automatic&&state.checkedKey!==checkKey()&&!await checkMachine())return;
       body=fields();notice('form-notice',body.automatic?'正在准备所选设备、远端工作目录与验收环境…':start?'正在创建独立工作目录并启动适配 agent…':'正在创建独立工作目录…');
       const payload={...body,start};if(!body.automatic)payload.require_preflight=true;
-      const result=await post(API,payload),session=result.session||result;state.selected=String(session.id);state.pendingKey='';state.eventsKey='';state.view='active';state.showHistory=false;state.search='';state.statusFilter='';state.agentFilter='';for(const field of ['task-search','task-status','task-agent'])$(field).value='';await refresh(true);$('new-task').open=false;
+      const result=await post(API,payload),session=result.session||result;state.selectionRevision++;state.selected=String(session.id);state.pendingKey='';state.eventsKey='';state.view='active';state.showHistory=false;state.search='';state.statusFilter='';state.agentFilter='';for(const field of ['task-search','task-status','task-agent'])$(field).value='';await refresh(true);$('new-task').open=false;
       notice('form-notice',body.automatic?'任务已下发，设备与环境准备进展可在任务区查看。':start?'任务已下发。agent 将跟进适配、验收与归档，可在监控页查看进展。':'任务已创建。可在右侧启动执行。');
       const destination=monitorUrl(body.branch,session.id);$('monitor-after-start').href=destination;$('monitor-after-start').hidden=!start;
       if(start&&$('auto-monitor').checked){window.location.assign(destination);return;}if(innerWidth<741)$('session-detail').scrollIntoView({behavior:'smooth',block:'start'});
@@ -808,7 +817,7 @@ Grep</textarea><small class="hint">SSH 命令可显式配置 Bash(ssh *)。未�
   $('sync-ssh').addEventListener('click',syncSshConfig);
   // BEGIN task management controls
   for(const view of ['active','all','trash'])$('view-'+view).addEventListener('click',()=>setTaskView(view));
-  for(const [id,key,event] of [['task-search','search','input'],['task-status','statusFilter','change'],['task-agent','agentFilter','change']])$(id).addEventListener(event,()=>{state[key]=$(id).value;renderList();});
+  for(const [id,key,event] of [['task-search','search','input'],['task-status','statusFilter','change'],['task-agent','agentFilter','change']])$(id).addEventListener(event,()=>{state[key]=$(id).value;selectVisibleTask();});
   $('delete-session').addEventListener('click',openDeleteDialog);
   $('cancel-delete').addEventListener('click',()=>{$('delete-dialog').close();state.deleteTarget=null;});
   $('delete-dialog').addEventListener('close',()=>{state.deleteTarget=null;});

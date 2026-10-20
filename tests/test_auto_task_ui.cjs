@@ -4,7 +4,7 @@ function between(start,end){const a=source.indexOf(start),b=source.indexOf(end,a
 function ui(){
   const nodes=new Map(),calls=[],notices=[];
   const values={'agent-provider':'codex','profile':'gpu-demo','backend':'cuda','branch':'target-demo','ssh-alias':'gpu_demo','remote-workspace':'/work/plugin','connection-mode':'alias','model-paths':'','goal':'','ssh-host':'','ssh-user':'','ssh-port':'22'};
-  const context={state:{readOnly:false,creating:false,checking:false,checkedKey:'',profiles:[{id:'gpu-demo',role:'compute',ssh_alias:'gpu_demo'}],profileKey:''},labels:{cuda:'NVIDIA'},API:'/api/codex-sessions',innerWidth:1440,
+  const context={state:{selectionRevision:0,readOnly:false,creating:false,checking:false,checkedKey:'',profiles:[{id:'gpu-demo',role:'compute',ssh_alias:'gpu_demo'}],profileKey:''},labels:{cuda:'NVIDIA'},API:'/api/codex-sessions',innerWidth:1440,
     $:id=>{if(!nodes.has(id))nodes.set(id,{value:values[id]||'',textContent:'',checked:false,hidden:false,disabled:false,required:false,querySelectorAll:()=>[...nodes].filter(([id])=>Object.hasOwn(values,id)||['custom-settings','auto-monitor'].includes(id)).map(([,node])=>node),reportValidity:()=>true});return nodes.get(id);},
     taskPolicy:()=>({mode:'adapt'}),renderPolicy:()=>{},isCompute:profile=>(profile?.role||'compute')==='compute',providerAvailable:()=>true,renderSshSync:()=>{},showProfiles:()=>{},
     notice:(id,message,error)=>notices.push({id,message,error:!!error}),refresh:async()=>{},monitorUrl:(branch,id)=>'/monitor?branch='+branch+'&session='+id,
@@ -62,4 +62,11 @@ test('branch suggestions preserve edits made while loading and leave manual entr
   assert.equal(context.$('branch').value,'user/next');assert.deepEqual(Array.from(list.children,item=>item.value),['user/next','main','dev/next']);
   context.request=async()=>{throw Error('offline');};await context.loadBranchOptions();
   assert.equal(context.$('branch').value,'user/next');assert.equal(context.$('branch').disabled,false);assert.equal(context.$('reload-branches').disabled,false);assert.match(context.$('branch-hint').textContent,/可重试或直接输入/);
+});
+
+
+test('creating a task replaces initial deep-link selection before refreshing',async()=>{
+  const {context}=ui();context.state.selected='deleted-deep-link';context.state.view='trash';let refreshed=false;
+  context.refresh=async()=>{refreshed=true;assert.equal(context.state.selectionRevision,1);assert.equal(context.state.view,'active');assert.equal(context.state.selected,'task-demo');};
+  await context.create(false);assert.equal(refreshed,true);assert.equal(context.state.selected,'task-demo');
 });
