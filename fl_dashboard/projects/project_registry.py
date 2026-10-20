@@ -172,9 +172,13 @@ class RemoteSessionManager:
     def allocation_sessions(self):
         return self.snapshot(compact=True).get("sessions", [])
 
-    def _get(self, session_id):
+    def _get(self, session_id, *, include_deleted=False):
         session_id = self._session_id(session_id)
-        for session in self.allocation_sessions():
+        snapshot = self.snapshot(compact=True)
+        rows = snapshot.get("sessions", [])
+        if include_deleted:
+            rows = rows + snapshot.get("deleted_sessions", [])
+        for session in rows:
             if session.get("id") == session_id:
                 return session
         self._fail("Unknown session")
@@ -221,6 +225,22 @@ class RemoteSessionManager:
             self._require_free_machine(machine)
             # create is preparation only; flflow separately invokes start.
             return self._request("/api/codex-sessions", {**body, "start": False})
+
+    def delete(self, session_id):
+        session_id = self._session_id(session_id)
+        with self.machine_lock:
+            return self._request(f"/api/codex-sessions/{session_id}/delete", {})
+
+    def restore(self, session_id):
+        session_id = self._session_id(session_id)
+        with self.machine_lock:
+            session = self._get(session_id, include_deleted=True)
+            if session.get("deleted_at") and (session.get("status") in
+                    {"prepared", "starting", "running", "waiting_approval", "waiting_input", "interrupting"}
+                    or (session.get("execution_owner") == "codex_desktop"
+                        and not session.get("desktop_lease_released"))):
+                self._require_free_machine(session, excluding=session_id)
+            return self._request(f"/api/codex-sessions/{session_id}/restore", {})
 
     def start(self, session_id):
         with self.machine_lock:

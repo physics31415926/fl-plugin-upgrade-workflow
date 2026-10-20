@@ -1019,7 +1019,7 @@ def make_server(engine: Engine | None, host: str, port: int, monitor: object | N
                     self._json(200, {"profiles": result.get("machine_profiles", []),
                                      "ssh_config_sync": result.get("ssh_config_sync")})
                     return
-                session_action = re.fullmatch(r"/api/codex-sessions/([A-Za-z0-9_-]+)/(start|message|interrupt|respond|desktop)", target)
+                session_action = re.fullmatch(r"/api/codex-sessions/([A-Za-z0-9_-]+)/(start|message|interrupt|respond|desktop|delete|restore)", target)
                 if session_action and not re.fullmatch(r"[0-9a-f]{32}", session_action[1]):
                     raise WorkflowError("Invalid dashboard session ID; native tasks are observation-only")
                 if target in ("/api/codex-machines", "/api/codex-machines/check", "/api/codex-sessions") or session_action:
@@ -1048,6 +1048,10 @@ def make_server(engine: Engine | None, host: str, port: int, monitor: object | N
                             result = sessions.message(session_id, body.get("text", ""))
                         elif action == "interrupt":
                             result = sessions.interrupt(session_id)
+                        elif action in ("delete", "restore"):
+                            if body:
+                                raise WorkflowError("Task deletion and restoration do not accept extra fields")
+                            result = getattr(sessions, action)(session_id)
                         elif action == "desktop":
                             if body:
                                 raise WorkflowError("Codex client continuation does not accept paths, URLs or task changes")

@@ -390,7 +390,7 @@ class ClaudeSessionManager(CodexSessionManager):
         result = super().snapshot(compact=compact)
         result["provider"] = "claude"
         result["agent_settings"] = self.agent_settings.snapshot()
-        for session in result["sessions"]:
+        for session in result["sessions"] + result["deleted_sessions"]:
             session["provider"] = "claude"
         return result
 
@@ -438,7 +438,7 @@ class ClaudeSessionManager(CodexSessionManager):
         method, params = message.get("method"), message.get("params", {})
         with self._lock:
             session = self._sessions.get(session_id)
-            if not session:
+            if not session or session.get("deleted_at"):
                 return
             if method == "claude/result":
                 denials = params.get("permission_denials", [])

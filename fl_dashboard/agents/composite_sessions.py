@@ -139,7 +139,7 @@ class CompositeSessionManager:
         method = getattr(manager, "allocation_sessions", None)
         return method() if method is not None else manager.snapshot(compact=True).get("sessions", [])
 
-    def _owner(self, session_id):
+    def _owner(self, session_id, *, include_deleted=False):
         if not isinstance(session_id, str) or not re.fullmatch(r"[0-9a-f]{32}", session_id):
             raise SessionError("Invalid dashboard session ID; native tasks are observation-only")
         owners, unavailable = [], False
@@ -147,7 +147,10 @@ class CompositeSessionManager:
             if manager is None:
                 continue
             try:
-                if any(row.get("id") == session_id for row in self._allocation(manager)):
+                rows = self._allocation(manager)
+                if include_deleted:
+                    rows = rows + manager.snapshot(compact=True).get("deleted_sessions", [])
+                if any(row.get("id") == session_id for row in rows):
                     owners.append((provider, manager))
             except Exception:
                 unavailable = True
@@ -159,9 +162,15 @@ class CompositeSessionManager:
 
     def _control(self, action, session_id, *args, **kwargs):
         with self.machine_lock:
-            provider, manager = self._owner(session_id)
+            provider, manager = self._owner(session_id, include_deleted=action in {"delete", "restore"})
             result = getattr(manager, action)(session_id, *args, **kwargs)
             return {**result, "provider": provider} if isinstance(result, dict) else result
+
+    def delete(self, session_id):
+        return self._control("delete", session_id)
+
+    def restore(self, session_id):
+        return self._control("restore", session_id)
 
     def start(self, session_id):
         return self._control("start", session_id)
@@ -231,6 +240,10 @@ class CompositeSessionManager:
         result["sessions"] = [{**row, "provider": provider}
                               for provider, snapshot in snapshots.items() for row in snapshot.get("sessions", [])]
         result["sessions"].sort(key=lambda row: str(row.get("created_at", "")), reverse=True)
+        result["deleted_sessions"] = [{**row, "provider": provider}
+                                      for provider, snapshot in snapshots.items()
+                                      for row in snapshot.get("deleted_sessions", [])]
+        result["deleted_sessions"].sort(key=lambda row: str(row.get("deleted_at", "")), reverse=True)
         profiles = {}
         for provider, _ in self._provider_managers():
             for profile in snapshots.get(provider, {}).get("machine_profiles", []):

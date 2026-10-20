@@ -11,7 +11,7 @@ class Element{
 }
 function ui(extras={}){
   const nodes=new Map(),calls=[],notices=[],session={id:'original-task',provider:'codex',status:'waiting_approval',thread_id:thread,backend:'enflame',branch:'target-demo',worktree:'/local/original-worktree',...extras};
-  const context={state:{available:true,providers:{codex:{available:true,authenticated:true}},readOnly:false,actionBusy:false,sessions:[session],selected:session.id,pendingKey:''},API:'/api/codex-sessions',encodeURIComponent,
+  const context={state:{available:true,providers:{codex:{available:true,authenticated:true}},readOnly:false,actionBusy:false,sessions:[session],deletedSessions:[],view:"active",search:"",statusFilter:"",agentFilter:"",selected:session.id,pendingKey:''},API:'/api/codex-sessions',encodeURIComponent,
     $:id=>{if(!nodes.has(id))nodes.set(id,new Element('div'));return nodes.get(id);},el:(tag,cls,text)=>{const node=new Element(tag);node.className=cls||'';node.textContent=text||'';return node;},
     notice:(id,message,error)=>notices.push({id,message,error:!!error}),taskPolicy:()=>({mode:'adapt'}),checkButtons:()=>{},refresh:async()=>{},errorMessage:value=>typeof value==='string'?value:'',
     approvalDecisions:()=>['accept','decline'],decisionLabel:value=>value,

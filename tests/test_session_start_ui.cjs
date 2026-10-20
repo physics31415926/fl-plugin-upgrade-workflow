@@ -3,7 +3,7 @@ const html=fs.readFileSync(path.join(__dirname,'..','web/templates/sessions.html
 function between(start,end){const a=source.indexOf(start),b=source.indexOf(end,a);assert(a>=0&&b>a,`source exists: ${start}`);return source.slice(a,b);}
 function ui(info={available:true,authenticated:true,error:null}){
   const nodes=new Map(),calls=[],notices=[],session={id:'original-task',provider:'codex',status:'failed',thread_id:null,backend:'enflame',branch:'target-demo',worktree:'/local/original-worktree'};
-  const context={state:{available:true,providers:{codex:info},readOnly:false,actionBusy:false,sessions:[session],selected:session.id},API:'/api/codex-sessions',encodeURIComponent,
+  const context={state:{available:true,providers:{codex:info},readOnly:false,actionBusy:false,sessions:[session],deletedSessions:[],view:"active",search:"",statusFilter:"",agentFilter:"",selected:session.id},API:'/api/codex-sessions',encodeURIComponent,
     $:id=>{if(!nodes.has(id))nodes.set(id,{value:id==='agent-provider'?'codex':'',disabled:false,textContent:'',hidden:false});return nodes.get(id);},
     notice:(id,message,error)=>notices.push({id,message,error:!!error}),taskPolicy:()=>({mode:'adapt'}),errorMessage:value=>typeof value==='string'?value:'',checkButtons:()=>{},refresh:async()=>{},
     post:async(url,body)=>{calls.push({url,body});return {session};},request:async()=>({providers:{codex:{available:true,authenticated:true,error:null}},available:true})};

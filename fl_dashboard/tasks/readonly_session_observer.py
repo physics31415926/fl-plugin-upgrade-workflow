@@ -51,7 +51,7 @@ class ReadonlySessionObserver:
             return None
 
     def _safe(self, value, provider, directory, controller_id):
-        if (not isinstance(value, dict) or value.get("id") != controller_id
+        if (not isinstance(value, dict) or value.get("deleted_at") or value.get("id") != controller_id
                 or value.get("provider", provider) != provider or value.get("status") not in self.STATUSES):
             return None
         backend, branch = value.get("backend"), value.get("branch")

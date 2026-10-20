@@ -31,29 +31,50 @@
     @media(prefers-color-scheme:dark){.button.stop{color:#ffbdc7}.button.primary:disabled{background:#304875;border-color:#304875}}
     @media(max-width:1100px){.layout{grid-template-columns:minmax(0,1fr) 320px;gap:16px}.session-list{grid-template-columns:1fr}.detail-head{flex-direction:column}.health{max-width:300px}.shell{padding-left:20px;padding-right:20px}}
     @media(max-width:740px){.shell{padding-left:14px;padding-right:14px}.layout{display:flex;flex-direction:column;gap:18px}.workspace,.create-panel{width:100%}.create-panel{position:static}.hero{padding:18px;display:block}.hero h1{font-size:23px}.health{max-width:none;margin-top:14px}.toplinks{width:100%;gap:10px}.toplinks .secondary{display:none}.toplinks select{max-width:200px}.button,.button.small,.secondary-actions .button{min-height:44px}.field input,.field select{min-height:44px}.task-context{grid-template-columns:1fr 1fr;padding:14px 16px}.task-context>div:last-child{grid-column:1/-1}.detail-actions{width:100%;gap:8px}.detail-actions .button{flex:1}.session-list{grid-template-columns:1fr}.followup .actions{align-items:stretch;flex-direction:column}.followup .hint{max-width:100%}.followup .button{width:100%}.section-title h2{font-size:16px}.task-list-options{justify-content:flex-start}.technical-info .detail-meta{grid-template-columns:1fr}.section-title #new-task-link{min-width:104px}}
+    /* Task list, selected task, and creation are distinct work areas. */
+    .hero{padding:18px 22px;box-shadow:none}.hero h1{font-size:23px}.health{padding:9px 12px}.health strong{margin-bottom:6px}.health small{font-size:11px}
+    .layout{display:flex;flex-direction:column;gap:16px}.create-panel{order:-1;position:static;width:100%}.create-panel>.form{max-width:800px;margin:auto}.create-panel:not([open]){display:none}.create-panel .health{max-width:none;margin:14px 0;min-width:0}.create-toggle{padding:12px 18px}.create-toggle #create-title{font-size:14px}
+    .workspace{display:grid;grid-template-columns:300px minmax(0,1fr);gap:14px 18px;width:100%;align-items:start}.section-title{grid-column:1/-1;margin:2px 0 0}.section-title h2{font-size:16px}.section-title .task-list-options{margin-left:auto}
+    .task-toolbar{grid-column:1/-1;display:flex;flex-wrap:wrap;align-items:center;gap:10px;padding:12px;background:var(--panel);border:1px solid var(--line);border-radius:11px}.task-views{display:flex;gap:4px;padding:3px;background:var(--soft);border-radius:9px}.task-views button{border:0;background:transparent;color:var(--muted);padding:8px 12px;min-height:38px;border-radius:7px;cursor:pointer;white-space:nowrap}.task-views button[aria-pressed="true"]{background:var(--blue);color:var(--panel)}.task-views span{font-size:11px;margin-left:5px;opacity:.8}.task-search{flex:1;min-width:190px}.task-toolbar input,.task-toolbar select{width:100%;min-height:40px;border:1px solid var(--line);border-radius:8px;padding:8px 10px;background:var(--panel);color:var(--ink)}.task-filter{width:140px}.sr-only{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0,0,0,0);white-space:nowrap}
+    .session-list{grid-column:1;grid-row:3;display:flex;flex-direction:column;gap:8px;max-height:78vh;overflow:auto;padding:2px 3px 5px;margin:0;scrollbar-width:thin}.session-card{padding:12px;box-shadow:none;flex-shrink:0}.session-top strong{overflow-wrap:anywhere}.session-sub{font-size:11px;line-height:1.5;display:block;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.session-summary{margin-top:7px;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;white-space:normal;min-height:33px;color:var(--ink);opacity:.8}.session-time{font-size:10px;margin-top:7px;color:var(--muted)}
+    #no-sessions{grid-column:1;grid-row:3;padding:24px 16px;font-size:12px}#session-detail,#deleted-task-detail,#no-selection{grid-column:2;grid-row:3;min-width:0}#selection-notice{grid-column:1/-1;margin:0}.workspace>.footnote{grid-column:1/-1;margin:0}.detail-head{flex-direction:column;gap:12px}.detail-actions{width:100%}.detail-actions .button{min-height:36px;font-size:12px;padding:7px 10px}#delete-session{margin-left:auto}.task-context{grid-template-columns:1fr 1fr}.task-context>div:last-child{grid-column:1/-1}.management-note{font-size:12px;line-height:1.7;color:var(--muted);margin:0}.delete-dialog{width:min(440px,calc(100% - 32px));padding:24px;border:1px solid var(--line);border-radius:14px;background:var(--panel);color:var(--ink);box-shadow:0 24px 70px #0003}.delete-dialog::backdrop{background:#15253d66}.delete-dialog h2{font-size:18px;margin:0 0 12px}.delete-dialog p{overflow-wrap:anywhere}.delete-dialog .actions{justify-content:flex-end;margin-top:20px}
+    @media(min-width:1250px){.workspace{grid-template-columns:330px minmax(0,1fr)}.detail-head{flex-direction:row}.detail-head>div:first-child{flex:1;min-width:0}.detail-actions{width:auto;flex-shrink:1}.task-context{grid-template-columns:1fr 1.5fr 1fr}.task-context>div:last-child{grid-column:auto}}
+    @media(max-width:850px){.workspace{grid-template-columns:1fr;gap:12px}.session-list{grid-column:1;grid-row:3;max-height:340px;display:grid;grid-template-columns:repeat(2,minmax(0,1fr));align-items:stretch}#session-detail,#deleted-task-detail,#no-selection{grid-column:1;grid-row:4}.task-filter{flex:1;min-width:120px}.task-search{flex-basis:50%}.task-views{width:100%}.task-views button{flex:1}.section-title .task-list-options{font-size:10px}.workspace>.footnote{grid-row:5}.detail-actions .button{flex:0 1 auto}.create-panel{width:100%}#delete-session{margin-left:auto}}
+    @media(max-width:480px){.session-list{grid-template-columns:1fr;max-height:300px}.task-search{flex-basis:100%}.task-views button{padding:8px}.hero .health{margin-top:12px}.section-title{gap:8px}.section-title .task-list-options{width:100%;margin-left:0}}
   </style>
 </head>
 <body>
 <div class="shell">
   <header class="topbar"><div class="brand"><span class="mark" aria-hidden="true">FL</span><span><span id="project-brand">vLLM-Plugin-FL</span> <span class="brand-extra" style="font-weight:400;color:var(--muted)">/ 升级任务</span></span></div><nav class="toplinks" aria-label="页面导航"><a id="overview-link" href="/" hidden>总览</a><label id="project-picker" hidden>仓库 <select id="project-select" aria-label="选择仓库"></select></label><a id="monitor-link" href="/">分支进展</a><a class="current" href="#session-list" aria-current="page">任务</a><a class="secondary" href="/workflow">演示流程</a></nav></header>
   <main>
-    <section class="hero"><div><div class="eyebrow">Backend upgrade sessions</div><h1>任务工作台</h1><p>查看任务进展、处理待办，或选择设备和 Agent 开始新任务。</p></div><div class="health"><strong id="health-status">正在检查本机 agent…</strong><button class="button small" id="health-check" type="button">检查 agent 连接</button><small id="health-note">任务保存在本机，可在此页面继续。</small></div></section>
+    <section class="hero"><div><div class="eyebrow">Backend upgrade sessions</div><h1>任务工作台</h1><p>查看任务进展、处理待办，或选择设备和 Agent 开始新任务。</p></div></section>
     <div id="global-notice" class="notice" role="status" aria-live="polite"></div>
     <div class="layout">
 
-      <section class="workspace" aria-label="任务监控"><div class="section-title"><h2>当前任务 <span id="session-count">0</span></h2><a class="button primary" id="new-task-link" href="#new-task">新建任务</a><div class="task-list-options"><label for="show-history"><input id="show-history" type="checkbox">历史任务</label><span id="sync-status">准备读取…</span></div></div><div id="session-list" class="session-list"></div><div id="no-sessions" class="empty"><strong id="no-sessions-title">创建第一个升级任务</strong><span id="no-sessions-note">选择设备和 Agent 后，即可在这里查看任务进度和输出。</span></div>
+      <section class="workspace" aria-label="任务监控">
+        <div class="section-title"><h2>任务 <span id="session-count">0</span></h2><div class="task-list-options"><span id="sync-status" role="status">准备读取…</span></div><a class="button primary" id="new-task-link" href="#new-task">＋ 新建任务</a></div>
+        <div class="task-toolbar" aria-label="筛选任务">
+          <div class="task-views" role="group" aria-label="任务范围"><button id="view-active" type="button" aria-pressed="true">活跃<span id="count-active">0</span></button><button id="view-all" type="button" aria-pressed="false">全部<span id="count-all">0</span></button><button id="view-trash" type="button" aria-pressed="false">回收站<span id="count-trash">0</span></button></div>
+          <label class="task-search"><span class="sr-only">搜索任务</span><input id="task-search" type="search" placeholder="搜索任务、分支或设备" autocomplete="off"></label>
+          <label class="task-filter"><span class="sr-only">按状态筛选</span><select id="task-status"><option value="">所有状态</option><option value="prepared">待启动</option><option value="running">执行中</option><option value="waiting">待处理</option><option value="completed">本轮完成</option><option value="failed">失败</option><option value="interrupted">已中断</option><option value="disconnected">已断开</option></select></label>
+          <label class="task-filter"><span class="sr-only">按 Agent 筛选</span><select id="task-agent"><option value="">所有 Agent</option><option value="codex">Codex</option><option value="claude">Claude</option><option value="flagscale">FlagScale</option></select></label>
+        </div>
+        <div id="session-list" class="session-list" aria-label="任务列表"></div><div id="no-sessions" class="empty"><strong id="no-sessions-title">创建第一个升级任务</strong><span id="no-sessions-note">选择设备和 Agent 后，即可在这里查看任务进度和输出。</span></div>
+        <div id="no-selection" class="empty"><strong>选择一个任务</strong>从列表查看进展、继续对话或管理任务。</div>
+        <article class="panel" id="deleted-task-detail" hidden><div class="panel-head"><h2 id="deleted-title">已删除任务</h2><p id="deleted-meta"></p></div><div class="detail-body"><p class="management-note">任务已移入回收站。工作目录、日志、验收记录和客户端会话均保留；恢复后可继续查看和管理。</p><div class="actions" style="margin-top:18px"><button class="button primary" id="restore-session" type="button">恢复任务</button></div><div id="trash-notice" class="notice" role="status"></div></div></article>
         <div id="selection-notice" class="notice" role="status" hidden></div>
-        <article class="panel" id="session-detail" hidden><div class="panel-head detail-head"><div><div class="detail-title"><h2 id="detail-title">升级任务</h2><span id="detail-status" class="pill"></span></div><p id="detail-subtitle"></p></div><div class="actions detail-actions"><button class="button small" id="desktop-session" type="button" hidden>在 Codex 中继续</button><button class="button primary small" id="start-session" type="button">启动任务</button><button class="button stop small" id="interrupt-session" type="button">中断当前执行</button></div></div>
+        <article class="panel" id="session-detail" hidden><div class="panel-head detail-head"><div><div class="detail-title"><h2 id="detail-title">升级任务</h2><span id="detail-status" class="pill"></span></div><p id="detail-subtitle"></p></div><div class="actions detail-actions"><button class="button small" id="desktop-session" type="button" hidden>在 Codex 中继续</button><button class="button primary small" id="start-session" type="button">启动任务</button><button class="button stop small" id="interrupt-session" type="button">中断当前执行</button><button class="button danger small" id="delete-session" type="button" title="移入回收站，可恢复">删除任务</button></div></div>
           <dl class="task-context"><div><dt>验证机器</dt><dd id="detail-machine" class="mono"></dd></div><div><dt>基线分支 · 创建时提交</dt><dd id="detail-branch" class="mono"></dd></div><div><dt>执行 Agent</dt><dd id="detail-provider"></dd></div></dl>
           <div id="detail-policy" class="notice" role="status" hidden></div>
           <div class="detail-body"><p id="desktop-note" class="hint" role="status" hidden></p><div id="detail-task-notice" class="notice">本轮对话结束后仍可继续任务。验收结果请在「分支验收监控」中查看，任务状态本身不代表 Gate 通过。</div><div id="detail-progress-warning" class="notice" role="status" hidden></div><div id="pending-requests" aria-label="等待你的处理"></div><section id="detail-progress" style="margin-bottom:16px" hidden><div class="tabs-head"><h3 id="detail-progress-title">当前进度摘要</h3></div><p id="detail-progress-summary" class="event-text"></p><small id="detail-plan-meta" class="hint"></small><ol id="detail-plan" class="event-text"></ol></section><details id="prompt-preview" class="subtle-details" style="margin-bottom:16px" hidden><summary>查看任务指令</summary><pre id="detail-prompt" class="event-text mono"></pre></details><details class="technical-info" id="task-info"><summary>工作目录、提交与验收证据</summary><dl class="detail-meta"><div><dt>任务工作分支</dt><dd id="detail-work-branch" class="mono"></dd></div><div><dt>上报候选 SHA</dt><dd id="detail-candidate">待核对 · 尚无结构化提交记录</dd></div><div><dt>本地独立 worktree</dt><dd id="detail-worktree" class="mono"></dd></div><div><dt>远端源仓库目录（机器配置）</dt><dd id="detail-seed" class="mono"></dd></div><div><dt>上报远端独立任务目录</dt><dd id="detail-remote-root">待上报 · 尚无结构化目录记录</dd></div><div><dt>Agent 会话 ID</dt><dd id="detail-thread" class="mono"></dd></div><div><dt>证据观察时间</dt><dd id="detail-observed-at" class="mono">待上报</dd></div><div><dt>记录性质</dt><dd id="detail-provenance-source">待核对 · 尚无有效上报</dd></div><div class="provenance-evidence"><dt>上报证据（相对路径）</dt><dd id="detail-provenance-evidence" class="mono">待上报</dd></div></dl></details><div id="session-error" class="notice error" role="alert" hidden></div><div class="tabs-head"><h3>实时进展</h3><span id="event-count"></span></div><div id="events" class="events" aria-label="Codex 任务事件"></div><details class="subtle-details" style="margin-top:14px"><summary>查看较早事件</summary><div class="tabs-head"><button class="button small" id="older-events" type="button">读取历史事件</button><span id="history-count"></span></div><p class="hint" id="history-note" role="status"></p><div id="history-events" class="events" aria-label="Codex 历史事件"></div></details>
             <form id="message-form" class="followup"><label class="field-label" for="message">给 Codex 补充指令</label><textarea id="message" placeholder="例如：先检查已有 Gate 结果；本轮只处理 graph 模式失败。" required></textarea><div class="actions"><small class="hint" id="message-hint">执行中可补充指令；本轮结束后可继续任务。</small><button class="button primary" id="send-message" type="submit">发送指令</button></div></form><div id="session-notice" class="notice" role="status"></div>
           </div></article><p class="footnote">页面可恢复本机保存的 Codex 会话。同一 SSH 别名限制一个活动会话；中断或结束对话后，远端 tmux 可能仍在运行。再次分配机器前请核对远端任务。</p>
       </section>
-      <details class="panel create-panel" id="new-task" open aria-labelledby="create-title"><summary class="panel-head create-toggle"><span id="create-title">新建任务</span></summary><form id="create-form" class="form"><p class="create-intro">选择设备和 Agent，确认基线分支；补充说明可选。</p>
+      <details class="panel create-panel" id="new-task" aria-labelledby="create-title"><summary class="panel-head create-toggle"><span id="create-title">新建任务</span></summary><form id="create-form" class="form"><p class="create-intro">选择设备和 Agent，确认基线分支；补充说明可选。</p>
         <div class="field"><label for="branch">基线分支</label><div class="profile-row"><input id="branch" list="branch-options" required autocomplete="off" spellcheck="false" placeholder="选择或输入基线分支" aria-describedby="branch-hint"><button id="reload-branches" type="button" class="button small">读取分支列表</button></div><datalist id="branch-options"></datalist><small id="branch-hint" class="hint" role="status">默认沿用监控页的分支；可选择已有分支或直接输入。</small></div>
         <div class="field"><label for="profile">验证设备</label><select id="profile" required><option value="">请选择设备</option></select><small id="profile-guidance" class="hint profile-guidance"></small></div><div class="actions"><button id="sync-ssh" type="button" class="button small">同步 SSH 配置</button></div><small id="ssh-sync-status" class="hint" role="status" aria-live="polite">读取本机 SSH 别名；同步后保留正在编辑的连接。</small>
         <details class="subtle-details machine-inventory"><summary>已导入机器 <span id="machine-count">0</span></summary><div id="machine-inventory"></div><small class="hint">开发机用于承载看板，跳板机用于连接入口。选择计算节点后，系统会自动识别设备并准备任务目录。</small></details>
+<div class="health"><strong id="health-status">正在检查本机 agent…</strong><button class="button small" id="health-check" type="button">检查 agent 连接</button><small id="health-note">任务保存在本机，可在此页面继续。</small></div>
         <div class="field"><label for="agent-provider">执行 Agent</label><select id="agent-provider"><option value="codex">Codex（默认）</option><option value="claude">Claude Code · API</option><option value="flagscale">FlagScale Agent · API</option></select><small id="provider-hint" class="hint">已有任务继续使用创建时选择的 agent。</small></div><div class="agent-toolbar"><small id="agent-config-state" class="hint"></small><button id="configure-agent" class="button small" type="button" hidden>配置 Agent</button></div>
         <details id="claude-settings-panel" class="subtle-details" hidden><summary>Claude 本机 API 配置</summary>
           <div class="field"><label for="claude-base-url">API Base URL</label><input id="claude-base-url" value="https://api.anthropic.com" autocomplete="off" spellcheck="false"><small class="hint">需兼容 Anthropic API 协议。远端地址使用 HTTPS；HTTP 只允许本机 loopback。</small></div>
@@ -108,6 +129,7 @@ Grep</textarea><small class="hint">SSH 命令可显式配置 Bash(ssh *)。未�
     </div>
   </main>
 </div>
+<dialog id="delete-dialog" class="delete-dialog" aria-labelledby="delete-title" aria-describedby="delete-description"><h2 id="delete-title">将任务移入回收站？</h2><p id="delete-task-name"></p><p class="management-note" id="delete-description">任务会从列表和监控中隐藏，可在回收站恢复。工作目录、日志、验收记录和 Codex 会话会保留；此操作不会停止远端任务。</p><div class="actions"><button class="button" id="cancel-delete" type="button">取消</button><button class="button danger" id="confirm-delete" type="button">移入回收站</button></div></dialog>
 <script>
 (() => {
   'use strict';
@@ -128,7 +150,7 @@ Grep</textarea><small class="hint">SSH 命令可显式配置 Bash(ssh *)。未�
   }
   const labels = {cuda:'NVIDIA / 英伟达',ascend:'Ascend / 昇腾',metax:'MetaX / 沐曦',corex:'iluvatar / 天数智芯',hygon:'Hygon / 海光',musa:'Moore Threads / 摩尔线程',enflame:'Enflame / 燧原',kunlunxin:'Kunlunxin / 昆仑芯',thead:'T-Head / 平头哥',tsingmicro:'Tsingmicro / 清微',sunrise:'Sunrise / 曦望'};
     const statuses = {prepared:'待启动',starting:'正在启动',running:'执行中',waiting_approval:'等待授权',waiting_input:'等待回答',interrupting:'正在中断',completed:'本轮已结束',interrupted:'已中断',failed:'本轮异常',disconnected:'连接中断'};
-    const state = {sessions:[],profiles:[],policies:{},selected:null,showHistory:false,available:false,fetching:false,pendingKey:'',eventsKey:'',profileKey:'',listKey:'',actionBusy:false,creating:false,checking:false,checkedKey:'',providers:{},agentSettings:null,settingsInitialized:false,settingsBusy:false,flagscaleSettingsInitialized:false,flagscaleSettingsBusy:false,readOnly:false,loadingBranches:false,branchEdited:false,sshSync:null,sshSyncBusy:false};
+    const state = {sessions:[],deletedSessions:[],view:"active",search:"",statusFilter:"",agentFilter:"",deleteTarget:null,sessionRevision:0,refreshPromise:null,profiles:[],policies:{},selected:null,showHistory:false,available:false,fetching:false,pendingKey:'',eventsKey:'',profileKey:'',listKey:'',actionBusy:false,creating:false,checking:false,checkedKey:'',providers:{},agentSettings:null,settingsInitialized:false,settingsBusy:false,flagscaleSettingsInitialized:false,flagscaleSettingsBusy:false,readOnly:false,loadingBranches:false,branchEdited:false,sshSync:null,sshSyncBusy:false};
   const sessionListCards = new Map();
   const orderedBackends=Object.keys(labels).sort((a,b)=>a==='cuda'?-1:b==='cuda'?1:labels[a].toLowerCase().localeCompare(labels[b].toLowerCase(),'en'));
   for(const backend of orderedBackends){const option=document.querySelector('#backend option[value="'+backend+'"]');if(option)$('backend').append(option);}
@@ -264,7 +286,7 @@ Grep</textarea><small class="hint">SSH 命令可显式配置 Bash(ssh *)。未�
     const labels=monitor?{pending:'待执行（历史记录）',in_progress:'未完成（历史记录）',completed:'已结束（历史记录）'}:{pending:'待执行',in_progress:'进行中',completed:'已完成'};
     return labels[status]||(monitor?'待确认（历史记录）':'待确认');
   }
-  function current() { return state.sessions.find(item => String(item.id) === state.selected); }
+  function current() { return [...state.sessions,...state.deletedSessions].find(item => String(item.id) === state.selected); }
   function working(session) { return ['starting','running','waiting_approval','waiting_input','interrupting'].includes(session?.status); }
   function startupFailed(session) { return !!session && session.status==='failed'&&!session.thread_id; }
   function desktopOwned(session) { return session?.execution_owner==='codex_desktop'; }
@@ -276,7 +298,24 @@ Grep</textarea><small class="hint">SSH 命令可显式配置 Bash(ssh *)。未�
     hint.textContent=!localCodex?'':eligible?desktopOwned(session)?'任务已交给 Codex 客户端。点击可再次打开原会话；看板继续同步状态。':working(session)?'将暂停当前轮次并在客户端继续；远端 tmux 不会停止。':'在本机 Codex 客户端打开原会话，继续使用同一任务与工作目录。':startupFailed(session)?'启动尚未成功。重试启动原任务后，即可在 Codex 客户端继续。':session.thread_id?'会话 ID 无法核对，暂时不能在客户端打开。':'任务成功启动并建立会话后，即可在 Codex 客户端继续。';
   }
   function activeTask(session) { return !!session && !session.historical && ['prepared','starting','running','waiting_approval','waiting_input','interrupting'].includes(session?.status); }
-  function visibleSessions(sessions=state.sessions) { return prioritizedSessions(sessions.filter(session=>state.showHistory||activeTask(session))); }
+  function visibleSessions(sessions=state.view==='trash'?state.deletedSessions:state.sessions) {
+    const query=state.search.trim().toLocaleLowerCase();
+    return prioritizedSessions(sessions.filter(session=>{
+      if(state.view==='trash'?!session.deleted_at:session.deleted_at||(!state.showHistory&&!activeTask(session)))return false;
+      if(state.agentFilter&&(session.provider||'codex')!==state.agentFilter)return false;
+      const status=state.statusFilter;
+      if(status==='running'?!['starting','running','interrupting'].includes(session.status):status==='waiting'?!['waiting_input','waiting_approval'].includes(session.status):status&&session.status!==status)return false;
+      return !query||[session.name,session.id,session.backend,labels[session.backend],session.branch,session.ssh_alias,providerName(session.provider)].filter(Boolean).join(' ').toLocaleLowerCase().includes(query);
+    }));
+  }
+  function setTaskView(view) {
+    state.view=view;state.showHistory=view==='all';
+    state.selected=selectSessionId([...state.sessions,...state.deletedSessions],state.selected,selectionTarget);
+    renderList();renderDetail();
+  }
+  function managedTask(session) { return !!session&&/^[0-9a-f]{32}$/.test(session.id); }
+  function canDeleteTask(session) { return !state.readOnly&&managedTask(session)&&!session.deleted_at&&!working(session)&&!session.approval_cancel_pending&&(!desktopOwned(session)||session.desktop_lease_released===true); }
+
   function taskPolicy(backend, branch, session) {
     const policy=session?.task_policy || state.policies[backend];
     return policy?.branch===branch && policy.mode==='monitor' ? policy : {mode:'adapt'};
@@ -289,12 +328,12 @@ Grep</textarea><small class="hint">SSH 命令可显式配置 Bash(ssh *)。未�
   function selectSessionId(sessions, selected, target) {
     if(sessions.some(session=>String(session.id)===selected))return selected;
     if(target.session)return sessions.some(session=>String(session.id)===target.session)?target.session:null;
-    const match=visibleSessions(sessions).find(session=>(!target.branch||session.branch===target.branch)&&(!target.backend||session.backend===target.backend));
+    const match=visibleSessions(sessions.filter(session=>state.view==='trash'?!!session.deleted_at:!session.deleted_at)).find(session=>(!target.branch||session.branch===target.branch)&&(!target.backend||session.backend===target.backend));
     return match?String(match.id):null;
   }
   function missingSelectionMessage(target) {
     if(target.session)return '指定任务暂无记录，请核对任务链接或从列表选择。';
-    const suffix=state.showHistory?'暂无任务，请展开「新建任务」后创建。':'暂无活跃任务，可勾选「历史任务」查看以往记录。';
+    const suffix=state.showHistory?'暂无任务，请展开「新建任务」后创建。':'暂无活跃任务，可在「全部」中查看历史任务。';
     if(target.backend)return '此分支的 '+(labels[target.backend]||target.backend)+' '+suffix;
     if(target.branch)return '此分支'+suffix;
     return '';
@@ -477,35 +516,30 @@ Grep</textarea><small class="hint">SSH 命令可显式配置 Bash(ssh *)。未�
   function metadataText(value){return typeof value==='string'?value:value==null?'':Array.isArray(value)?value.join(' · '):JSON.stringify(value);}
   function showProfileGuidance(){const profile=state.profiles.find(x=>String(x.id)===$('profile').value);if(!profile){$('profile-guidance').textContent='';return;}const lines=[],health=machineHealth(profile),connection=sshConfigText(profile),manual=$('custom-settings').checked;if(connection)lines.push('SSH 配置：'+connection);if(profile.ssh_config_changed)lines.push('SSH 配置已更新，请重新检查');for(const result of (manual?[health.ssh,health.environment]:[health.ssh])){lines.push(result.label+(result.at?' · '+formatTime(result.at):''));if(result.status==='failed'||result.status==='stale')if(result.detail)lines.push(result.detail);}if(profile.source)lines.push('来源：'+metadataText(profile.source));if(profile.backend_source)lines.push('Backend 依据：'+metadataText(profile.backend_source));if(profile.notes)lines.push(metadataText(profile.notes));if(!isCompute(profile))lines.push(profile.role==='development'?'开发机 / 看板部署节点，不用于 backend 升级任务。':'连接入口，不用于 backend 升级任务。');else if(manual){if(!labels[profile.backend])lines.push('此机器的 backend 尚未确认，请手动选择。');if(!profile.remote_workspace)lines.push('尚未记录远端工作目录，请在下方补充。');}else lines.push('任务创建时将自动识别设备并准备工作目录与验收环境。');$('profile-guidance').textContent=lines.join('\n');}
   function renderList() {
-    const sessions=visibleSessions();
-    $('session-count').textContent=String(sessions.length);$('session-count').title='显示 '+sessions.length+' 个任务，共 '+state.sessions.length+' 条记录';$('no-sessions').hidden=sessions.length>0;
+    const sessions=visibleSessions(),trash=state.view==='trash',filtered=!!(state.search||state.agentFilter||state.statusFilter);
+    for(const view of ['active','all','trash'])$('view-'+view).setAttribute('aria-pressed',String(state.view===view));
+    $('count-active').textContent=String(state.sessions.filter(activeTask).length);$('count-all').textContent=String(state.sessions.length);$('count-trash').textContent=String(state.deletedSessions.length);
+    $('session-count').textContent=String(sessions.length);$('session-count').title='当前筛选显示 '+sessions.length+' 个任务';$('no-sessions').hidden=sessions.length>0;
     const onlyHistory=!state.showHistory&&state.sessions.length>0;
-    $('no-sessions-title').textContent=onlyHistory?'暂无活跃任务':'创建第一个升级任务';
-    $('no-sessions-note').textContent=onlyHistory?'勾选「历史任务」可查看和继续以往任务，也可以点击「新建任务」创建。':'选择设备和 Agent 后，即可在这里查看任务进度和输出。';
-    const key=JSON.stringify([state.selected,state.showHistory,state.policies,sessions.map(({id,backend,branch,work_branch,task_policy,reported_provenance,ssh_alias,status,approval_cancel_pending,updated_at,created_at,progress_summary,progress_warning,last_agent_message,plan_source,plan_updated_at})=>({id,backend,branch,work_branch,task_policy,reported_provenance,ssh_alias,status,approval_cancel_pending,updated_at,created_at,progress_summary,progress_warning,last_agent_message,plan_source,plan_updated_at}))]);if(key===state.listKey)return;state.listKey=key;
+    $('no-sessions-title').textContent=filtered?'没有匹配的任务':trash?'回收站为空':onlyHistory?'暂无活跃任务':'暂无任务';
+    $('no-sessions-note').textContent=filtered?'试试其他关键词，或清空状态和 Agent 筛选。':trash?'删除的任务会保留在这里，可随时恢复。':onlyHistory?'切换「全部」可查看和继续历史任务，也可以创建新任务。':'选择设备和 Agent，创建第一个升级任务。';
+    const key=JSON.stringify([state.selected,state.view,state.showHistory,state.search,state.statusFilter,state.agentFilter,sessions.map(session=>[session.id,session.name,session.backend,session.branch,session.ssh_alias,session.provider,session.status,session.approval_cancel_pending,session.deleted_at,session.updated_at,session.created_at,session.progress_summary,session.progress_warning,session.last_agent_message])]);if(key===state.listKey)return;state.listKey=key;
     const box=$('session-list'),ids=new Set(sessions.map(session=>String(session.id)));
     for(const [id,entry] of sessionListCards)if(!ids.has(id)){entry.button.remove();sessionListCards.delete(id);}
     for(const session of sessions){
-      const id=String(session.id),policy=taskPolicy(session.backend,session.branch,session);
-      let entry=sessionListCards.get(id);
+      const id=String(session.id);let entry=sessionListCards.get(id);
       if(!entry){
         const button=el('button','session-card');button.type='button';
-        button.addEventListener('click',()=>{state.selected=id;state.pendingKey='';state.eventsKey='';notice('session-notice','');renderList();renderDetail();});
+        button.addEventListener('click',()=>{state.selected=id;state.pendingKey='';state.eventsKey='';notice('session-notice','');notice('trash-notice','');renderList();renderDetail();});
         entry={button,contentKey:null};sessionListCards.set(id,entry);
       }
-      const button=entry.button;
-      button.className='session-card'+(id===state.selected?' selected':'');button.setAttribute('aria-pressed',String(id===state.selected));
-      const contentKey=JSON.stringify([session.backend,session.branch,session.ssh_alias,session.status,session.approval_cancel_pending,session.updated_at,session.created_at,session.work_branch,session.reported_provenance,policy,session.progress_summary,session.progress_warning,session.last_agent_message,session.plan_source,session.plan_updated_at]);
+      const button=entry.button;button.className='session-card'+(id===state.selected?' selected':'');button.setAttribute('aria-pressed',String(id===state.selected));
+      const contentKey=JSON.stringify([session.name,session.provider,session.backend,session.branch,session.ssh_alias,session.status,session.approval_cancel_pending,session.updated_at,session.created_at,session.deleted_at,session.progress_summary,session.progress_warning,session.last_agent_message]);
       if(contentKey===entry.contentKey)continue;entry.contentKey=contentKey;button.replaceChildren();
-      const top=el('div','session-top');top.append(el('strong','',labels[session.backend]||session.backend),el('span','pill '+(statuses[session.status]?session.status:''),statusLabel(session.status,session)));
-      button.append(top,el('div','session-sub',session.branch+' · '+session.ssh_alias+' · '+providerName(session.provider)),el('div','session-sub','更新于 '+formatTime(session.updated_at||session.created_at)),el('div','session-sub','工作分支：'+(session.work_branch||'待核对')));
-      if(policy.mode==='monitor')button.append(el('div','session-sub','已有 PR · 仅监控'));
-      const provenance=reportedProvenance(session);if(provenance)button.append(el('div','session-sub','上报候选：'+provenance.candidate_commit.slice(0,12)+' · 观察于 '+provenance.observed_at));
-      const progress=sessionProgress(session),latest=latestSessionMessage(session),planNote=planMeta(session);
-      if(progress)button.append(el('div','session-sub',(latest?'阶段摘要：':'')+progress.slice(0,160)+(progress.length>160?'…':'')));
-      if(latest)button.append(el('div','session-sub','Agent 消息：'+latest.slice(0,160)+(latest.length>160?'…':'')));
-      if(planNote)button.append(el('div','session-sub',planNote));
-      if(session.progress_warning)button.append(el('div','session-sub',progressWarningText(session)));
+      const top=el('div','session-top');top.append(el('strong','',session.name||labels[session.backend]||session.backend),el('span','pill '+(!trash&&statuses[session.status]?session.status:''),trash?'已删除':statusLabel(session.status,session)));
+      const subtitle=[session.branch,session.ssh_alias,providerName(session.provider)].filter(Boolean).join(' · '),sub=el('div','session-sub',subtitle);sub.title=subtitle;
+      const summary=trash?'可从回收站恢复':progressWarningText(session)||latestSessionMessage(session)||sessionProgress(session)||'打开任务查看进展';
+      button.append(top,sub,el('div','session-sub session-summary',summary.slice(0,180)),el('div','session-time',(trash?'删除于 ':'更新于 ')+formatTime(session.deleted_at||session.updated_at||session.created_at)));
     }
     reconcileTaskNodes(box,sessions.map(session=>sessionListCards.get(String(session.id)).button));
   }
@@ -680,7 +714,11 @@ Grep</textarea><small class="hint">SSH 命令可显式配置 Bash(ssh *)。未�
     const session=current(),missing=session?'':missingSelectionMessage(selectionTarget);
     syncMessageDraft(session);
     $('selection-notice').textContent=missing;$('selection-notice').hidden=!missing;
-    $('session-detail').hidden=!session;if(!session)return;
+    const deleted=!!session?.deleted_at;
+    $('session-detail').hidden=!session||deleted;$('deleted-task-detail').hidden=!deleted;$('no-selection').hidden=!!session;
+    if(deleted){$('deleted-title').textContent=session.name||labels[session.backend]||session.backend;$('deleted-meta').textContent=[session.branch,session.ssh_alias,providerName(session.provider),'删除于 '+formatTime(session.deleted_at)].filter(Boolean).join(' · ');$('restore-session').hidden=state.readOnly;$('restore-session').disabled=state.actionBusy||!managedTask(session);return;}
+    if(!session)return;
+    $('delete-session').hidden=state.readOnly||!managedTask(session);$('delete-session').disabled=state.actionBusy||!canDeleteTask(session);$('delete-session').title=desktopOwned(session)&&!session.desktop_lease_released?'等待客户端结束任务并同步后可删除':working(session)?'请先中断当前执行，等待任务停止后再删除':'移入回收站，可恢复';
     renderProvenance(session);
     $('detail-title').textContent=session.name||(labels[session.backend]||session.backend)+' 升级任务';$('detail-status').textContent=statusLabel(session.status,session);$('detail-status').className='pill '+(statuses[session.status]?session.status:'');$('detail-subtitle').textContent=providerName(session.provider)+' · '+(session.goal&&!session.goal.startsWith('自动准备任务：')?session.goal:'按所选设备自动配置，详细要求可查看任务指令。');$('detail-provider').textContent=providerName(session.provider);$('detail-machine').textContent=session.ssh_alias||'待配置';$('detail-seed').textContent=session.remote_workspace||'待配置';$('detail-work-branch').textContent=session.work_branch||'待核对';$('detail-branch').textContent=session.branch+' · '+(session.commit?session.commit.slice(0,12):'待解析');$('detail-worktree').textContent=session.worktree||'准备中';$('detail-thread').textContent=session.thread_id||'启动后创建';
     const policy=taskPolicy(session.backend,session.branch,session),monitor=policy.mode==='monitor';renderPolicy($('detail-policy'),policy);$('message').disabled=monitor;
@@ -698,13 +736,17 @@ Grep</textarea><small class="hint">SSH 命令可显式配置 Bash(ssh *)。未�
     }
     $('session-error').hidden=!session.error;$('session-error').textContent=errorMessage(session.error);renderPersistenceNotice(session);renderPending(session);renderEvents(session);renderEventHistory(session);
   }
-  async function refresh(quiet=false) {
-    if(state.fetching)return;state.fetching=true;
-    try{const data=await request(API);state.sessions=Array.isArray(data.sessions)?data.sessions:[];state.policies=data.backend_task_policies&&typeof data.backend_task_policies==='object'?data.backend_task_policies:{};state.profiles=Array.isArray(data.machine_profiles)?data.machine_profiles:[];renderSshSync(data.ssh_config_sync);state.available=!!data.available;state.providers=data.providers&&typeof data.providers==='object'?data.providers:{};renderProviderSettings(data.agent_settings);if(data.agent_settings_by_provider?.flagscale)renderFlagscaleSettings(data.agent_settings_by_provider.flagscale);state.selected=selectSessionId(prioritizedSessions(state.sessions),state.selected,selectionTarget);showProfiles();renderHealth(data.health);renderList();renderDetail();$('sync-status').textContent='已更新 '+new Date().toLocaleTimeString('zh-CN',{hour12:false});checkButtons();if(!quiet)notice('global-notice','');}
+  async function refresh(quiet=false,force=false) {
+    if(state.refreshPromise){if(!force)return state.refreshPromise;await state.refreshPromise;}
+    const revision=state.sessionRevision;state.fetching=true;
+    state.refreshPromise=(async()=>{
+    try{const data=await request(API);if(revision!==state.sessionRevision)return;state.sessions=Array.isArray(data.sessions)?data.sessions:[];state.deletedSessions=Array.isArray(data.deleted_sessions)?data.deleted_sessions:[];state.policies=data.backend_task_policies&&typeof data.backend_task_policies==='object'?data.backend_task_policies:{};state.profiles=Array.isArray(data.machine_profiles)?data.machine_profiles:[];renderSshSync(data.ssh_config_sync);state.available=!!data.available;state.providers=data.providers&&typeof data.providers==='object'?data.providers:{};renderProviderSettings(data.agent_settings);if(data.agent_settings_by_provider?.flagscale)renderFlagscaleSettings(data.agent_settings_by_provider.flagscale);state.selected=selectSessionId([...prioritizedSessions(state.sessions),...state.deletedSessions],state.selected,selectionTarget);showProfiles();renderHealth(data.health);renderList();renderDetail();$('sync-status').textContent='已更新 '+new Date().toLocaleTimeString('zh-CN',{hour12:false});checkButtons();if(!quiet)notice('global-notice','');}
     catch(error){$('sync-status').textContent='连接失败，将自动重试';notice('global-notice',error.message,true);}finally{state.fetching=false;}
+    })();
+    try{await state.refreshPromise;}finally{state.refreshPromise=null;}
   }
   async function act(session, action, body={}) {
-    if(state.readOnly||!session||state.actionBusy)return;
+    if(state.readOnly||!session||session.deleted_at||state.actionBusy)return;
     if(action==='desktop'&&!desktopEligible(session)){notice('session-notice','请先成功启动原 Codex 任务并建立有效会话，再在客户端继续。',true);return false;}
     if(desktopOwned(session)&&action!=='desktop'){notice('session-notice','此任务已交给 Codex 客户端，请在客户端继续；看板仅同步状态。',true);return false;}
     if(['start','message'].includes(action)&&taskPolicy(session.backend,session.branch,session).mode==='monitor'){notice('session-notice','已有 PR · 仅监控，无法启动或发送适配指令。',true);return false;}
@@ -725,6 +767,27 @@ Grep</textarea><small class="hint">SSH 命令可显式配置 Bash(ssh *)。未�
       return true;
     }catch(error){notice('session-notice',error.message,true);return false;}finally{state.actionBusy=false;renderDetail();}
   }
+  function openDeleteDialog() {
+    const session=current();if(state.actionBusy||!canDeleteTask(session))return;
+    state.deleteTarget=String(session.id);$('delete-task-name').textContent=session.name||[labels[session.backend]||session.backend,session.branch,session.ssh_alias].filter(Boolean).join(' · ');
+    $('delete-dialog').showModal();$('cancel-delete').focus();
+  }
+  async function manageTask(action,id) {
+    if(state.readOnly||state.actionBusy||!['delete','restore'].includes(action))return false;
+    const session=[...state.sessions,...state.deletedSessions].find(item=>String(item.id)===String(id));
+    if(!managedTask(session)||action==='delete'&&!canDeleteTask(session)||action==='restore'&&!session.deleted_at)return false;
+    state.actionBusy=true;renderDetail();
+    try{
+      const result=await post(API+'/'+encodeURIComponent(id)+'/'+action,{});
+      if(String(result.id)!==String(id))throw new Error('任务记录不匹配，请刷新后核对。');
+      state.sessionRevision++;
+      state.sessions=state.sessions.filter(item=>String(item.id)!==String(id));state.deletedSessions=state.deletedSessions.filter(item=>String(item.id)!==String(id));
+      (action==='delete'?state.deletedSessions:state.sessions).unshift(result);
+      state.selected=String(id);state.pendingKey='';state.eventsKey='';state.view=action==='delete'?'trash':'all';state.showHistory=action==='restore';state.search='';state.statusFilter='';state.agentFilter='';
+      for(const field of ['task-search','task-status','task-agent'])$(field).value='';
+      await refresh(true,true);renderList();notice('global-notice',action==='delete'?'任务已移入回收站，可点击「恢复任务」撤销。':'任务已恢复，可继续查看和管理。');return true;
+    }catch(error){notice('global-notice',error.message,true);return false;}finally{state.actionBusy=false;renderDetail();}
+  }
   async function create(start) {
     if(state.readOnly||state.creating||state.checking)return;
     let body;try{body=fields();if(!providerAvailable()&&(!$('custom-settings').checked||start||['claude','flagscale'].includes(body.provider)))throw new Error('请先完成所选 Agent 的本机配置。');}catch(error){notice('form-notice',error.message,true);return;}
@@ -735,7 +798,7 @@ Grep</textarea><small class="hint">SSH 命令可显式配置 Bash(ssh *)。未�
       if(!body.automatic&&state.checkedKey!==checkKey()&&!await checkMachine())return;
       body=fields();notice('form-notice',body.automatic?'正在准备所选设备、远端工作目录与验收环境…':start?'正在创建独立工作目录并启动适配 agent…':'正在创建独立工作目录…');
       const payload={...body,start};if(!body.automatic)payload.require_preflight=true;
-      const result=await post(API,payload),session=result.session||result;state.selected=String(session.id);state.pendingKey='';state.eventsKey='';await refresh(true);
+      const result=await post(API,payload),session=result.session||result;state.selected=String(session.id);state.pendingKey='';state.eventsKey='';state.view='active';state.showHistory=false;state.search='';state.statusFilter='';state.agentFilter='';for(const field of ['task-search','task-status','task-agent'])$(field).value='';await refresh(true);$('new-task').open=false;
       notice('form-notice',body.automatic?'任务已下发，设备与环境准备进展可在任务区查看。':start?'任务已下发。agent 将跟进适配、验收与归档，可在监控页查看进展。':'任务已创建。可在右侧启动执行。');
       const destination=monitorUrl(body.branch,session.id);$('monitor-after-start').href=destination;$('monitor-after-start').hidden=!start;
       if(start&&$('auto-monitor').checked){window.location.assign(destination);return;}if(innerWidth<741)$('session-detail').scrollIntoView({behavior:'smooth',block:'start'});
@@ -743,7 +806,15 @@ Grep</textarea><small class="hint">SSH 命令可显式配置 Bash(ssh *)。未�
   }
   $('custom-settings').addEventListener('change',configureTaskMode);
   $('sync-ssh').addEventListener('click',syncSshConfig);
-  $('show-history').addEventListener('change',()=>{state.showHistory=$('show-history').checked;state.selected=selectSessionId(prioritizedSessions(state.sessions),state.selected,selectionTarget);renderList();renderDetail();});
+  // BEGIN task management controls
+  for(const view of ['active','all','trash'])$('view-'+view).addEventListener('click',()=>setTaskView(view));
+  for(const [id,key,event] of [['task-search','search','input'],['task-status','statusFilter','change'],['task-agent','agentFilter','change']])$(id).addEventListener(event,()=>{state[key]=$(id).value;renderList();});
+  $('delete-session').addEventListener('click',openDeleteDialog);
+  $('cancel-delete').addEventListener('click',()=>{$('delete-dialog').close();state.deleteTarget=null;});
+  $('delete-dialog').addEventListener('close',()=>{state.deleteTarget=null;});
+  $('confirm-delete').addEventListener('click',()=>{const id=state.deleteTarget;$('delete-dialog').close();state.deleteTarget=null;manageTask('delete',id);});
+  $('restore-session').addEventListener('click',()=>manageTask('restore',current()?.id));
+  // END task management controls
   $('profile').addEventListener('change',()=>{const profile=state.profiles.find(x=>String(x.id)===$('profile').value),connection=profile?.ssh_connection||{};$('backend').value=labels[profile?.backend]?profile.backend:'';$('ssh-alias').value=profile?.ssh_alias||'';$('remote-workspace').value=profile?.remote_workspace||'';$('model-paths').value=Object.keys(profile?.model_paths||{}).length?JSON.stringify(profile.model_paths,null,2):'';$('profile-label').value=profile?.label||'';$('connection-mode').value=profile?.ssh_connection?'direct':'alias';$('ssh-host').value=connection.host||'';$('ssh-user').value=connection.user||'';$('ssh-port').value=connection.port||22;$('identity-file').value=connection.identity_file||'';$('jump-alias').value=connection.jump_alias||'';connectionMode();invalidateCheck();showProfileGuidance();});
   $('connection-mode').addEventListener('change',()=>{$('profile').value='';$('ssh-alias').value='';connectionMode();invalidateCheck();showProfileGuidance();});
   for(const id of ['backend','branch','ssh-alias','ssh-host','ssh-user','ssh-port','identity-file','jump-alias','remote-workspace','model-paths'])$(id).addEventListener('input',invalidateCheck);
@@ -802,7 +873,7 @@ Grep</textarea><small class="hint">SSH 命令可显式配置 Bash(ssh *)。未�
         $('project-select').addEventListener('change', () => { const url=new URL('/sessions',location.href);url.searchParams.set('project',$('project-select').value);location.assign(url.href); });
       }
     } catch (error) { notice('global-notice',error.message,true); }
-    configureTaskMode();if(!state.readOnly)loadBranchOptions();await refresh();if(innerWidth<741&&visibleSessions().length&&location.hash!=='#new-task')$('new-task').open=false;
+    configureTaskMode();if(!state.readOnly)loadBranchOptions();await refresh();if(!state.readOnly)$('new-task').open=location.hash==='#new-task'||!(state.sessions.length||state.deletedSessions.length);
     try{const settings=await request('/api/agent-settings');renderProviderSettings(settings.settings||settings);}
     catch(_){$('agent-provider').querySelector('option[value="claude"]').disabled=true;}
     try{const settings=await request('/api/agent-settings?provider=flagscale');renderFlagscaleSettings(settings.settings||settings);}

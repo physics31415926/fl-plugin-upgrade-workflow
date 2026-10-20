@@ -9,7 +9,7 @@ function script(name){return [...fs.readFileSync(path.join(root,name),'utf8').ma
 const source=script('web/templates/sessions.html');
 function between(text,start,end){const a=text.indexOf(start),b=text.indexOf(end,a);assert(a>=0&&b>a,`source exists: ${start}`);return text.slice(a,b);}
 class Element {
-  constructor(tag){this.tag=tag;this.children=[];this.parent=null;this.listeners={};this.hidden=false;this.checked=false;this._text='';}
+  constructor(tag){this.tag=tag;this.children=[];this.parent=null;this.listeners={};this.hidden=false;this.checked=false;this._text='';this.value='';}
   set textContent(value){this._text=String(value);this.children=[];}
   get textContent(){return this._text+this.children.map(child=>child.textContent).join('');}
   append(...nodes){for(const node of nodes){node.remove();node.parent=this;this.children.push(node);}}
@@ -38,25 +38,25 @@ function ui(sessions){
   vm.runInContext(between(source,'  function current(', '  function approvalDecisions(')
     +between(source,'  function renderList(', '  function eventOrigin(')
     +between(source,'  async function act(', '  async function create(')
-    +between(source,"  $('show-history').addEventListener(","  $('profile').addEventListener("),context);
+    +between(source,'  // BEGIN task management controls','  // END task management controls'),context);
   const listed=()=>context.$('session-list').children.map(button=>[...context.sessionListCards].find(([,entry])=>entry.button===button)[0]);
   return {context,nodes,calls,listed};
 }
 
-test('sessions list defaults to active tasks and history checkbox reveals retained records',()=>{
+test('sessions list defaults to active tasks and all view reveals retained records',()=>{
   const active=['prepared','starting','running','waiting_approval','waiting_input','interrupting'];
   const inactive=['completed','failed','interrupted','disconnected','unknown'];
   const sessions=[...inactive.map(status=>task(status,status)),...active.map(status=>task(status,status)),task('stale-running','running',{stale:true}),task('historical-running','running',{historical:true})];
   const original=JSON.stringify(sessions),{context,listed}=ui(sessions);
   assert.equal(context.state.showHistory,false);
-  assert.doesNotMatch(html.match(/<input id="show-history"[^>]*>/)[0],/\bchecked\b/);
+  assert.equal(context.state.view,'active');
   context.renderList();
   assert.deepEqual(listed(),[...active,'stale-running']);
   assert.equal(context.$('session-count').textContent,'7');
-  context.$('show-history').checked=true;context.$('show-history').listeners.change();
+  context.$('view-all').listeners.click();
   assert.equal(listed().length,sessions.length);
   assert.equal(context.$('session-count').textContent,String(sessions.length));
-  context.$('show-history').checked=false;context.$('show-history').listeners.change();
+  context.$('view-active').listeners.click();
   assert.deepEqual(listed(),[...active,'stale-running']);
   assert.equal(JSON.stringify(context.state.sessions),original,'list projection must not delete or alter archived tasks');
 });
@@ -83,9 +83,9 @@ test('all-ended list offers history and only selects a record after explicit opt
   assert.equal(context.$('no-sessions').hidden,false);
   assert.equal(context.$('no-sessions-title').textContent,'暂无活跃任务');
   assert.match(context.$('no-sessions-note').textContent,/历史任务/);
-  context.$('show-history').checked=true;context.$('show-history').listeners.change();
+  context.$('view-all').listeners.click();
   assert.equal(context.state.selected,'history');assert.deepEqual(listed(),['history']);
-  context.$('show-history').checked=false;context.$('show-history').listeners.change();
+  context.$('view-active').listeners.click();
   assert.deepEqual(listed(),[]);assert.equal(context.current().id,'history','hiding a selected card keeps its resumable detail');
 });
 
@@ -108,3 +108,61 @@ for(const page of ['web/templates/overview.html','web/templates/index.html']) {
     assert.equal(context.active(null),false);
   });
 }
+
+
+test('search and status/agent filters leave selected task and source data intact',()=>{
+  const sessions=[task('one','running',{provider:'claude',name:'升级尝试',branch:'dev/0.28'}),task('two','waiting_approval',{provider:'codex'}),task('three','failed',{provider:'flagscale'})];
+  const {context,listed}=ui(sessions);context.state.selected='two';context.$('view-all').listeners.click();
+  context.$('task-search').value='0.28';context.$('task-search').listeners.input();assert.deepEqual(listed(),['one']);assert.equal(context.current().id,'two');
+  context.$('task-search').value='';context.$('task-search').listeners.input();context.$('task-status').value='waiting';context.$('task-status').listeners.change();assert.deepEqual(listed(),['two']);
+  context.$('task-status').value='';context.$('task-status').listeners.change();context.$('task-agent').value='flagscale';context.$('task-agent').listeners.change();assert.deepEqual(listed(),['three']);assert.equal(context.current().id,'two');
+  assert.equal(context.state.sessions.length,3);
+});
+
+test('card refresh includes task name and provider changes',()=>{
+  const session=task('one','running',{name:'original',provider:'codex'}),{context}=ui([session]);context.renderList();
+  const card=context.sessionListCards.get('one');assert.match(card.button.textContent,/original/);
+  session.name='renamed';session.provider='claude';context.renderList();assert.match(card.button.textContent,/renamed/);assert.doesNotMatch(card.button.textContent,/original/);assert.match(card.contentKey,/claude/);
+});
+
+test('trash has a separate list and preserves explicitly selected identity',()=>{
+  const deleted=task('d'.repeat(32),'completed',{deleted_at:'2026-10-20T12:00:00Z'}),{context,listed}=ui([task('one','running')]);context.state.deletedSessions=[deleted];
+  context.$('view-trash').listeners.click();assert.deepEqual(listed(),[deleted.id]);context.state.selected=deleted.id;assert.equal(context.current(),deleted);
+  assert.equal(context.selectSessionId([...context.state.sessions,deleted],deleted.id,{}),deleted.id);context.$('view-all').listeners.click();assert.deepEqual(listed(),['one']);assert.equal(context.current(),deleted);
+});
+
+test('deletion requires confirmation and rechecks current status before writing',async()=>{
+  const session=task('a'.repeat(32),'completed'),{context,calls}=ui([session]);context.state.selected=session.id;
+  let opened=0;context.$('delete-dialog').showModal=()=>opened++;context.$('delete-dialog').close=()=>{};context.$('cancel-delete').focus=()=>{};
+  context.openDeleteDialog();assert.equal(opened,1);assert.equal(calls.length,0);context.$('cancel-delete').listeners.click();assert.equal(context.state.deleteTarget,null);assert.equal(calls.length,0);
+  context.openDeleteDialog();session.status='running';await context.manageTask('delete',session.id);assert.equal(calls.length,0,'task that resumed while confirmation was open cannot be deleted');
+  for(const status of ['starting','running','waiting_approval','waiting_input','interrupting']){session.status=status;assert.equal(context.canDeleteTask(session),false,status);}
+  session.status='prepared';assert.equal(context.canDeleteTask(session),true);context.state.readOnly=true;assert.equal(context.canDeleteTask(session),false);
+});
+
+test('delete and restore preserve task ID and never dispatch start',async()=>{
+  const session=task('a'.repeat(32),'completed',{thread_id:'original-thread'}),{context,calls,listed}=ui([session]);context.state.selected=session.id;
+  context.post=async(url,body)=>{calls.push({url,body});return {...session,deleted_at:url.endsWith('/delete')?'2026-10-20T12:00:00Z':undefined};};
+  assert.equal(await context.manageTask('delete',session.id),true);assert.equal(context.state.sessions.length,0);assert.equal(context.current().thread_id,'original-thread');assert.deepEqual(listed(),[session.id]);assert.equal(context.state.view,'trash');
+  await context.act(context.current(),'message',{text:'should not send'});assert.equal(calls.length,1);
+  assert.equal(await context.manageTask('restore',session.id),true);assert.equal(context.state.deletedSessions.length,0);assert.equal(context.current().thread_id,'original-thread');assert.equal(context.state.view,'all');
+  assert.deepEqual(calls.map(c=>c.url),['/api/codex-sessions/'+session.id+'/delete','/api/codex-sessions/'+session.id+'/restore']);
+});
+
+test('read-only and native tasks cannot invoke management; errors retain records',async()=>{
+  const session=task('a'.repeat(32),'completed'),{context,calls}=ui([session,task('native-1','completed')]);
+  context.state.readOnly=true;assert.equal(await context.manageTask('delete',session.id),false);context.state.readOnly=false;assert.equal(await context.manageTask('delete','native-1'),false);assert.equal(calls.length,0);
+  context.post=async()=>{throw new Error('still running');};assert.equal(await context.manageTask('delete',session.id),false);assert.equal(context.state.sessions.length,2);assert.equal(context.state.deletedSessions.length,0);assert.equal(context.state.actionBusy,false);
+});
+
+
+test('an old poll cannot resurrect a deleted task and management waits for a fresh snapshot',async()=>{
+  const session=task('a'.repeat(32),'completed'),deleted={...session,deleted_at:'2026-10-20T12:00:00Z'},{context}=ui([session]);context.state.selected=session.id;
+  let finishOld,requests=0,renderedDeleted=false;const old=new Promise(resolve=>finishOld=resolve);
+  context.request=()=>++requests===1?old:Promise.resolve({sessions:[],deleted_sessions:[deleted]});context.post=async()=>deleted;
+  for(const name of ['renderSshSync','renderProviderSettings','renderFlagscaleSettings','showProfiles','renderHealth','checkButtons'])context[name]=()=>{};
+  context.renderDetail=()=>{if(context.current()?.deleted_at)renderedDeleted=true;else if(renderedDeleted)assert.fail('old snapshot resurrected the deleted task');};
+  vm.runInContext(between(source,'  async function refresh(', '  async function act('),context);
+  const poll=context.refresh(true),management=context.manageTask('delete',session.id);await Promise.resolve();finishOld({sessions:[session],deleted_sessions:[]});
+  await Promise.all([poll,management]);assert.equal(requests,2);assert.equal(context.state.sessions.length,0);assert.equal(context.current().deleted_at,deleted.deleted_at);assert.equal(context.state.refreshPromise,null);
+});

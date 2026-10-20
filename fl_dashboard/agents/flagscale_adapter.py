@@ -331,7 +331,7 @@ class FlagScaleSessionManager(CodexSessionManager):
     def snapshot(self, compact=False):
         result = super().snapshot(compact=compact)
         result.update(provider="flagscale", agent_settings=self.agent_settings.snapshot(), **CAPABILITIES)
-        for session in result["sessions"]:
+        for session in result["sessions"] + result["deleted_sessions"]:
             session.update(provider="flagscale", **CAPABILITIES)
         return result
 
@@ -399,7 +399,7 @@ class FlagScaleSessionManager(CodexSessionManager):
             super()._event(session_id, message)
             params = message.get("params", {})
             session = self._sessions.get(session_id)
-            if not session or params.get("threadId") != session.get("thread_id"):
+            if not session or session.get("deleted_at") or params.get("threadId") != session.get("thread_id"):
                 return
             if message.get("method") == "flagscale/init":
                 session["flagscale_session_id"] = params.get("native_session_id")

@@ -228,6 +228,8 @@ def require_free_machine(machine, managers, *, excluding_manager=None, excluding
             with manager._lock:
                 sessions = list(manager._sessions.values())
         for existing in sessions:
+            if existing.get("deleted_at"):
+                continue
             if manager is excluding_manager and existing["id"] == excluding_session:
                 continue
             if ((existing["status"] in CodexSessionManager.ACTIVE | {"prepared"}
@@ -699,10 +701,66 @@ done
             # retrying persistence must not close an active protocol connection.
             pass
 
-    def _get(self, session_id):
-        if session_id not in self._sessions:
-            raise SessionError("Unknown session")
-        return self._sessions[session_id]
+    def _get(self, session_id, *, include_deleted=False):
+        if (not isinstance(session_id, str) or not re.fullmatch(r"[0-9a-f]{32}", session_id)
+                or session_id not in self._sessions):
+            raise SessionError("Unknown dashboard session")
+        session = self._sessions[session_id]
+        if session.get("deleted_at") and not include_deleted:
+            raise SessionError("Task is in the recycle bin; restore it before continuing")
+        return session
+
+    def _save_trash_state(self, session, deleted_at):
+        previous_deleted, previous_updated = session.get("deleted_at"), session.get("updated_at")
+        if deleted_at:
+            session["deleted_at"] = deleted_at
+        else:
+            session.pop("deleted_at", None)
+        try:
+            self._save(session)
+        except OSError as exc:
+            # _save retries against this same in-memory record. Roll back before
+            # releasing the lock so a failed request cannot delete/restore later.
+            if previous_deleted:
+                session["deleted_at"] = previous_deleted
+            else:
+                session.pop("deleted_at", None)
+            session["updated_at"] = previous_updated
+            raise SessionError("Task recycle-bin change could not be saved; please retry") from exc
+
+    def delete(self, session_id):
+        """Hide an idle dashboard task without removing any execution artifacts."""
+        with self.machine_lock, self._lock:
+            session = self._get(session_id, include_deleted=True)
+            if session.get("deleted_at"):
+                return self._session_view(session, compact=True)
+            refresh_desktop(self, session)
+            worker, client = self._workers.get(session_id), self._clients.get(session_id)
+            live_client = bool(client and client.process.poll() is None)
+            if (session["status"] in self.ACTIVE or (worker and worker.is_alive())
+                    or (client and getattr(client, "active", False))
+                    or session.get("desktop_handoff_pending") or session.get("pending_requests")
+                    or (session.get("execution_owner") == "codex_desktop"
+                        and not session.get("desktop_lease_released"))
+                    or (session["status"] == "disconnected" and live_client)):
+                raise SessionError("Task is still active or settling; stop it and wait before deleting")
+            self._save_trash_state(session, now())
+            return self._session_view(session, compact=True)
+
+    def restore(self, session_id):
+        """Restore visibility only; do not launch or recreate the original task."""
+        with self.machine_lock, self._lock:
+            session = self._get(session_id, include_deleted=True)
+            if not session.get("deleted_at"):
+                return self._session_view(session, compact=True)
+            refresh_desktop(self, session)
+            if (session["status"] in self.ACTIVE | {"prepared"}
+                    or (session.get("execution_owner") == "codex_desktop"
+                        and not session.get("desktop_lease_released"))):
+                self._require_free_machine(session, excluding=session_id,
+                                           message="This machine is reserved by another task; restore after it is released")
+            self._save_trash_state(session, None)
+            return self._session_view(session, compact=True)
 
     def _task_policies(self, value):
         if not isinstance(value, dict):
@@ -745,6 +803,8 @@ done
 
     def _require_new_session(self, backend, branch):
         for existing in self._sessions.values():
+            if existing.get("deleted_at"):
+                continue
             if existing["backend"] == backend and existing["branch"] == branch:
                 # A completed model turn does not prove the adaptation or Gate
                 # finished. Keep ownership even when the machine or HEAD changes.
@@ -762,7 +822,9 @@ done
 
     def _session_view(self, session, compact=False):
         view = {**session, "task_policy": self._task_policy(session["backend"], session["branch"])}
-        if session.get("execution_owner") == "codex_desktop":
+        if session.get("deleted_at"):
+            view["controllable"], view["machine_reserved"] = False, False
+        elif session.get("execution_owner") == "codex_desktop":
             view["controllable"] = False
             view["machine_reserved"] = not bool(session.get("desktop_lease_released"))
         elif session.get("desktop_handoff_pending"):
@@ -778,6 +840,8 @@ done
         self._resolve_executable()
         with self._lock:
             for session in self._sessions.values():
+                if session.get("deleted_at"):
+                    continue
                 if session.get("execution_owner") == "codex_desktop":
                     refresh_desktop(self, session)
                 else:
@@ -790,7 +854,12 @@ done
                 "backends": sorted(self.backends), "health": self._health,
                 "backend_task_policies": self.backend_task_policies,
                 "machine_profiles": list(self._profiles.values()),
-                "sessions": [self._session_view(s, compact=compact) for s in sorted(self._sessions.values(), key=lambda s: s["created_at"], reverse=True)],
+                "sessions": [self._session_view(s, compact=compact) for s in
+                             sorted(self._sessions.values(), key=lambda s: s["created_at"], reverse=True)
+                             if not s.get("deleted_at")],
+                "deleted_sessions": [self._session_view(s, compact=True) for s in
+                                     sorted(self._sessions.values(), key=lambda s: s.get("deleted_at", ""), reverse=True)
+                                     if s.get("deleted_at")],
             }))
 
     def _history_cursor(self, session_id, identity, offset):
@@ -1124,10 +1193,11 @@ done
         """Return only the fields needed for shared machine ownership checks."""
         with self._lock:
             for session in self._sessions.values():
-                refresh_desktop(self, session)
+                if not session.get("deleted_at"):
+                    refresh_desktop(self, session)
             return [{key: self._session_view(session).get(key)
                      for key in ("id", "status", "ssh_alias", "ssh_connection", "machine_reserved")}
-                    for session in self._sessions.values()]
+                    for session in self._sessions.values() if not session.get("deleted_at")]
 
     def _require_free_machine(self, machine, excluding=None, message=None):
         require_free_machine(machine, self.peer_managers, excluding_manager=self,
@@ -1704,7 +1774,7 @@ done
     def _event(self, session_id, message):
         with self._lock:
             session = self._sessions.get(session_id)
-            if not session or session.get("execution_owner") == "codex_desktop":
+            if not session or session.get("deleted_at") or session.get("execution_owner") == "codex_desktop":
                 return
             method, params = message.get("method", ""), message.get("params", {})
             event_thread = self._event_thread_id(params)
