@@ -32,7 +32,7 @@ test('only custom-mode checkbox enables legacy fields and restores manual prefli
   const {context,calls}=ui();context.$('advanced-settings').open=true;context.checkButtons();assert.equal(context.$('custom-fields').disabled,true);assert.equal(context.fields().automatic,true);
   context.$('custom-settings').checked=true;context.configureTaskMode();assert.equal(context.$('custom-fields').disabled,false);assert.equal(context.$('profile').required,false);assert.equal(context.$('branch').required,true);assert.equal(context.$('remote-workspace').required,true);assert.equal(context.$('ssh-alias').required,true);
   let checks=0;context.checkMachine=async()=>{checks++;return true;};await context.create(true);assert.equal(checks,1);assert.equal(calls.length,1);assert.equal(calls[0].body.require_preflight,true);assert.equal(calls[0].body.backend,'cuda');assert.equal(calls[0].body.remote_workspace,'/work/plugin');assert.equal(Object.hasOwn(calls[0].body,'automatic'),false);
-  context.$('custom-settings').checked=false;context.configureTaskMode();assert.equal(context.$('custom-fields').disabled,true);assert.equal(context.$('ssh-alias').required,false);assert.equal(context.$('branch').required,false);assert.equal(context.$('profile').required,true);
+  context.$('custom-settings').checked=false;context.configureTaskMode();assert.equal(context.$('custom-fields').disabled,true);assert.equal(context.$('ssh-alias').required,false);assert.equal(context.$('branch').required,true);assert.equal(context.$('profile').required,true);
 });
 test('automatic preparation failures release the UI and preserve input without a fabricated session',async()=>{
   const {context,notices}=ui();context.$('goal').value='Keep this draft';context.post=async()=>{throw Error('设备准备暂不可用');};await context.create(true);assert.equal(context.state.creating,false);assert.equal(context.state.selected,undefined);assert.equal(context.$('goal').value,'Keep this draft');assert(notices.some(item=>item.error&&item.message==='设备准备暂不可用'));assert.equal(context.$('create-start').disabled,false);
@@ -40,6 +40,26 @@ test('automatic preparation failures release the UI and preserve input without a
 test('advanced connection fields are collapsed and disabled in initial HTML',()=>{
   assert.match(html,/<details id="advanced-settings"[^>]*><summary>高级设置（可选）/);assert.doesNotMatch(html.match(/<details id="advanced-settings"[^>]*>/)[0],/\bopen\b/);assert.doesNotMatch(html.match(/<input id="custom-settings"[^>]*>/)[0],/\bchecked\b/);assert.match(html,/<fieldset id="custom-fields" disabled/);assert.match(html,/<select id="profile" required/);
   const custom=html.slice(html.indexOf('<fieldset id="custom-fields"'),html.indexOf('</fieldset>'));
-  for(const id of ['backend','branch','remote-workspace','model-paths','ssh-host','ssh-user','ssh-port','save-profile','check-machine'])assert.match(custom,new RegExp('id="'+id+'"'));
-  assert(!custom.includes('id="goal"'));assert(!custom.includes('id="agent-provider"'));
+  for(const id of ['backend','remote-workspace','model-paths','ssh-host','ssh-user','ssh-port','save-profile','check-machine'])assert.match(custom,new RegExp('id="'+id+'"'));
+  assert(!custom.includes('id="branch"'));assert(!custom.includes('id="goal"'));assert(!custom.includes('id="agent-provider"'));
+});
+
+
+test('automatic mode keeps baseline editable and submits the chosen branch without manual configuration',async()=>{
+  const {context,calls}=ui();context.configureTaskMode();
+  assert.equal(context.$('custom-fields').disabled,true);assert.equal(context.$('branch').disabled,false);assert.equal(context.$('branch').required,true);
+  context.$('branch').value='dev/next';context.invalidateCheck();await context.create(false);
+  assert.equal(calls[0].body.branch,'dev/next');assert.equal(calls[0].body.automatic,true);assert.equal(context.$('custom-settings').checked,false);
+});
+
+test('branch suggestions preserve edits made while loading and leave manual entry available on failure',async()=>{
+  const {context}=ui();context.el=(tag,cls,text)=>({tag,textContent:text});
+  const list=context.$('branch-options');list.replaceChildren=(...items)=>{list.children=items;};
+  vm.runInContext(between('  async function loadBranchOptions(', '  function fields('),context);
+  let resolve;context.request=path=>{assert.equal(path,'/api/branch-status');return new Promise(done=>{resolve=done;});};
+  const pending=context.loadBranchOptions();assert.equal(context.$('branch').disabled,false);assert.equal(context.$('reload-branches').disabled,true);
+  context.$('branch').value='user/next';resolve({branches:['main','dev/next','main',null]});await pending;
+  assert.equal(context.$('branch').value,'user/next');assert.deepEqual(Array.from(list.children,item=>item.value),['user/next','main','dev/next']);
+  context.request=async()=>{throw Error('offline');};await context.loadBranchOptions();
+  assert.equal(context.$('branch').value,'user/next');assert.equal(context.$('branch').disabled,false);assert.equal(context.$('reload-branches').disabled,false);assert.match(context.$('branch-hint').textContent,/可重试或直接输入/);
 });
