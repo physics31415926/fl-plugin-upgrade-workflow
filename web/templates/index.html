@@ -840,6 +840,20 @@
   let fetching = false;
   let remoteRefreshing = false;
   let branchGeneration = 0;
+  function clearSelectedBranch(branch) {
+    latestBranchSnapshot = null;
+    put("page-title", branch);put("branch-ref", branch);put("vllm-version", "读取中…");
+    for (const id of ["head","observed-at","merged-count","ci-count","gate-count","case-count","adaptation-ci","branch-ci"]) {
+      byId(id).replaceChildren();put(id, "—");byId(id).title = "";
+    }
+    put("branch-ci-detail", "");put("refresh-stamp", "");
+    for (const id of ["repository-link","adaptation-ci-link","branch-ci-link"]) {byId(id).hidden=true;byId(id).href="";}
+    for (const id of ["header-new-task","new-task-link"]) byId(id).href=appUrl("sessions?branch="+encodeURIComponent(branch))+"#new-task";
+    byId("backend-list").replaceChildren(el("div", "empty", "正在读取 " + branch + " 的适配进展…"));
+    byId("observed-task-list").replaceChildren();byId("task-list").replaceChildren();taskCards.clear();
+    showNotice("");
+    const url = new URL(window.location.href);url.searchParams.set("branch", branch);window.history.replaceState(null, "", url);
+  }
   function applySnapshot(data, branch) {
     latestBranchSnapshot = data;
     render(data);
@@ -862,9 +876,11 @@
       }
     } catch (error) {
       if (generation === branchGeneration) {
-        const previous = latestBranchSnapshot?.branch;
-        if (previous !== branch) put("vllm-version", "版本未识别");
-        showNotice("无法读取分支状态：" + error.message + (previous && previous !== branch ? "；下方保留 " + previous + " 的上次采集结果。" : ""));
+        if (!latestBranchSnapshot) {
+          put("vllm-version", "版本未识别");
+          byId("backend-list").replaceChildren(el("div", "empty", "此分支尚无可显示的采集结果，请刷新重试。"));
+        }
+        showNotice("无法读取分支状态：" + error.message + (latestBranchSnapshot ? "；保留此分支上次采集结果。" : ""));
       }
     } finally {
       fetching = false;
@@ -888,10 +904,11 @@
       });
       const result = await response.json().catch(() => ({}));
       if (!response.ok) throw new Error(errorMessage(result.error) || "刷新接口返回 " + response.status);
+      if (result.branch && result.branch !== branch) throw new Error("返回的分支与所选分支不一致，请重试");
       applySnapshot(result, branch);
       byId("monitor-status").textContent = "已刷新 · " + new Date().toLocaleTimeString("zh-CN", {hour12:false});
     } catch (error) {
-      showNotice("读取最新状态失败：" + error.message + "。保留上次采集结果。");
+      showNotice("读取最新状态失败：" + error.message + (latestBranchSnapshot ? "。保留此分支上次采集结果。" : "。此分支尚无可显示的采集结果，请重试。"));
       byId("monitor-status").textContent = "刷新未完成，可重试";
     } finally {
       remoteRefreshing = false;
@@ -901,7 +918,7 @@
       byId("branch-select").disabled = false;
     }
   }
-  byId("branch-select").addEventListener("change", () => { branchGeneration++; put("vllm-version", "读取中…"); loadBranch(byId("branch-select").value); loadTasks(); });
+  byId("branch-select").addEventListener("change", () => { branchGeneration++; clearSelectedBranch(byId("branch-select").value); loadBranch(byId("branch-select").value); loadTasks(); });
   byId("refresh-remote").addEventListener("click", refreshRemote);
   const taskLabels = {prepared:"待启动",starting:"连接并启动中",running:"执行中",waiting_input:"等待回答",waiting_approval:"等待授权",interrupting:"正在中断",interrupted:"已中断",completed:"本轮结束",failed:"本轮异常",disconnected:"连接中断"};
   function sessionProgress(session) { return typeof session.progress_summary === 'string' && session.progress_summary.trim() ? session.progress_summary.trim() : session.last_agent_message || ''; }
@@ -1145,6 +1162,7 @@
   async function loadTasks() {
     if ((!sessionsEnabled&&!nativeTasksEnabled) || tasksFetching) return;
     tasksFetching = true;
+    const generation = branchGeneration, branch = byId("branch-select").value || initialBranch;
     try {
       const [response,observedResponse]=await Promise.all([
         sessionsEnabled?fetch(appUrl("api/codex-sessions?view=cards"),{cache:"no-store"}):null,
@@ -1152,11 +1170,12 @@
       ]);
       const observed=observedResponse?await observedResponse.json().catch(()=>({})):{};
       if(observedResponse&&!observedResponse.ok)throw new Error(observed.error||"无法读取子任务状态");
-      const branch = byId("branch-select").value || initialBranch;
+      if (generation !== branchGeneration) return;
       const tasks=Array.isArray(observed.tasks)?observed.tasks:[];
       renderObservedTasks(tasks,branch);
       if(!sessionsEnabled)return;
       const data = await response.json().catch(() => ({}));
+      if (generation !== branchGeneration) return;
       if (!response.ok) throw new Error(errorMessage(data.error) || "无法读取任务");
       const policies = data.backend_task_policies && typeof data.backend_task_policies === "object" ? data.backend_task_policies : {};
       const policyChanged = JSON.stringify(policies) !== JSON.stringify(backendTaskPolicies);
@@ -1180,8 +1199,8 @@
       }
       reconcileTaskNodes(box,sessions.map(session=>taskCards.get(session.id).root));
       byId("new-task-link").href = appUrl("sessions?branch=" + encodeURIComponent(branch))+"#new-task";
-    } catch (error) { taskNotice("读取任务失败：" + error.message); }
-    finally { tasksFetching = false; }
+    } catch (error) { if (generation === branchGeneration) taskNotice("读取任务失败：" + error.message); }
+    finally { tasksFetching = false;if (generation !== branchGeneration) loadTasks(); }
   }
   const requestedBranch = new URLSearchParams(window.location.search).get("branch");
   let initialBranch = requestedBranch || "0.4.0-dev";

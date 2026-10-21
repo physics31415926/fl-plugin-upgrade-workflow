@@ -486,7 +486,11 @@ class BranchMonitor:
                     errors.append(f"Discovered {backend} PR unavailable: {exc}")
             elif not configured and len(active) > 1:
                 errors.append(f"Multiple open {backend} adaptation PRs target this branch; configure the intended PR number")
-        if number is None:
+        # Configured numbers are hints, not proof of branch membership. Apply
+        # the same boundary after every discovery/fallback path so stale pins
+        # cannot leak PR links, CI, or acceptance references into another branch.
+        if (number is None or not data or data.get("number") != number or
+                not isinstance(data.get("base"), dict) or data["base"].get("ref") != branch):
             return None, None
         public = {"number": number, "url": f"https://github.com/{self.github_repo}/pull/{number}" if self.github_repo else None,
                   "title": None, "draft": None, "state": None, "merged": None, "selected_by": selected_by}

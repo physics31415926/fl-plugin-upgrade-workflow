@@ -92,15 +92,24 @@
     const collection=el('div','collection'),notice=el('div','notice');notice.hidden=true;notice.setAttribute('role','status');const tableWrap=el('div','table-wrap'),table=el('table'),thead=el('thead'),tr=el('tr');for(const text of ['Backend / PR','代码合入','适配 CI','验收结果']){const th=el('th','',text);th.scope='col';tr.append(th);}thead.append(tr);const tbody=el('tbody');table.append(thead,tbody);tableWrap.append(table);
     const tasks=el('div','tasks'),footer=el('div','project-footer'),detail=el('a','button','查看分支进展'),taskLink=el('a','','查看任务 →');footer.append(detail,taskLink);root.append(header,metrics,collection,notice,tableWrap,tasks,footer);
     const card={root,heading,engine,select,refresh,meta,feedback,counts,collection,notice,tbody,tasks,detail,taskLink,createLink,project,branch:project.default_branch,snapshot:null,busy:false,generation:0};
-    select.addEventListener('change',async()=>{if(card.busy)return;card.generation++;card.branch=select.value;card.engine.textContent=engineName(project.engine)+' · 读取中';setCardBusy(card,true,'正在读取分支…');try{feedback.textContent=await loadCard(card)?'每 15 秒读取 · 每分钟采集':'分支读取失败，可重试';}finally{setCardBusy(card,false);}});
-    refresh.addEventListener('click',async()=>{if(card.busy)return;card.generation++;setCardBusy(card,true,'正在采集最新状态…');try{const data=await request(appUrl('api/branch-refresh',project.id),{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({branch:card.branch})});renderSnapshot(card,data);await loadSessions(card);feedback.textContent='已刷新 · '+new Date().toLocaleTimeString('zh-CN',{hour12:false});}catch(error){showError(card,error.message);feedback.textContent='刷新未完成，可重试';}finally{setCardBusy(card,false);}});
+    select.addEventListener('change',async()=>{if(card.busy)return;card.generation++;card.branch=select.value;clearSelectedBranch(card);setCardBusy(card,true,'正在读取分支…');try{feedback.textContent=await loadCard(card)?'每 15 秒读取 · 每分钟采集':'分支读取失败，可重试';}finally{setCardBusy(card,false);}});
+    refresh.addEventListener('click',async()=>{if(card.busy)return;card.generation++;setCardBusy(card,true,'正在采集最新状态…');try{const data=await request(appUrl('api/branch-refresh',project.id),{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({branch:card.branch})});if(data.branch&&data.branch!==card.branch)throw new Error('返回的分支与所选分支不一致，请重试');renderSnapshot(card,data);await loadSessions(card);feedback.textContent='已刷新 · '+new Date().toLocaleTimeString('zh-CN',{hour12:false});}catch(error){showError(card,error.message);feedback.textContent='刷新未完成，可重试';}finally{setCardBusy(card,false);}});
     return card;
   }
   function setCardBusy(card,busy,message){card.busy=busy;card.refresh.disabled=busy;card.select.disabled=busy;card.refresh.setAttribute('aria-busy',String(busy));card.root.setAttribute('aria-busy',String(busy));card.refresh.textContent=busy?'刷新中…':'刷新状态';if(message)card.feedback.textContent=message;}
+  function clearSelectedBranch(card){
+    card.snapshot=null;card.engine.textContent=engineName(card.project.engine)+' · 读取中';
+    card.meta.replaceChildren();card.collection.replaceChildren();card.notice.hidden=true;card.notice.textContent='';
+    for(const value of Object.values(card.counts))value.textContent='—';
+    const row=el('tr'),cell=el('td','empty','正在读取 '+card.branch+' 的适配进展…');cell.colSpan=4;row.append(cell);card.tbody.replaceChildren(row);
+    card.tasks.replaceChildren();updateCardLinks(card);scheduleAlignment();
+  }
   function showError(card,message){
-    const otherBranch=card.snapshot?.branch&&card.snapshot.branch!==card.branch;
-    if(otherBranch||!card.snapshot)card.engine.textContent=engineName(card.project.engine)+' · 版本未识别';
-    card.notice.hidden=false;card.notice.textContent=message+(otherBranch?'；下方保留 '+card.snapshot.branch+' 的上次采集结果。':card.snapshot?'；保留上次采集结果。':'');
+    if(!card.snapshot){
+      card.engine.textContent=engineName(card.project.engine)+' · 版本未识别';
+      const row=el('tr'),cell=el('td','empty','此分支尚无可显示的采集结果，请刷新重试。');cell.colSpan=4;row.append(cell);card.tbody.replaceChildren(row);
+    }
+    card.notice.hidden=false;card.notice.textContent=message+(card.snapshot?'；保留此分支上次采集结果。':'');
   }
   function acceptanceLink(record,project,branch){
     if(!readOnly&&record.archive_available&&record.archive_url){
@@ -197,6 +206,9 @@
       cell.title=[acceptanceSource(result),result.title,result.summary].filter(Boolean).join(' · ');row.append(cell);card.tbody.append(row);
     }
     if(typeof scheduleAlignment==='function')scheduleAlignment();
+    updateCardLinks(card);
+  }
+  function updateCardLinks(card){
     card.detail.href=appUrl('monitor',card.project.id,card.branch);card.taskLink.href=appUrl('sessions',card.project.id,card.branch);card.taskLink.hidden=readOnly||card.project.sessions===false;if(card.createLink){card.createLink.href=appUrl('sessions',card.project.id,card.branch)+'#new-task';card.createLink.hidden=card.taskLink.hidden;}
   }
 
@@ -228,7 +240,7 @@
   }
   }
   function scheduleAlignment(){if(typeof requestAnimationFrame==='function')requestAnimationFrame(alignProjects);}
-  async function loadSessions(card){try{const data=await request(appUrl('api/adaptation-tasks',card.project.id));renderTasks(card,data.tasks);}catch(error){card.tasks.replaceChildren(el('div','empty','任务状态暂不可用：'+error.message));}}
+  async function loadSessions(card){const generation=card.generation,branch=card.branch;try{const data=await request(appUrl('api/adaptation-tasks',card.project.id));if(generation===card.generation&&branch===card.branch)renderTasks(card,data.tasks);}catch(error){if(generation===card.generation&&branch===card.branch)card.tasks.replaceChildren(el('div','empty','任务状态暂不可用：'+error.message));}}
   async function loadCard(card){
     const generation=card.generation,branch=card.branch;
     try{const data=await request(appUrl('api/branch-status',card.project.id,branch));if(generation!==card.generation||branch!==card.branch)return false;if(data.branch&&data.branch!==branch)throw new Error('返回的分支与所选分支不一致，请重试');renderSnapshot(card,data);await loadSessions(card);return true;}
