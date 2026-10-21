@@ -1,0 +1,79 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="referrer" content="no-referrer">
+  <title>访问分享 · FL 适配工作台</title>
+  <style>
+    :root{color-scheme:light;font:14px/1.6 system-ui,-apple-system,"Segoe UI",sans-serif;--ink:#18243a;--muted:#64748b;--line:#e1e8f0;--blue:#315bdb;--panel:#fff;--bg:#f4f7fb}
+    *{box-sizing:border-box}body{margin:0;color:var(--ink);background:var(--bg)}button,input,select{font:inherit}a{color:var(--blue);text-decoration:none}a:hover{text-decoration:underline}button:focus-visible,a:focus-visible,input:focus-visible,select:focus-visible{outline:3px solid #95b5ff;outline-offset:3px}[hidden]{display:none!important}
+    .shell{max-width:1080px;margin:auto;padding:0 28px 40px}.topbar{min-height:76px;display:flex;align-items:center;justify-content:space-between;gap:20px;border-bottom:1px solid var(--line);margin-bottom:28px}.brand{display:flex;align-items:center;gap:11px;font-size:16px;font-weight:700}.mark{display:grid;place-items:center;width:34px;height:34px;color:white;border-radius:10px;background:#315bdb}.nav{display:flex;gap:18px;flex-wrap:wrap}.nav a{min-height:42px;display:inline-flex;align-items:center}h1{margin:0 0 8px;font-size:28px;letter-spacing:-.03em}p{margin:6px 0 0}.intro{color:var(--muted);max-width:840px}.panel{background:var(--panel);border:1px solid var(--line);border-radius:13px;padding:24px;margin-top:22px}.panel h2{font-size:17px;margin:0 0 7px}.description{color:var(--muted);font-size:13px}.form-grid{display:grid;grid-template-columns:minmax(0,1fr) 200px auto;align-items:end;gap:14px;margin-top:20px}label{display:block;font-size:13px;font-weight:650;margin-bottom:6px}input,select{width:100%;min-height:42px;padding:9px 11px;border:1px solid #c7d3e2;border-radius:8px;background:var(--panel);color:var(--ink)}.button{min-height:42px;padding:9px 14px;border:1px solid #bac9df;border-radius:8px;background:var(--panel);color:#294768;cursor:pointer;font-weight:650;white-space:nowrap}.button:hover:not(:disabled){background:#edf3ff}.button:disabled{opacity:.55;cursor:not-allowed}.primary{background:#315bdb;border-color:#315bdb;color:white}.primary:hover:not(:disabled){background:#234bc4}.danger{color:#a63545;border-color:#e3b2bb}.muted{color:var(--muted);font-size:12px}.result{margin-top:20px;padding:18px;border:1px solid #bfd5f7;border-radius:9px;background:#f4f8ff}.result strong{display:block;margin-bottom:5px}.copy-row{display:flex;gap:8px;margin-top:12px}.copy-row input{min-width:0;font-size:12px}.result-actions{display:flex;justify-content:space-between;align-items:center;gap:14px;flex-wrap:wrap;margin-top:12px}.text-button{border:0;padding:4px 0;background:none;color:var(--blue);font:inherit;cursor:pointer}.notice{padding:11px 14px;margin-top:16px;border:1px solid #cbdcf8;border-radius:9px;background:#ecf3ff;color:#35537e;overflow-wrap:anywhere}.notice:empty{display:none}.notice.error{border-color:#efc5ce;background:#fff4f5;color:#9c3542}.section-title{display:flex;align-items:center;justify-content:space-between;gap:12px}.section-title h2{margin:0}.table-wrap{overflow-x:auto;margin-top:16px}table{width:100%;border-collapse:collapse;text-align:left;font-size:13px}th{color:var(--muted);font-size:12px;font-weight:650}th,td{padding:12px 10px;border-bottom:1px solid var(--line)}th:first-child,td:first-child{padding-left:0}td:first-child{overflow-wrap:anywhere;min-width:150px}td:last-child{text-align:right}.status{display:inline-block;border-radius:6px;padding:3px 8px;background:#e8f6ef;color:#117a55;white-space:nowrap}.status.inactive{background:#eef2f7;color:#63718a}time{white-space:nowrap;font-variant-numeric:tabular-nums}.empty{padding:26px 8px;text-align:center;color:var(--muted)}.footnote{margin-top:18px;color:var(--muted);font-size:12px}
+    @media(max-width:720px){.shell{padding:0 16px 30px}.topbar{gap:12px;flex-wrap:wrap;padding:14px 0;margin-bottom:22px}.nav{gap:14px}h1{font-size:25px}.panel{padding:18px}.form-grid{grid-template-columns:1fr 1fr}.form-grid>div:first-child{grid-column:1/-1}.copy-row{flex-wrap:wrap}.copy-row input{flex-basis:100%}.copy-row .button{flex:1}.button,input,select{min-height:44px}}
+    @media(prefers-color-scheme:dark){:root{color-scheme:dark;--ink:#edf2f9;--muted:#a0aec2;--line:#334257;--blue:#9bb8ff;--panel:#1b2637;--bg:#101827}input,select{border-color:#4a5e7a}.button{color:#bfd2f0}.primary{color:white}.button:hover:not(:disabled){background:#283d5f}.primary:hover:not(:disabled){background:#234bc4}.danger{color:#ffbdc7;border-color:#754650}.result{background:#172b47;border-color:#36557f}.notice{color:#c5d6f0;background:#1b3457;border-color:#36557f}.notice.error{color:#ffbcc3;background:#41272d;border-color:#704148}.status{background:#153d32;color:#a5e5ca}.status.inactive{background:#354154;color:#c2ccdb}}
+  </style>
+</head>
+<body>
+<div class="shell">
+  <header class="topbar"><div class="brand"><span class="mark" aria-hidden="true">FL</span>访问分享</div><nav class="nav" aria-label="页面导航"><a href="/">总览</a><a href="/sessions">任务工作台</a></nav></header>
+  <main>
+    <h1>分享工作台权限</h1>
+    <p class="intro">普通局域网链接仍然无需密码、仅可查看。通过专用链接进入的人可以管理任务、选择设备和修改 Agent 配置，并使用本机已配置的 SSH 与模型接口。</p>
+    <div id="notice" class="notice" role="status" aria-live="polite"></div>
+    <section class="panel" aria-labelledby="create-title">
+      <h2 id="create-title">创建管理链接</h2>
+      <p class="description">链接本身就是访问凭证，请只发给需要管理权限的人。保存的 API Key 不会回显；链接到期或撤销后，访问者会恢复为只读权限。</p>
+      <form id="share-form" class="form-grid">
+        <div><label for="share-label">备注 <span class="muted">（可选）</span></label><input id="share-label" maxlength="80" placeholder="例如：联调同事" autocomplete="off" disabled></div>
+        <div><label for="share-duration">有效期</label><select id="share-duration" disabled><option value="1">1 小时</option><option value="24" selected>24 小时</option><option value="168">7 天</option></select></div>
+        <button id="create-share" class="button primary" type="submit" disabled>创建分享链接</button>
+      </form>
+      <div id="fresh-share" class="result" hidden>
+        <strong>链接已创建</strong><p class="muted" id="fresh-expires"></p>
+        <div class="copy-row"><input id="share-url" readonly aria-label="新建的管理分享链接" autocomplete="off" spellcheck="false"><button id="copy-share" class="button primary" type="button">复制链接</button></div>
+        <div class="result-actions"><span class="muted">链接只在创建后显示一次，请在关闭前复制。</span><button class="text-button" id="dismiss-share" type="button">隐藏链接</button></div>
+      </div>
+    </section>
+    <section class="panel" aria-labelledby="list-title">
+      <div class="section-title"><h2 id="list-title">已创建的链接</h2><button id="refresh-shares" class="button" type="button">刷新列表</button></div>
+      <p class="description">撤销后，该链接和已经打开的管理会话都会失效；正在执行的任务会继续运行。</p>
+      <div class="table-wrap"><table><thead><tr><th scope="col">备注</th><th scope="col">状态</th><th scope="col">到期时间</th><th scope="col">操作</th></tr></thead><tbody id="share-list"></tbody></table></div>
+      <p class="empty" id="empty-shares">正在读取分享记录…</p>
+    </section>
+    <p class="footnote">分享链接的创建与撤销仅由本机维护者管理。权限覆盖此工作台中的所有监控项目。</p>
+  </main>
+</div>
+<script>
+(() => {
+  'use strict';
+  const $=id=>document.getElementById(id);
+  const state={available:false,busy:false,url:'',shareId:'',publicUrl:''};
+  function notice(message,error=false){$('notice').textContent=message;$('notice').className='notice'+(error?' error':'');}
+  function timeText(value){const date=new Date(value);return value&&Number.isFinite(date.getTime())?date.toLocaleString('zh-CN',{hour12:false}):'时间未知';}
+  function element(tag,text){const node=document.createElement(tag);if(text!==undefined)node.textContent=text;return node;}
+  function setBusy(value){state.busy=value;for(const id of ['share-label','share-duration','create-share'])$(id).disabled=value||!state.available;$('refresh-shares').disabled=value;$('create-share').textContent=value?'正在处理…':'创建分享链接';}
+  async function request(path,body){const options={credentials:'same-origin',cache:'no-store',redirect:'error',referrerPolicy:'no-referrer'};if(body!==undefined)Object.assign(options,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});const response=await fetch(path,options);let data;try{data=await response.json();}catch(_){throw new Error('服务暂时不可用，请稍后重试');}if(!response.ok)throw new Error(typeof data.error==='string'?data.error:'操作未完成，请刷新后重试');return data;}
+  function clearLink(){state.url='';state.shareId='';$('share-url').value='';$('fresh-expires').textContent='';$('fresh-share').hidden=true;}
+  function renderShares(shares){
+    const fragment=document.createDocumentFragment();
+    for(const share of shares){const row=element('tr'),label=element('td',share.label||'未填写备注'),status=element('span',share.revoked_at?'已撤销':share.active?'有效':'已到期');status.className='status'+(share.active?'':' inactive');const statusCell=element('td');statusCell.append(status);const expires=element('td'),time=element('time',timeText(share.expires_at));time.dateTime=share.expires_at;expires.append(time);const action=element('td');if(share.active){const button=element('button','撤销权限');button.type='button';button.className='button danger';button.setAttribute('aria-label','撤销 '+(share.label||'未填写备注')+' 的管理权限');button.addEventListener('click',()=>revokeShare(share.id,button));action.append(button);}else action.textContent='—';row.append(label,statusCell,expires,action);fragment.append(row);}
+    $('share-list').replaceChildren(fragment);$('empty-shares').hidden=shares.length>0;$('empty-shares').textContent='暂无分享链接';
+  }
+  async function loadShares(){
+    const data=await request('/api/access-shares');state.available=data.available===true;state.publicUrl=data.public_url||'';renderShares(Array.isArray(data.shares)?data.shares:[]);if(!state.available)notice('尚未启用局域网管理分享，请先完成 HTTPS 分享服务配置。');setBusy(state.busy);return data;
+  }
+  async function refreshShares(){if(state.busy)return;setBusy(true);notice('');try{await loadShares();}catch(error){state.available=false;notice(error.message,true);}finally{setBusy(false);}}
+  function validShareUrl(value){try{const url=new URL(value),base=new URL(state.publicUrl);return url.protocol==='https:'&&url.origin===base.origin&&!url.username&&!url.password&&!url.search&&url.pathname===base.pathname.replace(/\/$/,'')+'/access'&&/^#token=[A-Za-z0-9_-]{43}$/.test(url.hash);}catch(_){return false;}}
+  async function createShare(event){
+    event.preventDefault();if(state.busy||!state.available)return;setBusy(true);notice('');clearLink();
+    try{const data=await request('/api/access-shares',{label:$('share-label').value.trim(),expires_in_hours:Number($('share-duration').value)});if(!validShareUrl(data.url))throw new Error('分享链接无效，请刷新列表后重试');state.url=data.url;state.shareId=data.share.id;$('share-url').value=data.url;$('fresh-expires').textContent='有效至 '+timeText(data.share.expires_at);$('fresh-share').hidden=false;$('share-label').value='';notice('链接已创建，请复制给需要管理权限的人。');try{await loadShares();}catch(_){notice('链接已创建，列表暂未更新；请先复制链接，再刷新列表。');}}
+    catch(error){notice(error.message,true);}finally{setBusy(false);}
+  }
+  async function copyShare(){if(!state.url)return;try{await navigator.clipboard.writeText(state.url);notice('链接已复制。');}catch(_){$('share-url').focus();$('share-url').select();notice('浏览器未允许复制，已选中链接，请手动复制。');}}
+  async function revokeShare(id,button){if(state.busy)return;setBusy(true);button.disabled=true;notice('');try{await request('/api/access-shares/'+encodeURIComponent(id)+'/revoke',{});if(state.shareId===id)clearLink();notice('权限已撤销，已打开的管理会话也会失效。');await loadShares();}catch(error){notice(error.message,true);button.disabled=false;}finally{setBusy(false);}}
+  $('share-form').addEventListener('submit',createShare);$('copy-share').addEventListener('click',copyShare);$('dismiss-share').addEventListener('click',clearLink);$('refresh-shares').addEventListener('click',refreshShares);
+  refreshShares();
+})();
+</script>
+</body>
+</html>

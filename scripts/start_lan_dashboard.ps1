@@ -35,6 +35,16 @@ try {
     } elseif ($config.username) {
         $arguments += @('--username', ('"' + $config.username + '"'))
     }
+    if ($config.access_shares_file -or $config.control_url -or $config.public_url) {
+        foreach ($field in @('access_shares_file', 'control_url', 'public_url')) {
+            if (-not ($config.$field -is [string]) -or -not $config.$field -or $config.$field -match '["\r\n]') {
+                throw "Invalid access sharing setting: $field"
+            }
+        }
+        $arguments += @('--access-shares-file', ('"' + $config.access_shares_file + '"'),
+                        '--control-url', ('"' + $config.control_url + '"'),
+                        '--public-url', ('"' + $config.public_url + '"'))
+    }
     $service = Start-Process -FilePath $config.python -ArgumentList $arguments `
         -WorkingDirectory $AppRoot -WindowStyle Hidden -Wait -PassThru `
         -RedirectStandardOutput $config.log_file -RedirectStandardError ($config.log_file + '.stderr')

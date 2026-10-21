@@ -4,6 +4,7 @@
 Non-loopback HTTP requires Basic auth or --trusted-ingress. The latter means
 authentication/TLS is enforced by a trusted reverse proxy or private ingress.
 Explicit --anonymous-lan permits direct HTTPS on a specific RFC1918 IPv4 address.
+Optional access shares forward authenticated requests to the local control server.
 Set an authentication password in an environment variable, never a config or URL.
 """
 from __future__ import annotations
@@ -357,7 +358,8 @@ class BoundedHTTPServer(ThreadingHTTPServer):
 
 
 def make_server(cache, host="127.0.0.1", port=8765, *, username="viewer", password=None,
-                trusted_ingress=False, base_path="", index_path=None, tls_context=None, anonymous_lan=False):
+                trusted_ingress=False, base_path="", index_path=None, tls_context=None, anonymous_lan=False,
+                access_shares=None, control_url=None):
     if password is not None and (not isinstance(password, str) or not password or len(password.encode("utf-8")) > 1024 or any(c in password for c in "\r\n\x00")):
         raise ValueError("Password must be nonempty, at most 1024 UTF-8 bytes, and contain no control newline")
     if not isinstance(username, str) or not username or len(username.encode("utf-8")) > 128 or any(c in username for c in ":\r\n\x00"):
@@ -369,6 +371,12 @@ def make_server(cache, host="127.0.0.1", port=8765, *, username="viewer", passwo
     prefix = "/" + base_path.strip("/") if base_path.strip("/") else ""
     if prefix and not re.fullmatch(r"(?:/[A-Za-z0-9_-]+)+", prefix):
         raise ValueError("base_path must contain simple URL path segments")
+    if (access_shares is None) != (control_url is None):
+        raise ValueError("Access sharing requires both the share store and control URL")
+    gateway = None
+    if access_shares is not None:
+        from fl_dashboard.services.share_gateway import ShareGateway
+        gateway = ShareGateway(access_shares, control_url, tls_context=tls_context, base_path=prefix)
     registry = cache.registry if isinstance(cache, ProjectSnapshotCache) else ProjectRegistry.single(monitor=cache.monitor)
     page = Path(index_path or (TEMPLATES / ("overview.html" if registry.multi_project else "index.html"))).read_bytes()
     monitor_page = Path(index_path or (TEMPLATES / "index.html")).read_bytes()
@@ -410,7 +418,7 @@ def make_server(cache, host="127.0.0.1", port=8765, *, username="viewer", passwo
                 self._send(401, {"error": "Authentication required"}, challenge=True)
             return bool(valid)
 
-        def _send(self, code, value, *, content_type="application/json; charset=utf-8", challenge=False):
+        def _send(self, code, value, *, content_type="application/json; charset=utf-8", challenge=False, cookie=None):
             data = value if isinstance(value, bytes) else json.dumps(value, ensure_ascii=False).encode("utf-8")
             self.send_response(code)
             self.send_header("Content-Type", content_type)
@@ -418,6 +426,10 @@ def make_server(cache, host="127.0.0.1", port=8765, *, username="viewer", passwo
             self.send_header("Cache-Control", "no-store")
             self.send_header("X-Content-Type-Options", "nosniff")
             self.send_header("Referrer-Policy", "no-referrer")
+            self.send_header("X-Frame-Options", "DENY")
+            self.send_header("Content-Security-Policy", "frame-ancestors 'none'")
+            if cookie is not None:
+                self.send_header("Set-Cookie", cookie)
             self.send_header("Connection", "close")
             if challenge:
                 self.send_header("WWW-Authenticate", 'Basic realm="FL dashboard", charset="UTF-8"')
@@ -432,6 +444,8 @@ def make_server(cache, host="127.0.0.1", port=8765, *, username="viewer", passwo
             self.do_GET()
 
         def do_GET(self):
+            if gateway is not None and gateway.handle(self):
+                return
             if not self._authorized():
                 return
             parsed = urlsplit(self.path)
@@ -488,6 +502,8 @@ def make_server(cache, host="127.0.0.1", port=8765, *, username="viewer", passwo
                 self._send(404, {"error": "Not available in the read-only dashboard"})
 
         def do_POST(self):
+            if gateway is not None and gateway.handle(self):
+                return
             if not self._authorized():
                 return
             target = urlsplit(self.path)
@@ -534,6 +550,8 @@ def make_server(cache, host="127.0.0.1", port=8765, *, username="viewer", passwo
                 self._send(503, {"error": "Refresh is temporarily unavailable; the previous snapshot is retained"})
 
         def _deny_control(self):
+            if gateway is not None and gateway.handle(self):
+                return
             if self._authorized():
                 self._send(405, {"error": "This shared dashboard is read-only"})
 
@@ -565,6 +583,9 @@ def main(argv=None):
     parser.add_argument("--trusted-ingress", action="store_true", help="Trust a private/reverse-proxy ingress that provides access control and TLS")
     parser.add_argument("--anonymous-lan", action="store_true", help="Serve without login only on a specific RFC1918 IPv4 address using direct HTTPS")
     parser.add_argument("--base-path", default="")
+    parser.add_argument("--access-shares-file", type=Path, help="Local share-grant store (hashes only), shared with the control server")
+    parser.add_argument("--public-url", help="HTTPS origin used in access-sharing links")
+    parser.add_argument("--control-url", help="Literal loopback HTTP origin of the existing control server")
     parser.add_argument("--tls-cert", type=Path, help="PEM certificate chain for direct HTTPS")
     parser.add_argument("--tls-key", type=Path, help="Unencrypted PEM private key for direct HTTPS")
     parser.add_argument("--refresh-interval", type=int, default=60, help="Git/API refresh seconds; 0 disables background fetching")
@@ -572,8 +593,17 @@ def main(argv=None):
     if not args.monitor_config and not args.projects_config:
         parser.error("--monitor-config or --projects-config is required")
     password = None if args.anonymous_lan else os.environ.get(args.password_env)
+    access_shares = None
     try:
+        supplied = (args.access_shares_file is not None, args.public_url is not None, args.control_url is not None)
+        if any(supplied) and not all(supplied):
+            raise ValueError("--access-shares-file, --public-url and --control-url must be provided together")
         tls_context = load_tls_context(args.tls_cert, args.tls_key)
+        if all(supplied):
+            from fl_dashboard.services.access_shares import AccessShareStore
+            from fl_dashboard.services.share_gateway import ShareGateway
+            access_shares = AccessShareStore(args.access_shares_file, args.public_url)
+            ShareGateway(access_shares, args.control_url, tls_context=tls_context, base_path=args.base_path)
         if args.anonymous_lan:
             _validate_anonymous_lan(args.host, password=password, tls_context=tls_context,
                                     trusted_ingress=args.trusted_ingress)
@@ -589,8 +619,8 @@ def main(argv=None):
             cache = SnapshotCache(BranchMonitor(args.monitor_config), args.refresh_interval)
         server = make_server(cache, args.host, args.port, username=args.username, password=password,
                              trusted_ingress=args.trusted_ingress, base_path=args.base_path, tls_context=tls_context,
-                             anonymous_lan=args.anonymous_lan)
-        print(f"Read-only dashboard listening via {'HTTPS' if tls_context else 'HTTP'} on port {server.server_port}", flush=True)
+                             anonymous_lan=args.anonymous_lan, access_shares=access_shares, control_url=args.control_url)
+        print(f"Shared dashboard listening via {'HTTPS' if tls_context else 'HTTP'} on port {server.server_port}", flush=True)
         server.serve_forever(poll_interval=0.5)
     except KeyboardInterrupt:
         pass

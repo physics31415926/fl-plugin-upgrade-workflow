@@ -11,7 +11,7 @@
 - Codex 任务可在客户端继续同一会话，看板保留进展；长日志中的活跃任务持续显示。
 - 验收结果优先读取 PR 描述，点击在页面内查看测试表格；保留本地存档与原生子会话进展。
 - 本机 SSH 配置自动同步，支持 Include；保留机器的适配目标和手工配置。
-- 本机完整控制，局域网免登录只读。
+- 本机完整控制，局域网普通地址免登录只读；可生成有期限、可撤销的完整权限分享链接。
 
 ## 快速部署
 
@@ -39,6 +39,7 @@ python -B dashboard.py start
 | `/` | 双仓库适配总览 |
 | `/monitor?project=vllm` | 分支、PR、CI 和逐项验收详情 |
 | `/sessions?project=vllm` | 验证机器、agent 配置与适配任务 |
+| `/access-shares` | 本机创建、查看和撤销完整权限分享链接（需启用） |
 
 版本标签随所选分支变化，读取该分支提交的 `pyproject.toml` 中对应引擎的精确依赖版本；尚未更新依赖声明的升级目标不会自动推断。
 
@@ -51,7 +52,7 @@ python -B dashboard.py start
 - [部署指南](docs/DEPLOYMENT.md)：配置向导、无人值守配置、HTTPS、免登录只读和后台常驻。
 - [高级配置与验收参考](docs/REFERENCE.md)：agent 配置、原生任务接入、结果归档、命令编排与异常恢复。
 
-Claude 与 FlagScale 的 API key 独立配置，使用 Windows 当前用户的 DPAPI 加密保存；局域网入口提供脱敏状态与验收表格。
+Claude 与 FlagScale 的 API key 独立配置，使用 Windows 当前用户的 DPAPI 加密保存；普通局域网入口提供脱敏状态与验收表格。需要协作管理时，按[部署指南](docs/DEPLOYMENT.md#完整权限分享链接)启用分享，再从本机「访问分享」生成链接；持有者可创建、启动和管理任务，默认 24 小时到期。
 
 ## 代码结构与扩展
 

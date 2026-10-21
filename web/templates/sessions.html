@@ -45,7 +45,7 @@
 </head>
 <body>
 <div class="shell">
-  <header class="topbar"><div class="brand"><span class="mark" aria-hidden="true">FL</span><span><span id="project-brand">vLLM-Plugin-FL</span> <span class="brand-extra" style="font-weight:400;color:var(--muted)">/ 升级任务</span></span></div><nav class="toplinks" aria-label="页面导航"><a id="overview-link" href="/" hidden>总览</a><label id="project-picker" hidden>仓库 <select id="project-select" aria-label="选择仓库"></select></label><a id="monitor-link" href="/">分支进展</a><a class="current" href="#session-list" aria-current="page">任务</a><a class="secondary" href="/workflow">演示流程</a></nav></header>
+  <header class="topbar"><div class="brand"><span class="mark" aria-hidden="true">FL</span><span><span id="project-brand">vLLM-Plugin-FL</span> <span class="brand-extra" style="font-weight:400;color:var(--muted)">/ 升级任务</span></span></div><nav class="toplinks" aria-label="页面导航"><a id="overview-link" href="/" hidden>总览</a><label id="project-picker" hidden>仓库 <select id="project-select" aria-label="选择仓库"></select></label><a id="monitor-link" href="/">分支进展</a><a class="current" href="#session-list" aria-current="page">任务</a><a id="access-shares-link" href="/access-shares" hidden>访问分享</a><span id="shared-access-mode" class="pill passed" hidden>分享管理权限</span><button id="share-logout" class="button small" type="button" hidden>退出管理</button><a class="secondary" href="/workflow">演示流程</a></nav></header>
   <main>
     <section class="hero"><div><div class="eyebrow">Backend upgrade sessions</div><h1>任务工作台</h1><p>查看任务进展、处理待办，或选择设备和 Agent 开始新任务。</p></div></section>
     <div id="global-notice" class="notice" role="status" aria-live="polite"></div>
@@ -886,6 +886,9 @@ Grep</textarea><small class="hint">SSH 命令可显式配置 Bash(ssh *)。未�
     try {
       const capabilities = await request('/api/capabilities');
       state.readOnly = capabilities.read_only === true;renderSshSync();
+      $('access-shares-link').hidden=capabilities.access_shares!==true;
+      $('shared-access-mode').hidden=capabilities.shared_access!==true;
+      $('share-logout').hidden=capabilities.shared_access!==true;
       if (capabilities.multi_project) projectId = projectId || capabilities.project_id;
       if (!params.get('branch') && !state.branchEdited && capabilities.default_branch) $('branch').value = capabilities.default_branch;
       renderBranchOptions();
@@ -920,6 +923,12 @@ Grep</textarea><small class="hint">SSH 命令可显式配置 Bash(ssh *)。未�
   $('new-task-link').addEventListener('click',()=>focusNewTask());
   window.addEventListener('hashchange',()=>{if(location.hash==='#new-task')focusNewTask();});
   $('configure-agent').addEventListener('click',()=>{if(state.readOnly)return;const provider=$('agent-provider').value;if(!['claude','flagscale'].includes(provider))return;const panel=$(provider+'-settings-panel');panel.open=true;const input=$(provider+'-api-key');input.focus({preventScroll:true});panel.scrollIntoView({behavior:'smooth',block:'start'});});
+  async function logoutShare(){
+    const button=$('share-logout');if(button.disabled)return;button.disabled=true;
+    try{const response=await fetch('/api/share-logout',{method:'POST',credentials:'same-origin',cache:'no-store',redirect:'error',referrerPolicy:'no-referrer',headers:{'Content-Type':'application/json'},body:'{}'});if(!response.ok)throw new Error('退出管理未完成，请重试');location.replace('/');}
+    catch(error){notice('global-notice',error.message,true);button.disabled=false;}
+  }
+  $('share-logout').addEventListener('click',logoutShare);
   initialize();setInterval(()=>{if(!document.hidden)refresh(true);},3000);document.addEventListener('visibilitychange',()=>{if(!document.hidden)refresh(true);});
 })();
 </script>

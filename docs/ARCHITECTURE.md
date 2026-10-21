@@ -8,7 +8,7 @@
 | fl_dashboard/projects/ | 项目配置、项目状态隔离、原有任务服务转接 |
 | fl_dashboard/agents/ | Codex、Claude、FlagScale 执行与配置 |
 | fl_dashboard/tasks/ | 自动任务准备、SSH 同步、原生及只读任务观察 |
-| fl_dashboard/services/ | 本机控制服务、局域网只读服务及工作流编排 |
+| fl_dashboard/services/ | 本机控制、LAN 只读投影与授权代理、分享凭证及工作流编排 |
 | fl_dashboard/deployment/ | 配置向导、启动器实现 |
 | fl_dashboard/paths.py | 应用根目录、页面和示例资源路径 |
 | web/templates/ | 总览、分支详情、任务和工作流页面 |
@@ -18,7 +18,7 @@
 
 根目录只保留 dashboard.py 统一入口。scripts/ 存放独立命令与 Windows 启动脚本；使用旧根目录命令的部署需把脚本路径改到 scripts/，并更新计划任务的启动路径。
 
-项目注册负责隔离每个项目的配置、采集和错误。监控不依赖任务执行器；局域网模式保持延迟导入，不实例化 agent 或凭据存储。只读服务通过字段白名单输出状态，验收表格经过脱敏；增加新采集字段时必须同步检查这条边界。
+项目注册负责隔离每个项目的配置、采集和错误。监控不依赖任务执行器；局域网模式保持延迟导入，不实例化 agent 或凭据存储。只读服务通过字段白名单输出状态，验收表格经过脱敏；增加新采集字段时必须同步检查这条边界。可选的 access_shares 保存有期限的令牌摘要，share_gateway 对获授权的 HTTPS 请求检查 Host、Origin、期限和撤销状态，再按路由白名单转发到既有 loopback 控制服务；分享创建与撤销始终仅本机可用。
 
 ## 新增同类项目
 

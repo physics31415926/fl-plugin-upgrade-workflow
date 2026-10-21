@@ -67,7 +67,7 @@ python -B scripts/start_dashboard.py --config runs/configured-alt/launch.json --
 
 `--port` 只覆盖本次启动参数，不修改配置文件。需要长期使用新端口时更新对应 `launch.json`。
 
-双仓库首页分别显示两个项目；详情为 `/monitor?project=vllm` 和 `/monitor?project=sglang`。各项目的缓存、采集时间和错误状态独立。任务控制只通过本机入口使用。首次完成 Agent 登录或 API 配置及 SSH 非交互连接后，在任务页选择设备和 Agent 即可创建；补充说明可选，远端目录自动分配。自定义连接和验收参数放在高级设置中。
+双仓库首页分别显示两个项目；详情为 `/monitor?project=vllm` 和 `/monitor?project=sglang`。各项目的缓存、采集时间和错误状态独立。任务控制默认只通过本机入口使用；启用完整权限分享后，也可由获授权的访问者使用。首次完成 Agent 登录或 API 配置及 SSH 非交互连接后，在任务页选择设备和 Agent 即可创建；补充说明可选，远端目录自动分配。自定义连接和验收参数放在高级设置中。
 
 ## 局域网免登录阅读
 
@@ -87,7 +87,7 @@ python -B scripts/start_dashboard.py --lan --lan-ip 192.168.10.20 --lan-port 876
 
 另一个配置目录可增加 `--config <launch.json>`。LAN 模式使用同一 projects 配置，直接提供 HTTPS 与免登录只读路由，不创建任务执行器。它仅接受具体的 `10.x.x.x`、`172.16.x.x–172.31.x.x` 或 `192.168.x.x` 地址，拒绝 `0.0.0.0`、主机名、loopback 和公网地址。
 
-访问者打开 `https://192.168.10.20:8767/`。本机完整控制台继续使用 `http://127.0.0.1:8766/`。LAN 入口不读取登录密码环境变量，新建、跟进、审批、停止任务与机器管理请求均返回 `405`，私有配置和原始日志接口不开放。启动器不会自动生成或信任证书、修改防火墙、注册计划任务。
+访问者打开 `https://192.168.10.20:8767/`。本机完整控制台继续使用 `http://127.0.0.1:8766/`。普通 LAN 访问不读取登录密码环境变量，新建、跟进、审批、停止任务与机器管理请求均返回 `405`，私有配置和原始日志接口不开放。专用授权链接见下文。启动器不会自动生成或信任证书、修改防火墙、注册计划任务。
 
 ### 证书准备
 
@@ -136,6 +136,40 @@ New-NetFirewallRule -Name $ruleName -DisplayName 'FL dashboard LAN HTTPS' `
 可将 `LocalSubnet` 换成团队使用的明确 CIDR，例如 `192.168.10.0/24`。不要为本机控制台的 `8766` 开放入站规则。规则仅适用于 Private / Domain 网络；路由、无线客户端隔离和企业策略也会影响访问。
 
 常驻主机需保持开机并关闭休眠。从另一台设备验证 HTTPS 首页及 `/healthz`，再交付入口地址；主机监听成功不代表其他设备已能访问。
+
+## 完整权限分享链接
+
+普通 LAN 地址仍免登录只读。启用此功能后，在本机首页或任务页点击「访问分享」，填写可选备注、选择 1 小时 / 24 小时 / 7 天并创建链接。链接仅创建时显示，复制给协作者即可，无需另设密码；列表中可随时撤销。分享管理只在本机开放。
+
+持有链接者可查看完整任务和日志、创建与启动任务、跟进、审批、中断、删除或恢复任务，以及修改设备和 Agent 配置。操作使用部署主机已有的 SSH 与 API 配置，设置接口不会返回已保存的原始 API key。链接相当于管理凭证，转发后其他持有者也能使用。到期或撤销后，后续请求立即失去权限；已经启动的任务继续运行，可由本机中断。访问者点击「退出授权」恢复只读。
+
+沿用前面的项目配置和受信任 HTTPS 证书，分别为本机服务和 LAN 服务增加分享选项（替换示例内网地址）：
+
+```powershell
+# 本机控制服务
+python -B dashboard.py start --enable-access-sharing --share-public-url https://192.168.10.20:8767
+
+# 另一个终端：LAN 服务
+python -B dashboard.py start --lan --lan-ip 192.168.10.20 --lan-port 8767 `
+  --tls-cert runs/tls/dashboard-cert.pem --tls-key runs/tls/dashboard-key.pem `
+  --enable-access-sharing
+```
+
+两个服务默认共用 `runs/access-sharing/grants.json`，只保存授权摘要和期限，不保存原始链接。自定义目录时给两条命令传入相同的 `--access-shares-file <absolute-path>`。启动配置的本机端口必须和实际控制服务一致；LAN 启动器据此连接 loopback 服务。分享目前要求直接 HTTPS 和根路径，不支持 `--base-path` 或外部控制服务。
+
+使用既有 Windows 计划任务时，本机 launch JSON 的 `arguments` 末尾追加 `"--access-shares-file", "<absolute grants.json>", "--share-public-url", "https://192.168.10.20:8767"`。LAN deployment JSON 增加三个字段：
+
+```json
+{
+  "access_shares_file": "<same absolute grants.json>",
+  "control_url": "http://127.0.0.1:8766",
+  "public_url": "https://192.168.10.20:8767"
+}
+```
+
+底层 CLI 使用相同参数；LAN 的公开地址参数名为 `--public-url`，还需 `--control-url`。完整权限请求在验证有效授权后转发给现有本机服务，LAN 不另建任务执行器。本机服务停止时管理请求会报暂不可用，普通只读监控仍可使用。
+
+授权令牌位于链接的 `#` 片段，进入页面后立即从地址栏移除，再换取仅 HTTPS 可用的 HttpOnly 会话 Cookie；每次请求重新检查期限与撤销状态。不要将完整分享链接写入源码、日志或公开文档。
 
 ## Windows 登录后常驻
 
@@ -244,7 +278,7 @@ python -B scripts/flflow.py serve --projects-config projects.json --host 127.0.0
 
 `python` 指向真实 Python 可执行文件；Windows 启动器要求 `.exe`，不接受 shell shim。`arguments` 是 argv 数组，不是 shell 命令。旧 Windows 启动器还支持单独的 `program` 字段指定 `flflow.py`，此时 `arguments` 从 `serve` 开始。私有启动配置放在 `runs/` 下，并仅由本机维护者编辑。
 
-双仓库可参照 `examples/projects.example.json` 配置各自的监控文件。共享服务不连接配置中的 `sessions_api_url`，不提供会话控制；原生任务和已落盘 agent 任务只投影脱敏状态。
+双仓库可参照 `examples/projects.example.json` 配置各自的监控文件。普通只读访问不连接配置中的 `sessions_api_url`，不提供会话控制；原生任务和已落盘 agent 任务只投影脱敏状态。
 
 ### 只读服务与 Linux 常驻
 
@@ -299,10 +333,10 @@ ssh -N -L 127.0.0.1:8765:127.0.0.1:8765 <development-host>
 
 - 检查共享入口的 `/healthz` 和 `/api/capabilities`，确认 `read_only: true`。
 - 从访问者网络检查首页、CI / Gate 数据以及带前缀的 API。
-- 任务、机器、日志和原始证据接口不可访问；仅 `/api/branch-refresh` 接受符合认证和同源检查的 JSON POST。
+- 未授权访问不能读取任务、机器、日志或原始证据；仅 `/api/branch-refresh` 接受符合认证和同源检查的 JSON POST。启用分享时，另验证链接登录、到期、撤销和退出后恢复只读。
 - Windows 查看配置的 stdout、`.stderr` 和启动器日志；Linux 查看 tmux 输出。
 - 采集失败显示最后采集时间和错误，不把未知状态当作通过。
 
-Codex / Claude / FlagScale Agent 的创建、启动、跟进和配置只通过本机完整控制台使用。Claude 与 FlagScale 的 API key 分别使用当前 Windows 用户的 DPAPI 加密保存在忽略目录；服务或计划任务使用同一 Windows 用户。LAN 不初始化 agent 设置或执行器，`/api/agent-settings`、`/api/agent-providers` 及私有原件接口均不开放。
+Codex / Claude / FlagScale Agent 的创建、启动、跟进和配置通过本机完整控制台或有效的完整权限分享使用。Claude 与 FlagScale 的 API key 分别使用当前 Windows 用户的 DPAPI 加密保存在忽略目录；服务或计划任务使用同一 Windows 用户。LAN 不初始化 agent 设置或执行器；未授权的 `/api/agent-settings`、`/api/agent-providers` 及私有原件接口均不开放。
 
 原生子会话和已落盘任务的共享状态仅包含安全的 backend、分支、状态、阶段和时间。历史实验记录在 LAN 页面指向 GitHub PR，本机入口可读取经哈希验证的 UTF-8 存档。更多配置见 [高级配置与验收参考](REFERENCE.md)。

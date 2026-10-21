@@ -721,9 +721,12 @@ class Engine:
 
 
 def make_server(engine: Engine | None, host: str, port: int, monitor: object | None = None,
-                sessions: object | None = None, *, registry: ProjectRegistry | None = None) -> ThreadingHTTPServer:
+                sessions: object | None = None, *, registry: ProjectRegistry | None = None,
+                access_shares=None) -> ThreadingHTTPServer:
     if host not in ("127.0.0.1", "localhost", "::1"):
         raise WorkflowError("HTTP control must bind to loopback only")
+    if access_shares is not None and not access_shares.public_url:
+        raise WorkflowError("Access sharing requires a public HTTPS URL")
     registry = registry or ProjectRegistry.single(engine, monitor, sessions)
 
     from fl_dashboard.tasks.ssh_profile_sync import SSHProfileSync
@@ -791,6 +794,34 @@ def make_server(engine: Engine | None, host: str, port: int, monitor: object | N
                 self._json(HTTPStatus.BAD_REQUEST, {"error": str(exc)})
                 return
             engine, monitor, sessions = project.workflow, project.monitor, project.sessions
+            if target.path == "/api/access-shares":
+                if access_shares is None:
+                    self._json(404, {"error": "Access sharing is not configured"})
+                    return
+                if target.query:
+                    self._json(400, {"error": "Sharing management does not accept query parameters"})
+                    return
+                try:
+                    self._json(200, {"available": True, "public_url": access_shares.public_url,
+                                     "shares": access_shares.list()})
+                except Exception:
+                    self._json(503, {"error": "Access sharing is temporarily unavailable"})
+                return
+            if target.path in ("/access-shares", "/access-shares.html"):
+                if access_shares is None:
+                    self._json(404, {"error": "Access sharing is not configured"})
+                    return
+                data = (TEMPLATES / "access_shares.html").read_bytes()
+                self.send_response(200)
+                self.send_header("Content-Type", "text/html; charset=utf-8")
+                self.send_header("Content-Length", str(len(data)))
+                self.send_header("Cache-Control", "no-store")
+                self.send_header("Referrer-Policy", "no-referrer")
+                self.send_header("X-Content-Type-Options", "nosniff")
+                self.send_header("X-Frame-Options", "DENY")
+                self.end_headers()
+                self.wfile.write(data)
+                return
             if target.path == "/api/projects":
                 self._json(200, registry.metadata())
                 return
@@ -852,6 +883,7 @@ def make_server(engine: Engine | None, host: str, port: int, monitor: object | N
             if target.path == "/api/capabilities":
                 self._json(200, {"read_only": False, "sessions": sessions is not None,
                                  "refresh": monitor is not None, "workflow": engine is not None,
+                                 "access_shares": access_shares is not None, "shared_access": False,
                                  "project_id": project.id, "label": project.label, "multi_project": registry.multi_project,
                                  "engine": project.engine_name, "default_branch": project.default_branch,
                                  "adaptation_tasks": project.native_tasks is not None or sessions is not None})
@@ -1014,6 +1046,30 @@ def make_server(engine: Engine | None, host: str, port: int, monitor: object | N
                 body = json.loads(self.rfile.read(length) or b"{}")
                 if not isinstance(body, dict):
                     raise WorkflowError("Request body must be a JSON object")
+                revoke_share = re.fullmatch(r"/api/access-shares/([0-9a-f]{32})/revoke", target)
+                if target == "/api/access-shares" or revoke_share:
+                    if access_shares is None:
+                        self._json(404, {"error": "Access sharing is not configured"})
+                        return
+                    if parsed.query:
+                        raise WorkflowError("Sharing management does not accept query parameters")
+                    try:
+                        if revoke_share:
+                            if body:
+                                raise ValueError("Revocation does not accept additional fields")
+                            result = access_shares.revoke(revoke_share[1])
+                            self._json(200, {"share": result})
+                        else:
+                            if set(body) - {"label", "expires_in_hours"}:
+                                raise ValueError("Invalid access sharing fields")
+                            result = access_shares.create(**body)
+                            metadata = {key: value for key, value in result.items() if key not in ("token", "url")}
+                            self._json(201, {"share": metadata, "url": result["url"]})
+                    except ValueError as exc:
+                        self._json(400, {"error": str(exc)})
+                    except Exception:
+                        self._json(503, {"error": "Access sharing is temporarily unavailable"})
+                    return
                 if target == "/api/agent-settings":
                     provider = body.get("provider", "claude")
                     if provider not in ("claude", "flagscale"):
@@ -1102,8 +1158,8 @@ def make_server(engine: Engine | None, host: str, port: int, monitor: object | N
 
 
 def serve(engine: Engine | None, host: str, port: int, monitor: object | None = None,
-          sessions: object | None = None, *, registry: ProjectRegistry | None = None) -> None:
-    server = make_server(engine, host, port, monitor, sessions, registry=registry)
+          sessions: object | None = None, *, registry: ProjectRegistry | None = None, access_shares=None) -> None:
+    server = make_server(engine, host, port, monitor, sessions, registry=registry, access_shares=access_shares)
     print(f"FL workflow dashboard: http://{host}:{server.server_port}/", flush=True)
     try:
         server.serve_forever()
@@ -1128,11 +1184,25 @@ def main(argv: list[str] | None = None) -> int:
             cmd.add_argument("--port", type=int, default=8765)
             cmd.add_argument("--monitor-config", type=Path)
             cmd.add_argument("--projects-config", type=Path)
+            cmd.add_argument("--access-shares-file", type=Path, help="Private local store for expiring management links")
+            cmd.add_argument("--share-public-url", help="HTTPS root URL of the LAN service")
     args = parser.parse_args(argv)
+    access_shares = None
+    if args.action == "serve":
+        if bool(args.access_shares_file) != bool(args.share_public_url):
+            parser.error("--access-shares-file and --share-public-url must be provided together")
+        if args.access_shares_file:
+            from fl_dashboard.services.access_shares import AccessShareStore
+            try:
+                access_shares = AccessShareStore(args.access_shares_file, args.share_public_url)
+                if urlsplit(access_shares.public_url).path:
+                    raise ValueError("Access sharing requires an HTTPS root URL without a path prefix")
+            except ValueError as exc:
+                parser.error(str(exc))
     try:
         if args.action == "serve" and args.projects_config:
             registry = ProjectRegistry.from_config(args.projects_config)
-            serve(None, args.host, args.port, registry=registry)
+            serve(None, args.host, args.port, registry=registry, access_shares=access_shares)
             return 0
         if args.config is None:
             raise WorkflowError("--config or --projects-config is required for serve")
@@ -1147,7 +1217,7 @@ def main(argv: list[str] | None = None) -> int:
             monitor_path = args.monitor_config or args.config.resolve().parent / "branch-monitor.json"
             monitor = BranchMonitor(monitor_path) if monitor_path.is_file() else None
             sessions = CodexSessionManager(monitor.config, monitor_path.resolve().parent) if monitor else None
-            serve(engine, args.host, args.port, monitor, sessions)
+            serve(engine, args.host, args.port, monitor, sessions, access_shares=access_shares)
             return 0
         if args.action == "start":
             result = engine.start(args.dry_run)

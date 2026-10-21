@@ -173,6 +173,37 @@ class StartDashboardTests(unittest.TestCase):
                     start_dashboard.prepare(self.args(*extra), app_root=self.app)
                 projects.assert_not_called()
 
+    def test_access_sharing_uses_matching_store_and_explicit_local_origin(self):
+        with patch.object(start_dashboard, "check_projects"), patch.object(start_dashboard, "check_port"), \
+                patch.object(start_dashboard, "load_tls_context", return_value=object()):
+            local, _ = start_dashboard.prepare(self.args("--enable-access-sharing", "--share-public-url", "https://192.168.8.9:9443"), app_root=self.app)
+            lan, _ = start_dashboard.prepare(self.args("--lan", "--lan-ip", "192.168.8.9", "--lan-port", "9443", "--tls-cert", "cert.pem", "--tls-key", "key.pem", "--enable-access-sharing"), app_root=self.app)
+        self.assertEqual(local[local.index("--access-shares-file") + 1], lan[lan.index("--access-shares-file") + 1])
+        self.assertEqual("https://192.168.8.9:9443", local[local.index("--share-public-url") + 1])
+        self.assertEqual("https://192.168.8.9:9443", lan[lan.index("--public-url") + 1])
+        self.assertEqual("http://127.0.0.1:8766", lan[lan.index("--control-url") + 1])
+
+    def test_saved_sharing_arguments_are_preserved_by_both_launch_modes(self):
+        value = copy.deepcopy(self.documents["launch.json"])
+        value["arguments"] += ["--share-public-url", "https://192.168.8.9:9443", "--access-shares-file", str(self.output / "grants.json")]
+        self.write_launch(value)
+        with patch.object(start_dashboard, "check_projects"), patch.object(start_dashboard, "check_port"), \
+                patch.object(start_dashboard, "load_tls_context", return_value=object()):
+            local, _ = start_dashboard.prepare(self.args(), app_root=self.app)
+            lan, _ = start_dashboard.prepare(self.args("--lan", "--lan-ip", "192.168.8.9", "--lan-port", "9443", "--tls-cert", "cert.pem", "--tls-key", "key.pem"), app_root=self.app)
+        self.assertEqual(str(self.output / "grants.json"), local[local.index("--access-shares-file") + 1])
+        self.assertEqual(str(self.output / "grants.json"), lan[lan.index("--access-shares-file") + 1])
+        self.assertEqual("https://192.168.8.9:9443", lan[lan.index("--public-url") + 1])
+
+    def test_access_sharing_rejects_missing_url_non_https_and_prefix(self):
+        for extra in (["--enable-access-sharing"], ["--share-public-url", "https://dashboard.example"],
+                      ["--enable-access-sharing", "--share-public-url", "http://dashboard.example"],
+                      ["--enable-access-sharing", "--share-public-url", "https://dashboard.example/prefix"]):
+            with self.subTest(extra=extra), patch.object(start_dashboard, "check_projects") as projects:
+                with self.assertRaises(start_dashboard.StartupError):
+                    start_dashboard.prepare(self.args(*extra), app_root=self.app)
+                projects.assert_not_called()
+
     def test_repository_error_closes_registry_and_hides_diagnostics(self):
         project = Mock(id="vllm", monitor_error=None, default_branch="target")
         project.monitor._head.side_effect = RuntimeError("DUMMY_PRIVATE_TOKEN remote diagnostic")

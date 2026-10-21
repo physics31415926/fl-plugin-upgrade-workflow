@@ -1,0 +1,27 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="referrer" content="no-referrer">
+  <title>打开分享 · FL 适配工作台</title>
+  <style>
+    :root{color-scheme:light;font:15px/1.7 system-ui,-apple-system,"Segoe UI",sans-serif;color:#18243a;background:#f4f7fb}*{box-sizing:border-box}body{margin:0;min-height:100vh;display:grid;place-items:center;padding:24px}.card{width:min(100%,480px);border:1px solid #e1e8f0;border-radius:15px;padding:32px;background:#fff;box-shadow:0 12px 30px #192d4c0e}.mark{display:grid;place-items:center;width:40px;height:40px;border-radius:11px;color:white;background:#315bdb;font-weight:750}h1{font-size:24px;margin:22px 0 10px}p{color:#64748b;margin:0 0 20px}a{display:inline-flex;align-items:center;min-height:44px;color:#315bdb;text-decoration:none}a:hover{text-decoration:underline}a:focus-visible{outline:3px solid #95b5ff;outline-offset:4px}@media(prefers-color-scheme:dark){:root{color-scheme:dark;color:#edf2f9;background:#101827}.card{background:#1b2637;border-color:#334257}p{color:#a0aec2}a{color:#9bb8ff}}
+  </style>
+</head>
+<body>
+  <main class="card"><div class="mark" aria-hidden="true">FL</div><h1 id="title">正在打开工作台</h1><p id="message" role="status" aria-live="polite">正在验证分享链接…</p><a href="./">查看只读看板</a></main>
+  <script>
+  (async () => {
+    'use strict';
+    const fragment=location.hash;
+    history.replaceState(null,'',location.pathname+location.search);
+    const token=new URLSearchParams(fragment.slice(1)).get('token');
+    const fail=()=>{document.getElementById('title').textContent='分享链接不可用';document.getElementById('message').textContent='链接可能已到期、被撤销或不完整。请联系分享者重新创建链接。';};
+    if(!/^[A-Za-z0-9_-]{43}$/.test(token||'')){fail();return;}
+    try{const response=await fetch(new URL('./api/share-login',location.href),{method:'POST',credentials:'same-origin',cache:'no-store',redirect:'error',referrerPolicy:'no-referrer',headers:{'Content-Type':'application/json'},body:JSON.stringify({token})});if(!response.ok){fail();return;}location.replace(new URL('./sessions',location.href).href);}
+    catch(_){document.getElementById('title').textContent='暂时无法连接';document.getElementById('message').textContent='请确认能够访问局域网服务，然后重新打开分享者提供的完整链接。';}
+  })();
+  </script>
+</body>
+</html>
