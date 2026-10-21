@@ -2,7 +2,7 @@ const assert=require('node:assert/strict'),fs=require('node:fs'),path=require('n
 const text=fs.readFileSync(path.join(__dirname,'..','web/templates/sessions.html'),'utf8'),source=[...text.matchAll(/<script\b[^>]*>([\s\S]*?)<\/script>/g)][0][1];
 const start=source.indexOf('  function renderSshSync('),end=source.indexOf('  function showProfiles(',start);assert(start>=0&&end>start);
 function ui(){
-  const nodes=new Map(),calls=[],context={state:{readOnly:false,sshSync:null,sshSyncBusy:false,profiles:[{id:'old'}],creating:false,checking:false},
+  const nodes=new Map(),calls=[],context={labels:{cuda:'NVIDIA'},checkButtons:()=>{},state:{profileRevision:0,readOnly:false,sshSync:null,sshSyncBusy:false,profiles:[{id:'old'}],creating:false,checking:false},
     $:id=>{if(!nodes.has(id))nodes.set(id,{value:'draft '+id,textContent:'',disabled:false,hidden:false});return nodes.get(id);},
     post:async(url,body)=>{calls.push({url,body});return{profiles:[{id:'new'}],ssh_config_sync:{status:'synced',changed:true,added:1,updated:2,removed:1,checked_at:'fixture-time'}};},
     showProfiles:()=>{context.shown=(context.shown||0)+1;},invalidateCheck:()=>{context.invalidated=(context.invalidated||0)+1;},formatTime:value=>value,errorMessage:value=>typeof value==='string'?value:value?.message||'',notice:(id,value)=>{context.$(id).textContent=value;}};
@@ -51,4 +51,44 @@ test('latest SSH config address is rendered in inventory, selection and guidance
 test('read-only machine projection omits local SSH host, user, port and private key metadata',()=>{
   const {context}=machineUi();context.state.readOnly=true;context.state.profiles=[{id:'demo',ssh_alias:'gpu_demo',backend:'cuda',ssh_config_connection:{host:'gpu-private.example.test',user:'private_user',port:2299,identity_file:'/private/demo-key'}}];context.$('profile').value='demo';context.showProfiles();
   for(const id of ['profile','machine-inventory','profile-guidance'])assert.doesNotMatch(context.$(id).textContent,/gpu-private|private_user|2299|demo-key/);
+});
+
+
+test('manual SSH feedback remains visible after automatic polling and shows inventory counts',async()=>{
+  const {context}=ui();context.post=async()=>({profiles:[{id:'known',backend:'cuda'},{id:'unknown',backend:''}],ssh_config_sync:{status:'synced',aliases:2,changed:true,added:1,updated:0,removed:0,checked_at:'manual-time'}});
+  await context.syncSshConfig();context.renderSshSync({status:'synced',aliases:2,changed:false,checked_at:'poll-time'});
+  assert.match(context.$('ssh-sync-status').textContent,/手动同步完成于 manual-time.*读取 2.*已识别 1.*无法识别 1.*新增 1/);
+});
+
+test('SSH sync shows progress while pending and exposes server-reported failure',async()=>{
+  const {context}=ui();let resolve;context.post=()=>new Promise(done=>resolve=done);
+  const pending=context.syncSshConfig();assert.match(context.$('ssh-sync-status').textContent,/正在读取/);assert.equal(context.$('sync-ssh').disabled,true);
+  resolve({profiles:[],ssh_config_sync:{status:'error',error:'无法读取配置'}});await pending;
+  assert.equal(context.state.profiles[0].id,'old');assert.equal(context.$('ssh-sync-status').textContent,'无法读取配置');assert.equal(context.$('sync-ssh').disabled,false);
+  context.renderSshSync({status:'synced',changed:false});assert.equal(context.$('ssh-sync-status').textContent,'无法读取配置');
+});
+
+test('late polling cannot overwrite machine profiles returned by manual SSH sync',async()=>{
+  const {context}=ui();Object.assign(context.state,{sessionRevision:0,selectionRevision:0});
+  Object.assign(context,{API:'/api/codex-sessions',selectionTarget:{},prioritizedSessions:rows=>rows,selectSessionId:()=>null});
+  for(const name of ['renderProviderSettings','renderFlagscaleSettings','renderHealth','renderList','renderDetail'])context[name]=()=>{};
+  let finish;context.request=()=>new Promise(resolve=>finish=resolve);
+  const a=source.indexOf('  async function refresh('),b=source.indexOf('  async function act(',a);vm.runInContext(source.slice(a,b),context);
+  const poll=context.refresh(true);await context.syncSshConfig();finish({sessions:[],machine_profiles:[{id:'stale'}],ssh_config_sync:{status:'synced',changed:false}});await poll;
+  assert.equal(context.state.profiles[0].id,'new');assert.match(context.$('ssh-sync-status').textContent,/新增 1/);
+});
+
+test('unknown SSH devices are grouped and marked as unable to identify',()=>{
+  const {context}=machineUi();context.state.profiles=[{id:'unknown',ssh_alias:'gpu_demo',backend:''}];context.$('profile').value='unknown';context.showProfiles();
+  assert.equal(context.$('profile').children[1].label,'无法识别');assert.match(context.$('machine-inventory').textContent,/无法识别设备类型/);assert.match(context.$('profile-guidance').textContent,/无法识别：SSH 名称/);
+});
+
+
+test('explicitly saving an inferred backend records the manual choice even when its value is unchanged',async()=>{
+  const {context}=ui();const prior={id:'device',ssh_alias:'gpu_demo',backend:'cuda',backend_source:'SSH 名称推断（待硬件核验）',source:'本机 SSH config'};
+  context.state.profiles=[prior];context.$('profile').value='device';context.$('profile-label').value='Device';context.showProfileGuidance=()=>{};
+  context.fields=()=>({profile_id:'device',backend:'cuda',ssh_alias:'gpu_demo',remote_workspace:'',model_paths:{}});
+  let saved;context.post=async(url,body)=>{saved=body;return {profile:{...prior,...body}};};
+  const a=source.indexOf('  async function saveConnection('),b=source.indexOf('  function renderCheck(',a);vm.runInContext(source.slice(a,b),context);
+  await context.saveConnection();assert.equal(saved.backend_source,'manual');assert.equal(saved.backend,'cuda');
 });

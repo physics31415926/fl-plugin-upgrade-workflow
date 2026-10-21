@@ -209,6 +209,10 @@ class BranchMonitor:
         return sorted(ref[len(prefix):] for ref in done.stdout.splitlines()
                       if ref.startswith(prefix) and not ref.endswith("/HEAD"))
 
+    def branch_options(self) -> dict[str, Any]:
+        """List local remote-tracking refs without collecting PRs, CI or evidence."""
+        return {"branch": self.branch, "branches": self._branches()}
+
     def _registry(self, sha: str) -> dict[str, bool]:
         text = self._show(sha, ".github/configs/platforms.yml")
         result: dict[str, bool] = {}

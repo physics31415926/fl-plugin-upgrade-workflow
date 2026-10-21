@@ -875,6 +875,22 @@ def make_server(engine: Engine | None, host: str, port: int, monitor: object | N
                 except Exception as exc:
                     self._json(HTTPStatus.INTERNAL_SERVER_ERROR, {"error": f"Codex sessions unavailable: {exc}"})
                 return
+            if target.path == "/api/branches":
+                if monitor is None:
+                    self._json(HTTPStatus.SERVICE_UNAVAILABLE, {"error": "Branch monitor is not configured"})
+                    return
+                try:
+                    query = parse_qs(target.query, keep_blank_values=True)
+                    if set(query) - {"project"} or any(len(values) != 1 for values in query.values()):
+                        raise ValueError("Invalid branch list query")
+                    options = getattr(monitor, "branch_options", None)
+                    result = options() if callable(options) else {"branch": monitor.branch, "branches": [monitor.branch]}
+                    self._json(200, result)
+                except (ValueError, MonitorError) as exc:
+                    self._json(HTTPStatus.BAD_REQUEST, {"error": str(exc)})
+                except Exception:
+                    self._json(HTTPStatus.SERVICE_UNAVAILABLE, {"error": "Branch list is temporarily unavailable"})
+                return
             if target.path == "/api/branch-status":
                 if monitor is None:
                     self._json(HTTPStatus.SERVICE_UNAVAILABLE, {"error": "Branch monitor is not configured"})

@@ -21,6 +21,7 @@ import threading
 import time
 
 from fl_dashboard.agents.codex_sessions import CodexSessionManager, SessionError
+from fl_dashboard.tasks.device_recognition import ALIAS_BACKEND_SOURCE, hardware_backend
 
 _RESERVED = {"_automatic_proof", "automatic_context"}
 _FIELDS = ("profile_id", "backend", "branch", "ssh_alias", "remote_workspace",
@@ -31,21 +32,6 @@ _PROOF_SECRET = secrets.token_bytes(32)
 _PROOF_TTL = 240
 PROBE_TIMEOUT = 20
 PROBE_OUTPUT_LIMIT = 16384
-
-# These are vendor/model identifiers, not guesses from generic GPU counts or RAM.
-_HINTS = {
-    "cuda": r"\b(?:cuda|nvidia|a100|h100|h200|a800|h800|l40s|geforce|tesla|rtx)\b",
-    "ascend": r"\b(?:ascend|huawei|atlas|cann|910b|910c)\b|昇腾",
-    "metax": r"\b(?:metax|maca|mc550|c550)\b|沐曦",
-    "corex": r"\b(?:iluvatar|corex|bi100|bi150)\b|天数",
-    "hygon": r"\b(?:hygon|dcu)\b|海光",
-    "musa": r"\b(?:musa|moorethreads|mtt)\b|摩尔线程",
-    "enflame": r"\b(?:enflame|topsrider|gcu)\b|燧原",
-    "tsingmicro": r"\btsingmicro\b|清微",
-    "sunrise": r"\bsunrise\b|曦望",
-    "kunlunxin": r"\b(?:kunlunxin|kunlun)\b|昆仑芯",
-    "thead": r"\b(?:thead|t-head|hanguang)\b|平头哥|含光",
-}
 
 # No mkdir, clone, checkout, environment mutation, or remote agent runs here.
 # Only known shallow roots are inspected; at most 100 candidate directories are
@@ -144,9 +130,7 @@ def consume_automatic_task(payload, manager):
 
 
 def _hint(value):
-    text = str(value).lower().replace("_", " ")
-    matches = {backend for backend, pattern in _HINTS.items() if re.search(pattern, text)}
-    return next(iter(matches)) if len(matches) == 1 else None
+    return hardware_backend(value)
 
 
 def _path(value, field, *, allow_empty=False):
@@ -318,6 +302,9 @@ def normalize_automatic_task(project, payload, *, runner=None, ssh_executable=No
         raise SessionError("Invalid branch")
     user_goal = CodexSessionManager._text(payload.get("goal", ""), "goal", 2500)
     configured_backend = profile.get("backend") or ""
+    if profile.get("backend_source") == ALIAS_BACKEND_SOURCE:
+        # SSH names group the device picker but cannot establish its hardware.
+        configured_backend = ""
     if configured_backend == "nvidia":
         configured_backend = "cuda"
     available = getattr(target, "backends", set(target.config.get("session_backends", CodexSessionManager.BACKENDS)))

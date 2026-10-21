@@ -9,6 +9,7 @@ import unittest
 from fl_dashboard.services.flflow import make_server
 from fl_dashboard.projects.project_registry import ProjectContext, ProjectRegistry
 from fl_dashboard.tasks.ssh_profile_sync import SOURCE, SSHProfileSync, read_config
+from fl_dashboard.tasks.device_recognition import ALIAS_BACKEND_SOURCE, alias_backend, hardware_backend
 
 
 class Profiles:
@@ -21,7 +22,11 @@ class Profiles:
 
     def save_profile(self, body):
         self.writes.append(copy.deepcopy(body))
-        self.profiles.append(copy.deepcopy(body))
+        existing = next((index for index, profile in enumerate(self.profiles) if profile.get("id") == body.get("id")), None)
+        if existing is None:
+            self.profiles.append(copy.deepcopy(body))
+        else:
+            self.profiles[existing] = copy.deepcopy(body)
         return copy.deepcopy(body)
 
 
@@ -50,6 +55,105 @@ class SSHSyncTests(unittest.TestCase):
         self.assertEqual(1, result["ssh_config_sync"]["added"])
         self.snapshot()
         self.assertEqual(1, len(self.manager.writes), "ordinary refresh never duplicates imports")
+
+    def test_device_names_are_classified_and_unrecognized_aliases_stay_unknown(self):
+        expected = {"a100_lab": "cuda", "a800_lab": "cuda", "h20_lab": "cuda", "h800_lab": "cuda",
+                    "ascend_910b": "ascend", "metax_c550_lab": "metax", "tianshu_lab": "corex",
+                    "hy_lab": "hygon", "mthreads_lab": "musa", "suiyuan_lab": "enflame",
+                    "tsingmicro_lab": "tsingmicro", "xiwang_lab": "sunrise", "kunlunxin_lab": "kunlunxin",
+                    "810e_lab": "thead", "gpu": "", "hy_a100": "", "p800_lab": "", "s60_lab": ""}
+        self.config.write_text("Host " + " ".join(expected) + "\n", encoding="utf-8")
+        result = self.snapshot()
+        profiles = {row["ssh_alias"]: row for row in result["machine_profiles"]}
+        persisted = {row["ssh_alias"]: row for row in self.manager.snapshot()["machine_profiles"]}
+        for alias, backend in expected.items():
+            with self.subTest(alias=alias):
+                self.assertEqual(profiles[alias]["backend"], backend)
+                self.assertEqual(persisted[alias]["backend"], backend)
+                self.assertEqual(profiles[alias]["backend_recognition"], "inferred" if backend else "unknown")
+                self.assertEqual(profiles[alias]["backend_source"], ALIAS_BACKEND_SOURCE if backend else "")
+        self.assertEqual(result["ssh_config_sync"]["unrecognized"], 4)
+        self.assertEqual(result["ssh_config_sync"]["recognized"], 14)
+        self.assertIsNone(alias_backend("musa-notes-nvidia"))
+        self.assertIsNone(alias_backend("example-a1000"))
+        self.assertIsNone(hardware_backend("hy"), "alias abbreviations never identify actual hardware")
+
+    def test_existing_empty_import_is_classified_once_with_the_same_saved_identity(self):
+        self.config.write_text("Host h20_lab\n", encoding="utf-8")
+        profile = {"id": "existing", "ssh_alias": "h20_lab", "source": SOURCE, "backend": "",
+                   "notes": "retained", "remote_workspace": "/work/existing"}
+        self.manager = Profiles([profile])
+        first = self.snapshot()
+        saved = self.manager.profiles[0]
+        self.assertEqual(saved["id"], profile["id"])
+        self.assertEqual(saved["backend"], "cuda")
+        self.assertEqual(saved["notes"], "retained")
+        self.assertEqual(saved["remote_workspace"], "/work/existing")
+        self.assertEqual(first["ssh_config_sync"]["classified"], 1)
+        self.assertEqual(self.snapshot()["ssh_config_sync"]["classified"], 0)
+        self.assertEqual(len(self.manager.writes), 1)
+
+    def test_duplicate_imports_prefer_configured_profile_without_deleting_owner_records(self):
+        self.config.write_text("Host h20_lab\n", encoding="utf-8")
+        empty = {"id": "imported", "ssh_alias": "h20_lab", "source": SOURCE, "backend": ""}
+        configured = {"id": "existing", "ssh_alias": "h20_lab", "source": SOURCE,
+                      "backend": "metax", "backend_source": "confirmed hardware", "remote_workspace": "/work/plugin"}
+        for profiles in ([empty, configured], [configured, empty]):
+            with self.subTest(order=[p["id"] for p in profiles]):
+                self.manager = Profiles(profiles)
+                result = self.snapshot()
+                self.assertEqual(len(result["machine_profiles"]), 1)
+                visible = result["machine_profiles"][0]
+                self.assertEqual(visible["id"], "existing")
+                self.assertEqual(visible["backend"], "metax")
+                self.assertEqual(visible["backend_recognition"], "configured")
+                self.assertEqual(self.manager.profiles, profiles)
+                self.assertEqual(self.manager.writes, [])
+                self.assertEqual(result["sessions"], self.manager.snapshot()["sessions"])
+
+    def test_saved_noncompute_role_wins_over_imported_compute_duplicate(self):
+        self.config.write_text("Host h20_lab\n", encoding="utf-8")
+        for role in ("development", "gateway"):
+            for backend in ("", "cuda"):
+                compute = {"id": "compute-copy", "ssh_alias": "h20_lab", "source": SOURCE,
+                           "role": "compute", "backend": backend}
+                restricted = {"id": "saved-role", "ssh_alias": "h20_lab", "source": SOURCE,
+                              "role": role, "backend": "", "notes": "User-classified role"}
+                for profiles in ([compute, restricted], [restricted, compute]):
+                    with self.subTest(role=role, backend=backend, order=[p["id"] for p in profiles]):
+                        self.manager = Profiles(profiles)
+                        result = self.snapshot()
+                        self.assertEqual(len(result["machine_profiles"]), 1)
+                        visible = result["machine_profiles"][0]
+                        self.assertEqual(visible["id"], "saved-role")
+                        self.assertEqual(visible["role"], role)
+                        self.assertEqual(visible["backend"], "")
+                        self.assertEqual(visible["notes"], "User-classified role")
+                        self.assertEqual(self.manager.profiles, profiles)
+                        self.assertEqual(self.manager.writes, [])
+                        self.assertEqual(result["ssh_config_sync"]["recognized"], 0)
+                        self.assertEqual(result["ssh_config_sync"]["unrecognized"], 0)
+
+    def test_manual_profile_wins_over_duplicate_import_but_keeps_original_records(self):
+        manual = {"id": "manual", "ssh_alias": "gpu", "source": "manual", "backend": "ascend"}
+        imported = {"id": "import", "ssh_alias": "gpu", "source": SOURCE, "backend": ""}
+        self.manager = Profiles([imported, manual])
+        self.assertEqual(self.snapshot()["machine_profiles"], [manual])
+        self.assertEqual(self.manager.profiles, [imported, manual])
+        self.assertEqual(self.manager.writes, [])
+
+    def test_deleted_alias_is_counted_once_even_though_owner_retains_task_records(self):
+        first = self.snapshot()
+        self.config.write_text("Host replacement\n", encoding="utf-8")
+        changed = self.snapshot()
+        unchanged = self.snapshot()
+        self.assertEqual(changed["ssh_config_sync"]["removed"], 1)
+        self.assertEqual(changed["ssh_config_sync"]["added"], 1)
+        self.assertEqual(unchanged["ssh_config_sync"]["removed"], 0)
+        self.assertEqual(unchanged["ssh_config_sync"]["added"], 0)
+        self.assertFalse(unchanged["ssh_config_sync"]["changed"])
+        self.assertEqual(first["sessions"], unchanged["sessions"])
+        self.assertIn("gpu", [p["ssh_alias"] for p in self.manager.profiles])
 
     def test_same_alias_changes_are_visible_and_invalidate_checks(self):
         self.snapshot()

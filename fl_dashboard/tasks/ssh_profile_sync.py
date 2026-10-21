@@ -11,6 +11,8 @@ import shlex
 import threading
 from datetime import datetime, timezone
 
+from fl_dashboard.tasks.device_recognition import ALIAS_BACKEND_SOURCE, alias_backend
+
 SOURCE = "本机 SSH config"
 ALIAS = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,95}$")
 FIELDS = {"hostname": "host", "user": "user", "port": "port", "identityfile": "identity_file", "proxyjump": "jump_alias"}
@@ -124,49 +126,88 @@ class SSHProfileSync:
                 result["ssh_config_sync"] = {"status": "error", "checked_at": now, "changed": False,
                                              "error": "SSH 配置读取失败，保留已保存机器；请检查文件格式与 Include。"}
                 return result
-            imported = {profile.get("ssh_alias"): profile for profile in profiles
-                        if isinstance(profile, dict) and profile.get("source") == SOURCE and not profile.get("ssh_connection")}
+            def imported_profile(profile):
+                return (isinstance(profile, dict) and profile.get("source") == SOURCE
+                        and not profile.get("ssh_connection"))
+
+            def profile_priority(profile):
+                configured = bool(profile.get("backend") and profile.get("backend_source") != ALIAS_BACKEND_SOURCE)
+                checked = bool((profile.get("last_check") or {}).get("ok"))
+                # A saved non-compute role must never become selectable merely
+                # because an older duplicate was imported as a compute device.
+                restricted = profile.get("role") in {"gateway", "development"}
+                return (restricted, configured, checked, bool(profile.get("hardware")),
+                        bool(profile.get("remote_workspace")), bool(profile.get("model_paths")),
+                        bool(profile.get("label") and profile.get("label") != profile.get("ssh_alias")))
+
+            # Keep every owner record for task references, but display one imported
+            # profile per alias. Prefer established metadata over empty imports.
+            imported = {}
+            manual_aliases = {profile.get("ssh_alias") for profile in profiles
+                              if isinstance(profile, dict) and not imported_profile(profile)}
+            for profile in profiles:
+                if imported_profile(profile):
+                    alias = profile.get("ssh_alias")
+                    if alias not in imported or profile_priority(profile) > profile_priority(imported[alias]):
+                        imported[alias] = profile
             occupied = {profile.get("ssh_alias") for profile in profiles if isinstance(profile, dict)}
-            removed = set(imported) - set(aliases)
             previous = self.state["fingerprints"]
-            updated = {alias for alias in set(imported) & set(aliases)
-                       if previous.get(alias) != aliases[alias]["fingerprint"]}
-            added = set(aliases) - occupied
-            added_profiles = []
+            added = set(aliases) - set(previous)
+            removed = set(previous) - set(aliases)
+            updated = {alias for alias in set(previous) & set(aliases)
+                       if previous[alias] != aliases[alias]["fingerprint"]}
+            # Existing checks without a prior fingerprint cannot establish that
+            # the currently loaded SSH endpoint is still the checked endpoint.
+            unverified = set(imported) & set(aliases) - set(previous)
+            stale = (set(self.state["stale"]) | updated | unverified) & set(aliases)
+            classified = 0
             try:
-                for alias in sorted(added, key=str.casefold):
-                    added_profiles.append(manager.save_profile({
+                for alias in sorted(set(aliases) - occupied, key=str.casefold):
+                    role = "gateway" if re.search(r"(?i)(?:jump|bastion|gateway)", alias) else "compute"
+                    backend = alias_backend(alias) if role == "compute" else None
+                    imported[alias] = manager.save_profile({
                         "id": "ssh-" + hashlib.sha256(alias.encode()).hexdigest()[:24],
-                        "label": alias, "ssh_alias": alias, "backend": "", "remote_workspace": "",
-                        "model_paths": {}, "source": SOURCE,
-                        "role": "gateway" if re.search(r"(?i)(?:jump|bastion|gateway)", alias) else "compute"}))
+                        "label": alias, "ssh_alias": alias, "backend": backend or "", "remote_workspace": "",
+                        "model_paths": {}, "source": SOURCE, "role": role,
+                        "backend_source": ALIAS_BACKEND_SOURCE if backend else ""})
+                for alias, profile in list(imported.items()):
+                    if alias not in aliases or alias in manual_aliases or profile.get("role", "compute") != "compute":
+                        continue
+                    if profile.get("backend") and profile.get("backend_source") != ALIAS_BACKEND_SOURCE:
+                        continue
+                    backend = alias_backend(alias) or ""
+                    source = ALIAS_BACKEND_SOURCE if backend else ""
+                    if profile.get("backend", "") != backend or profile.get("backend_source", "") != source:
+                        imported[alias] = manager.save_profile({**profile, "backend": backend, "backend_source": source})
+                        classified += 1
             except Exception:
                 result["ssh_config_sync"] = {"status": "error", "checked_at": now, "changed": False,
                                              "error": "机器配置同步失败，未修改 SSH 文件；请稍后重试。"}
                 return result
-            stale = (set(self.state["stale"]) | updated) & set(aliases)
-            current = []
-            for profile in profiles + added_profiles:
-                if not isinstance(profile, dict):
-                    continue
-                alias = profile.get("ssh_alias")
-                owned = profile.get("source") == SOURCE and not profile.get("ssh_connection")
-                if owned and alias in removed:
+            current = [profile for profile in profiles if isinstance(profile, dict) and not imported_profile(profile)]
+            for alias, profile in imported.items():
+                if alias not in aliases or alias in manual_aliases:
                     continue
                 item = dict(profile)
-                if owned and alias in aliases:
-                    item["ssh_config_connection"] = aliases[alias]["connection"]
-                    item["ssh_config_changed"] = alias in stale
-                    if alias in stale:
-                        item["last_check"] = None
-                        item["last_connection_check"] = None
+                item["ssh_config_connection"] = aliases[alias]["connection"]
+                item["ssh_config_changed"] = alias in stale
+                if item.get("role", "compute") == "compute":
+                    item["backend_recognition"] = ("inferred" if item.get("backend_source") == ALIAS_BACKEND_SOURCE
+                                                   else "configured" if item.get("backend") else "unknown")
+                if alias in stale:
+                    item["last_check"] = None
+                    item["last_connection_check"] = None
                 current.append(item)
-            changed = bool(added or removed or updated)
+            changed = bool(added or removed or updated or classified)
             self.state = {"fingerprints": {alias: value["fingerprint"] for alias, value in aliases.items()},
                           "stale": sorted(stale), "file_fingerprint": file_fingerprint}
             self._save()
             result["machine_profiles"] = current
             result["ssh_config_sync"] = {"status": "synced", "checked_at": now, "changed": changed,
                                          "added": len(added), "removed": len(removed), "updated": len(updated),
-                                         "aliases": len(aliases), "stale_checks": len(stale)}
+                                         "classified": classified, "aliases": len(aliases), "stale_checks": len(stale),
+                                         "recognized": sum(bool(profile.get("backend")) for profile in current
+                                                           if profile.get("role", "compute") == "compute"),
+                                         "unrecognized": sum(not profile.get("backend") for profile in current
+                                                             if profile.get("role", "compute") == "compute")}
             return result

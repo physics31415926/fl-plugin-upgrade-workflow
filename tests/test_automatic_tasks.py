@@ -145,6 +145,41 @@ class AutomaticTasksTests(unittest.TestCase):
         self.assertEqual(value["backend"], "cuda")
         self.assertTrue(self.runner.call_args.args[0][-1].endswith(" 0"))
 
+    def test_alias_classification_is_only_a_hint_and_actual_hardware_wins(self):
+        from fl_dashboard.tasks.device_recognition import ALIAS_BACKEND_SOURCE
+        self.update_profile(backend="metax", backend_source=ALIAS_BACKEND_SOURCE, ssh_alias="metax_c550")
+        self.runner.return_value = output(hardware="NVIDIA GPU: H20")
+        value = self.normalize()
+        self.assertEqual(value["backend"], "cuda")
+        self.assertEqual(value["automatic_context"]["backend_source"], "ssh_hardware")
+        self.assertTrue(self.runner.call_args.args[0][-1].endswith(" 1"))
+        self.assertEqual(self.manager.snapshot()["machine_profiles"][0]["backend"], "metax")
+
+    def test_imported_classification_survives_owner_storage_and_task_resolution(self):
+        from fl_dashboard.tasks.ssh_profile_sync import SSHProfileSync
+        from fl_dashboard.tasks.device_recognition import ALIAS_BACKEND_SOURCE
+        config = self.base / "ssh-config"
+        config.write_text("Host h20_lab\n HostName example.test\n", encoding="utf-8")
+        snapshot = SSHProfileSync(config).synchronize(self.manager, self.manager.snapshot())
+        imported = next(profile for profile in snapshot["machine_profiles"] if profile["ssh_alias"] == "h20_lab")
+        persisted = next(profile for profile in self.manager.snapshot()["machine_profiles"] if profile["id"] == imported["id"])
+        self.assertEqual(persisted["backend"], "cuda")
+        self.assertEqual(persisted["backend_source"], ALIAS_BACKEND_SOURCE)
+        self.runner.return_value = output(hardware="MetaX C550")
+        value = self.normalize({**self.payload, "profile_id": imported["id"]})
+        self.assertEqual(value["backend"], "metax")
+        self.assertEqual(value["ssh_alias"], "h20_lab")
+        self.assertEqual(value["automatic_context"]["backend_source"], "ssh_hardware")
+        self.assertFalse(self.manager._sessions)
+
+    def test_alias_classification_cannot_skip_unknown_actual_hardware(self):
+        from fl_dashboard.tasks.device_recognition import ALIAS_BACKEND_SOURCE
+        self.update_profile(backend="cuda", backend_source=ALIAS_BACKEND_SOURCE, ssh_alias="h20_lab")
+        self.runner.return_value = output(hardware="Unknown accelerator")
+        with self.assertRaisesRegex(SessionError, "实际硬件"):
+            self.normalize()
+        self.assertFalse(self.manager._sessions)
+
     def test_unknown_backend_uses_actual_accelerator_not_alias(self):
         self.update_profile(backend="", ssh_alias="metax-c550", label="NVIDIA A100")
         self.runner.return_value = output(hardware="NVIDIA GPU: H100")

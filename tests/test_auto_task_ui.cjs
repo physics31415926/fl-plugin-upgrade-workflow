@@ -3,7 +3,7 @@ const html=fs.readFileSync(path.join(__dirname,'..','web/templates/sessions.html
 function between(start,end){const a=source.indexOf(start),b=source.indexOf(end,a);assert(a>=0&&b>a,`source exists: ${start}`);return source.slice(a,b);}
 function ui(){
   const nodes=new Map(),calls=[],notices=[];
-  const values={'agent-provider':'codex','profile':'gpu-demo','backend':'cuda','branch':'target-demo','ssh-alias':'gpu_demo','remote-workspace':'/work/plugin','connection-mode':'alias','model-paths':'','goal':'','ssh-host':'','ssh-user':'','ssh-port':'22'};
+  const values={'agent-provider':'codex','profile':'gpu-demo','backend':'cuda','branch':'target-demo','branch-choice':'target-demo','ssh-alias':'gpu_demo','remote-workspace':'/work/plugin','connection-mode':'alias','model-paths':'','goal':'','ssh-host':'','ssh-user':'','ssh-port':'22'};
   const context={state:{selectionRevision:0,readOnly:false,creating:false,checking:false,checkedKey:'',profiles:[{id:'gpu-demo',role:'compute',ssh_alias:'gpu_demo'}],profileKey:''},labels:{cuda:'NVIDIA'},API:'/api/codex-sessions',innerWidth:1440,
     $:id=>{if(!nodes.has(id))nodes.set(id,{value:values[id]||'',textContent:'',checked:false,hidden:false,disabled:false,required:false,querySelectorAll:()=>[...nodes].filter(([id])=>Object.hasOwn(values,id)||['custom-settings','auto-monitor'].includes(id)).map(([,node])=>node),reportValidity:()=>true});return nodes.get(id);},
     taskPolicy:()=>({mode:'adapt'}),renderPolicy:()=>{},isCompute:profile=>(profile?.role||'compute')==='compute',providerAvailable:()=>true,renderSshSync:()=>{},showProfiles:()=>{},
@@ -52,17 +52,61 @@ test('automatic mode keeps baseline editable and submits the chosen branch witho
   assert.equal(calls[0].body.branch,'dev/next');assert.equal(calls[0].body.automatic,true);assert.equal(context.$('custom-settings').checked,false);
 });
 
-test('branch suggestions preserve edits made while loading and leave manual entry available on failure',async()=>{
-  const {context}=ui();context.el=(tag,cls,text)=>({tag,textContent:text});
-  const list=context.$('branch-options');list.replaceChildren=(...items)=>{list.children=items;};
-  vm.runInContext(between('  async function loadBranchOptions(', '  function fields('),context);
-  let resolve;context.request=path=>{assert.equal(path,'/api/branch-status');return new Promise(done=>{resolve=done;});};
-  const pending=context.loadBranchOptions();assert.equal(context.$('branch').disabled,false);assert.equal(context.$('reload-branches').disabled,true);
-  context.$('branch').value='user/next';resolve({branches:['main','dev/next','main',null]});await pending;
-  assert.equal(context.$('branch').value,'user/next');assert.deepEqual(Array.from(list.children,item=>item.value),['user/next','main','dev/next']);
-  context.request=async()=>{throw Error('offline');};await context.loadBranchOptions();
-  assert.equal(context.$('branch').value,'user/next');assert.equal(context.$('branch').disabled,false);assert.equal(context.$('reload-branches').disabled,false);assert.match(context.$('branch-hint').textContent,/可重试或直接输入/);
+function branchUi(){
+  const result=ui(),{context}=result;context.el=(tag,cls,text)=>({tag,textContent:text});
+  const list=context.$('branch-choice');list.replaceChildren=(...items)=>{list.children=items;};
+  context.$('branch').focus=()=>{context.$('branch').focused=true;};
+  vm.runInContext(between('  function renderBranchOptions(', '  function fields('),context);
+  context.renderBranchOptions();return {...result,list};
+}
+
+test('baseline uses a native dropdown with an explicit custom branch entry',()=>{
+  assert.match(html,/<select id="branch-choice" required/);assert.doesNotMatch(html,/<datalist id="branch-options"/);
+  const {context,list}=branchUi();assert.equal(context.$('custom-branch-field').hidden,true);assert.equal(context.$('branch').type,'hidden');
+  assert.deepEqual(Array.from(list.children,item=>item.value),['','target-demo','__custom__']);
+  context.$('branch-choice').value='__custom__';context.branchChoiceChanged();
+  assert.equal(context.$('custom-branch-field').hidden,false);assert.equal(context.$('branch').type,'text');assert.equal(context.$('branch').focused,true);
 });
+
+test('choosing a baseline submits that exact branch in automatic and manual task modes',async()=>{
+  for(const manual of [false,true]){
+    const {context,calls}=branchUi();context.state.branchNames=['target-demo','dev/next'];context.renderBranchOptions();
+    context.$('custom-settings').checked=manual;context.state.checkedKey='old-check';context.$('branch-choice').value='dev/next';context.branchChoiceChanged();
+    assert.equal(context.$('branch').value,'dev/next');assert.equal(context.state.branchEdited,true);assert.equal(context.state.checkedKey,'');
+    if(manual)context.checkMachine=async()=>true;
+    await context.create(false);assert.equal(calls[0].body.branch,'dev/next');assert.equal(context.$('custom-branch-field').hidden,true);
+  }
+});
+
+test('lightweight branch loading preserves a selection made while the request is pending',async()=>{
+  const {context,list}=branchUi();let resolve;
+  context.request=path=>{assert.equal(path,'/api/branches');return new Promise(done=>{resolve=done;});};
+  const pending=context.loadBranchOptions();assert.equal(context.$('branch-choice').disabled,false);assert.equal(context.$('reload-branches').disabled,true);
+  context.$('branch-choice').value='dev/next';context.branchChoiceChanged();
+  resolve({branch:'target-demo',branches:['main','dev/next','main',null]});await pending;
+  assert.equal(context.$('branch').value,'dev/next');assert.equal(context.$('branch-choice').value,'dev/next');
+  assert.deepEqual(Array.from(list.children,item=>item.value),['','dev/next','main','__custom__']);
+});
+
+test('branch reload and failure preserve custom input and keep other branches available',async()=>{
+  const {context,list}=branchUi();let resolve;context.request=()=>new Promise(done=>{resolve=done;});
+  const pending=context.loadBranchOptions();context.$('branch-choice').value='__custom__';context.branchChoiceChanged();context.$('branch').value='user/next';
+  resolve({branches:['main','dev/next']});await pending;
+  assert.equal(context.$('branch').value,'user/next');assert.equal(context.$('branch-choice').value,'__custom__');assert.equal(context.$('custom-branch-field').hidden,false);
+  assert.deepEqual(Array.from(list.children,item=>item.value),['','main','dev/next','__custom__']);
+  context.request=async()=>{throw Error('offline');};await context.loadBranchOptions();
+  assert.equal(context.$('branch').value,'user/next');assert.equal(context.$('branch-choice').value,'__custom__');assert.equal(context.$('branch').disabled,false);
+  assert.equal(context.$('reload-branches').disabled,false);assert.match(context.$('branch-hint').textContent,/可重试或选择/);
+  context.$('branch-choice').value='main';context.branchChoiceChanged();assert.equal(context.fields().branch,'main');assert.equal(context.$('custom-branch-field').hidden,true);
+});
+
+test('branch loading never overrides a URL branch and does not run in read-only mode',async()=>{
+  const {context,list}=branchUi();context.$('branch').value='url/branch';context.request=async()=>({branch:'default',branches:['main']});
+  await context.loadBranchOptions();assert.equal(context.$('branch').value,'url/branch');assert.equal(context.$('branch-choice').value,'url/branch');
+  assert.deepEqual(Array.from(list.children,item=>item.value),['','url/branch','main','__custom__']);
+  context.state.readOnly=true;context.request=async()=>assert.fail('read-only pages must not request local branch choices');await context.loadBranchOptions();
+});
+
 
 
 test('creating a task replaces initial deep-link selection before refreshing',async()=>{
