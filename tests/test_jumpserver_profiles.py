@@ -105,6 +105,49 @@ class JumpServerProfilesTests(unittest.TestCase):
         self.inventory.data["default_account"] = "worker"
         self.assertIn("#worker#", self.rows()[0]["ssh_connection"]["user"])
 
+    def test_monitor_and_task_accounts_are_independent_and_monitor_never_saves(self):
+        self.inventory.data.update(default_account="secure", task_account="root")
+        self.inventory.data["assets"][0]["accounts"] = ["secure", "root"]
+        task = self.rows()[0]
+        saved = copy.deepcopy(self.manager.rows)
+        self.assertIn("#root#", task["ssh_connection"]["user"])
+        monitor = self.bridge.profiles("vllm", self.manager, purpose="monitor")[0]
+        self.assertIn("#secure#", monitor["ssh_connection"]["user"])
+        self.assertIsNone(monitor["ssh_config_path"])
+        self.assertEqual(task["id"], monitor["id"])
+        self.assertEqual(saved, self.manager.rows)
+        self.assertEqual(1, len(self.manager.writes))
+        with ThreadPoolExecutor(max_workers=4) as pool:
+            list(pool.map(lambda i: self.bridge.profiles("vllm", self.manager, purpose="monitor" if i % 2 else "task"), range(10)))
+        self.assertEqual(saved, self.manager.rows)
+        self.assertEqual(1, len(self.manager.writes))
+        self.inventory.data["task_account"] = ""
+        self.assertIn("#secure#", self.rows()[0]["ssh_connection"]["user"])
+
+    def test_account_selection_requires_authorization_for_each_purpose(self):
+        self.inventory.data.update(default_account="secure", task_account="not-authorized")
+        self.inventory.data["assets"][0]["accounts"] = ["secure", "root"]
+        self.assertIn("任务执行账号", self.rows()[0]["configuration_error"])
+        monitor = self.bridge.profiles("vllm", self.manager, purpose="monitor")[0]
+        self.assertIsNone(monitor["configuration_error"])
+        self.inventory.data.update(default_account="not-authorized", task_account="root")
+        self.assertIsNone(self.rows()[0]["configuration_error"])
+        self.assertIn("设备采集账号", self.bridge.profiles("vllm", self.manager, purpose="monitor")[0]["configuration_error"])
+        self.inventory.data.update(default_account="secure", task_account="root")
+        self.inventory.data["assets"][0]["accounts"] = ["secure"]
+        self.assertIn("未授权所选任务执行账号（root）", self.rows()[0]["configuration_error"])
+        self.assertIn("#secure#", self.bridge.profiles("vllm", self.manager, purpose="monitor")[0]["ssh_connection"]["user"])
+        self.inventory.data["assets"][0]["accounts"] = ["root"]
+        monitor = self.bridge.profiles("vllm", self.manager, purpose="monitor")[0]
+        self.assertIn("未授权所选设备采集账号（secure）", monitor["configuration_error"])
+        self.assertIsNone(monitor["ssh_connection"])
+        self.assertIn("#root#", self.rows()[0]["ssh_connection"]["user"])
+        self.inventory.data.update(default_account="", task_account="")
+        self.assertIn("#root#", self.rows()[0]["ssh_connection"]["user"])
+        self.assertIn("#root#", self.bridge.profiles("vllm", self.manager, purpose="monitor")[0]["ssh_connection"]["user"])
+        with self.assertRaises(ValueError):
+            self.bridge.profiles("vllm", self.manager, purpose="invalid")
+
     def test_revoked_assets_disappear_without_deleting_owner_profiles(self):
         original = self.rows()[0]
         self.inventory.data["assets"] = []

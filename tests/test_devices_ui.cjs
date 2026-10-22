@@ -19,7 +19,7 @@ function harness(handler,options={}){
  const nodes=new Map(),calls=[],events={},history=[];
  const node=id=>{if(!nodes.has(id))nodes.set(id,new Element());return nodes.get(id);};
  const context={URL,URLSearchParams,JSON,Math,Number,Date,Set,localStorage:options.storage,location:{href:'http://127.0.0.1:8766/devices?project=vllm',search:'?project=vllm'},history:{replaceState:(_a,_b,url)=>history.push(url)},document:{hidden:false,getElementById:node,createElement:tag=>new Element(tag),createDocumentFragment:()=>new Element('#fragment'),addEventListener:(name,fn)=>events[name]=fn},fetch:async(url,options)=>{calls.push({url,options});const result=await(handler?handler(url,options):{});return{ok:result.code===undefined||result.code<400,status:result.code||200,json:async()=>result.data||result};}};
- vm.createContext(context);vm.runInContext(source.replace('initialize();setInterval(tick,3000);','globalThis.api={state,number,percent,memory,age,stale,verdict,cardState,cardSymbol,taskUrl,interval,due,shownHosts,summarize,render,renderHost,renderDetail,readSnapshot,refreshResources,tick,selectProject,initialize,jumpserver,readJumpserver,jumpserverAction,loginJumpserver,acceptJumpserver,renderJumpserver,refreshSyncedResources};'),context);
+ vm.createContext(context);vm.runInContext(source.replace('initialize();setInterval(tick,3000);','globalThis.api={state,number,percent,memory,age,stale,verdict,cardState,cardSymbol,taskUrl,interval,due,shownHosts,summarize,render,renderHost,renderDetail,readSnapshot,refreshResources,tick,selectProject,initialize,jumpserver,readJumpserver,jumpserverAction,loginJumpserver,acceptJumpserver,renderJumpserver,refreshSyncedResources,hasJumpserverCredential,saveJumpserverSettings,resumeJumpserver};'),context);
  return{context,api:context.api,node,calls,events,history};
 }
 const fresh=id=>({id,label:'Host '+id,ssh_alias:'host_'+id,backend:'cuda',backend_label:'NVIDIA / 英伟达',verdict:'free',reachable:true,updated_at:new Date().toISOString(),age_seconds:0,accel:{total:1,free:1,busy:0,unknown:0,residual:0,card_name:'Demo',cards:[{index:0,busy:false,residual:false,mem_used:0,mem_total:81920,util:0,procs:[]}]},node:{cpu_pct:0,mem_pct:2}});
@@ -56,7 +56,7 @@ test('device deep link selects a known compute profile once without changing bra
 test('invalid, noncompute and manual selections are not overwritten by a deep link',()=>{for(const profiles of [[],[{id:'wanted',role:'jump'}]]){const ui=profileHarness({profiles});ui.context.applyRequestedProfile();assert.equal(ui.applied(),0);assert.match(ui.notices[0],/已不可用/);}const manual=profileHarness();manual.context.profileLinkHandled=true;manual.context.applyRequestedProfile();assert.equal(manual.applied(),0);const readonly=profileHarness({readOnly:true});readonly.context.applyRequestedProfile();assert.equal(readonly.applied(),0);});
 
 
-const jms=(extra={})=>({enabled:true,base_url:'https://jump.example.test',username:'fixture-user',ssh_host:'',ssh_port:2222,identity_file:'',default_account:'',authenticated:true,refreshing:false,updated_at:'2026-10-22T10:00:00Z',error:null,asset_count:1,assets:[{id:'fixture',accounts:['operator']}],...extra});
+const jms=(extra={})=>({enabled:true,base_url:'https://jump.example.test',username:'fixture-user',ssh_host:'',ssh_port:2222,identity_file:'',default_account:'',task_account:'',authenticated:true,refreshing:false,updated_at:'2026-10-22T10:00:00Z',error:null,asset_count:1,assets:[{id:'fixture',accounts:['operator']}],...extra});
 const localJms=(ui,data=jms())=>{put(ui,snapshot());ui.api.state.jumpserverSettings=true;ui.api.state.machineSource='jumpserver';ui.api.jumpserver.data=data;ui.api.renderJumpserver();};
 test('sharing grants can view resources but never load or mutate JumpServer configuration',async()=>{
  const ui=harness(url=>new URL(url).pathname==='/api/capabilities'?{devices:true,shared_access:true,jumpserver_settings:false,machine_source:'jumpserver'}:snapshot());await ui.api.selectProject('vllm');
@@ -157,4 +157,103 @@ test('inventory failure with a saved credential can retry without another passwo
  ui.api.jumpserver.data=jms({authenticated:false,can_refresh:false});ui.api.renderJumpserver();
  assert.equal(ui.node('refresh-machines').disabled,true);
  assert.equal(ui.node('jumpserver-logout').hidden,true);
+});
+
+test('saved platform credentials hide login inputs, clear passwords and restore login only after expiry',()=>{
+ const ui=harness();localJms(ui,jms({authenticated:false,can_refresh:true}));
+ ui.node('jumpserver-password').value='fixture-only-unsent-password';ui.api.renderJumpserver();
+ assert.equal(ui.api.hasJumpserverCredential(ui.api.jumpserver.data),true);
+ assert.equal(ui.node('jumpserver-login-fields').hidden,true);
+ assert.equal(ui.node('jumpserver-connection-status').hidden,false);
+ assert.match(ui.node('jumpserver-connected-url').textContent,/jump\.example\.test/);
+ assert.match(ui.node('jumpserver-connected-user').textContent,/fixture-user/);
+ assert.equal(ui.node('jumpserver-password').disabled,true);assert.equal(ui.node('jumpserver-password').value,'');
+ ui.api.jumpserver.data=jms({authenticated:false,can_refresh:false});ui.api.renderJumpserver();
+ assert.equal(ui.api.hasJumpserverCredential(ui.api.jumpserver.data),false);
+ assert.equal(ui.node('jumpserver-login-fields').hidden,false);
+ assert.equal(ui.node('jumpserver-connection-status').hidden,true);
+ assert.equal(ui.node('jumpserver-password').disabled,false);
+ assert.equal(ui.api.hasJumpserverCredential(jms({authenticated:true,can_refresh:false})),true);
+});
+
+test('asset account choices use authorized SSH accounts and coverage counts without picking a multiple-account default',()=>{
+ const ui=harness();localJms(ui);const data=jms({default_account:'retired',asset_count:4,assets:[
+  {id:'one',ssh_supported:true,accounts:['operator','reader','operator']},
+  {id:'two',ssh_supported:true,accounts:['operator']},
+  {id:'three',ssh_supported:true,accounts:[]},
+  {id:'four',ssh_supported:false,accounts:['desktop-only']}
+ ]});ui.api.acceptJumpserver(data,{initial:true});
+ const select=ui.node('jumpserver-account'),choices=select.children.filter(option=>option.value);
+ assert.deepEqual(choices.map(option=>option.value).sort(),['operator','reader']);
+ assert.equal(select.value,'');
+ assert.match(choices.find(option=>option.value==='operator').textContent,/2/);
+ assert.match(choices.find(option=>option.value==='reader').textContent,/1/);
+ assert.equal(ui.node('jumpserver-settings').open,true);
+ assert.match(file('devices.html'),/<select\b[^>]*id="jumpserver-account"/);
+});
+
+test('an account choice is kept as a draft while platform polling returns the previous saved choice',async()=>{
+ const data=jms({assets:[{id:'one',accounts:['operator','reader']},{id:'two',accounts:['operator']}]});
+ const ui=harness(()=>data);localJms(ui);ui.api.acceptJumpserver(data,{initial:true});
+ ui.node('jumpserver-account').value='reader';
+ assert.equal(typeof ui.node('jumpserver-account').listeners.change,'function');
+ ui.node('jumpserver-account').listeners.change({target:ui.node('jumpserver-account')});
+ assert.equal(ui.api.jumpserver.dirty,true);await ui.api.readJumpserver();
+ assert.equal(ui.node('jumpserver-account').value,'reader');assert.equal(ui.api.jumpserver.dirty,true);
+ assert.equal(ui.calls.some(call=>call.options.method==='POST'),false);
+});
+
+test('saving SSH account settings sends only connection fields and recollects after success without login',async()=>{
+ const data=jms({can_refresh:true,assets:[{id:'one',accounts:['secure','root']}]});
+ const ui=harness(url=>new URL(url).pathname==='/api/jumpserver/settings'?{...data,default_account:'secure',task_account:'root'}:snapshot());
+ localJms(ui);ui.api.acceptJumpserver(data,{initial:true});ui.api.state.auto=false;
+ ui.node('jumpserver-url').value='https://unsent.example.test';ui.node('jumpserver-username').value='unsent-user';
+ ui.node('jumpserver-password').value='fixture-only-unsent-password';
+ ui.node('jumpserver-ssh-host').value='ssh-gateway.example.test';ui.node('jumpserver-ssh-port').value='2224';
+ ui.node('jumpserver-identity').value='D:/fixture/test-key';ui.node('jumpserver-account').value='secure';ui.node('jumpserver-task-account').value='root';
+ ui.api.jumpserver.dirty=true;
+ assert.equal(typeof ui.node('jumpserver-account-save').listeners.click,'function');
+ await ui.api.saveJumpserverSettings();
+ assert.equal(new URL(ui.calls[0].url).pathname,'/api/jumpserver/settings');
+ assert.deepEqual(JSON.parse(ui.calls[0].options.body),{ssh_host:'ssh-gateway.example.test',ssh_port:2224,identity_file:'D:/fixture/test-key',default_account:'secure',task_account:'root'});
+ assert.equal(ui.calls.some(call=>new URL(call.url).pathname==='/api/jumpserver/login'),false);
+ assert.equal(ui.calls.filter(call=>new URL(call.url).pathname==='/api/devices/refresh').length,1);
+ assert.equal(ui.api.jumpserver.dirty,false);assert.equal(ui.node('jumpserver-password').value,'');
+});
+
+test('resuming a disabled JumpServer source reuses credentials and waits for a fresh machine sync',async()=>{
+ const ui=harness(url=>{
+  const path=new URL(url).pathname;
+  if(path==='/api/jumpserver/settings')return jms({authenticated:false,can_refresh:true});
+  if(path==='/api/jumpserver/refresh')return jms({authenticated:false,can_refresh:true,refreshing:true});
+  return snapshot();
+ });localJms(ui,jms({enabled:false,authenticated:false,can_refresh:true}));ui.api.state.machineSource='ssh_config';
+ await ui.api.resumeJumpserver();
+ const platform=ui.calls.filter(call=>new URL(call.url).pathname.startsWith('/api/jumpserver'));
+ assert.deepEqual(platform.map(call=>new URL(call.url).pathname),['/api/jumpserver/settings','/api/jumpserver/refresh']);
+ assert.deepEqual(JSON.parse(platform[0].options.body),{enabled:true});assert.deepEqual(JSON.parse(platform[1].options.body),{});
+ assert.equal(ui.calls.some(call=>new URL(call.url).pathname==='/api/jumpserver/login'),false);
+ assert.equal(ui.api.state.machineSource,'jumpserver');assert.equal(ui.api.summarize().free,0);
+ assert.equal(ui.api.jumpserver.data.refreshing,true);
+});
+
+test('public visitors cannot save SSH settings or resume a platform source through new actions',async()=>{
+ const ui=harness();localJms(ui,jms({enabled:false,can_refresh:true}));ui.api.state.allowed=false;
+ await ui.api.saveJumpserverSettings();await ui.api.resumeJumpserver();assert.equal(ui.calls.length,0);
+ ui.api.state.allowed=true;ui.api.state.jumpserverSettings=false;
+ await ui.api.saveJumpserverSettings();await ui.api.resumeJumpserver();assert.equal(ui.calls.length,0);
+});
+test('monitoring and task account choices stay independent while polling preserves both drafts',async()=>{
+ const data=jms({default_account:'root',task_account:'secure',assets:[{id:'one',accounts:['secure','root']}]});
+ const ui=harness(()=>data);localJms(ui);ui.api.acceptJumpserver(data,{initial:true});
+ const monitor=ui.node('jumpserver-account'),task=ui.node('jumpserver-task-account');
+ assert.deepEqual(monitor.children.filter(option=>option.value).map(option=>option.value).sort(),['root','secure']);
+ assert.deepEqual(task.children.filter(option=>option.value).map(option=>option.value).sort(),['root','secure']);
+ monitor.value='secure';monitor.listeners.change({target:monitor});
+ assert.equal(task.value,'secure');
+ task.value='root';assert.equal(typeof task.listeners.change,'function');task.listeners.change({target:task});
+ assert.equal(monitor.value,'secure');await ui.api.readJumpserver();
+ assert.equal(monitor.value,'secure');assert.equal(task.value,'root');assert.equal(ui.api.jumpserver.dirty,true);
+ assert.equal(ui.calls.some(call=>call.options.method==='POST'),false);
+ assert.match(file('devices.html'),/<select\b[^>]*id="jumpserver-task-account"/);
 });

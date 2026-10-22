@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from concurrent.futures import ThreadPoolExecutor
+from contextlib import ExitStack
 from datetime import datetime, timezone
 import copy
 import hashlib
@@ -14,7 +15,9 @@ import subprocess
 import threading
 import time
 from types import SimpleNamespace
+from tempfile import TemporaryDirectory
 
+from fl_dashboard.agents.codex_sessions import CodexSessionManager
 from fl_dashboard.monitoring.branch_monitor import LABELS
 from fl_dashboard.tasks.automatic_tasks import _ssh_argv
 from fl_dashboard.resources.telemetry import parse_telemetry, probe_script
@@ -286,7 +289,7 @@ class DeviceFleet:
         if source["enabled"]:
             if self.profile_source is None:
                 raise ValueError("JumpServer profile source unavailable")
-            profiles = self.profile_source.profiles(project_id, manager)
+            profiles = self.profile_source.profiles(project_id, manager, purpose="monitor")
             snapshot = manager.snapshot(compact=True)
             sync, sync_status, sync_error = None, None, False
         else:
@@ -334,16 +337,23 @@ class DeviceFleet:
                     configuration_error = configuration_error or "JumpServer 设备尚未生成有效的独立连接配置。"
             if profile.get("ssh_connection") and not configuration_error:
                 try:
-                    path = Path(profile.get("ssh_config_path") or "").resolve()
-                    owner = next((root for root in roots if path.is_relative_to(root)), None)
-                    if owner is None or not path.is_file():
-                        raise ValueError("Invalid managed configuration")
-                    with path.open("rb") as stream:
-                        raw_config = stream.read(MAX_OUTPUT + 1)
-                    if len(raw_config) > MAX_OUTPUT:
-                        raise ValueError("Managed configuration is too large")
-                    source_root = owner
-                    config_hash = hashlib.sha256(raw_config).hexdigest()
+                    if source["enabled"]:
+                        if not roots:
+                            raise ValueError("Device monitor has no owner directory")
+                        validator = object.__new__(CodexSessionManager)
+                        private["ssh_connection"] = validator._ssh_connection(profile["ssh_connection"])
+                        private["ssh_config_path"] = None
+                    else:
+                        path = Path(profile.get("ssh_config_path") or "").resolve()
+                        owner = next((root for root in roots if path.is_relative_to(root)), None)
+                        if owner is None or not path.is_file():
+                            raise ValueError("Invalid managed configuration")
+                        with path.open("rb") as stream:
+                            raw_config = stream.read(MAX_OUTPUT + 1)
+                        if len(raw_config) > MAX_OUTPUT:
+                            raise ValueError("Managed configuration is too large")
+                        source_root = owner
+                        config_hash = hashlib.sha256(raw_config).hexdigest()
                 except (OSError, ValueError, TypeError):
                     configuration_error = "设备的已保存连接配置无效，请重新保存连接。"
                     config_hash = "invalid-managed-configuration"
@@ -358,6 +368,7 @@ class DeviceFleet:
                            "task_count": sum(1 for task in tasks if isinstance(task, dict) and task.get("ssh_alias") == alias and task.get("status") in _ACTIVE),
                            "key": key, "profile": private, "source_root": source_root,
                            "configuration_error": configuration_error, "source_epoch": source["epoch"],
+                           "monitor_connection": source["enabled"],
                            "import_path": Path(import_path).resolve() if import_path else None})
         return sorted(result, key=lambda row: (row["backend"] != "cuda", row["backend_label"].split("/")[0].strip().casefold(), row["label"].casefold()))
 
@@ -421,14 +432,28 @@ class DeviceFleet:
             executable = self._ssh_executable or shutil.which("ssh")
             if not executable:
                 return self._failure("未找到 OpenSSH 客户端。", attempted)
-            argv = _ssh_argv(SimpleNamespace(root=profile["source_root"]), profile["profile"], executable)
-            if not profile["profile"].get("ssh_connection") and profile["import_path"] is not None:
-                if not profile["import_path"].is_file():
-                    return self._failure("SSH 配置已不存在，请重新同步。", attempted)
-                argv[1:1] = ["-F", str(profile["import_path"])]
-            argv[1:1] = ["-T", "-o", "ControlMaster=no", "-o", "ControlPath=none", "-o", "PermitLocalCommand=no"]
-            result = self._runner(argv + ["bash -s"], input=probe_script().encode("utf-8"),
-                                  timeout=PROBE_TIMEOUT, output_limit=MAX_OUTPUT)
+            with ExitStack() as stack:
+                connection_profile = profile["profile"]
+                if profile["monitor_connection"]:
+                    # Never share a mutable task config with telemetry. Each
+                    # probe gets its own validated config and removes it after use.
+                    config_root = (profile["source_root"] / "device-probes").resolve()
+                    if not config_root.is_relative_to(profile["source_root"]):
+                        raise ValueError("Device configuration is outside its owner")
+                    config_root.mkdir(parents=True, exist_ok=True)
+                    temporary = Path(stack.enter_context(TemporaryDirectory(prefix="probe-", dir=config_root)))
+                    config_path = temporary / "ssh.conf"
+                    writer = object.__new__(CodexSessionManager)
+                    writer._write_ssh_config(config_path, profile["alias"], connection_profile["ssh_connection"])
+                    connection_profile = {**connection_profile, "ssh_config_path": str(config_path)}
+                argv = _ssh_argv(SimpleNamespace(root=profile["source_root"]), connection_profile, executable)
+                if not connection_profile.get("ssh_connection") and profile["import_path"] is not None:
+                    if not profile["import_path"].is_file():
+                        return self._failure("SSH 配置已不存在，请重新同步。", attempted)
+                    argv[1:1] = ["-F", str(profile["import_path"])]
+                argv[1:1] = ["-T", "-o", "ControlMaster=no", "-o", "ControlPath=none", "-o", "PermitLocalCommand=no"]
+                result = self._runner(argv + ["bash -s"], input=probe_script().encode("utf-8"),
+                                      timeout=PROBE_TIMEOUT, output_limit=MAX_OUTPUT)
             stdout = result.stdout if isinstance(result.stdout, bytes) else str(result.stdout or "").encode("utf-8")
             stderr = result.stderr if isinstance(result.stderr, bytes) else str(result.stderr or "").encode("utf-8")
             if len(stdout) + len(stderr) > MAX_OUTPUT:

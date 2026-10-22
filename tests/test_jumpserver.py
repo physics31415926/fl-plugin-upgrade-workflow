@@ -114,6 +114,27 @@ class JumpServerTests(unittest.TestCase):
         restored.refresh()
         self.assertTrue(self.wait(restored)["authenticated"])
 
+    def test_monitor_and_task_accounts_are_saved_without_losing_login(self):
+        self.login()
+        generation = self.store.catalog()["generation"]
+        value = self.store.configure({"default_account": "secure", "task_account": "root"})
+        self.assertEqual("secure", value["default_account"])
+        self.assertEqual("root", value["task_account"])
+        self.assertTrue(value["authenticated"])
+        self.assertTrue(value["can_refresh"])
+        self.assertGreater(self.store.catalog()["generation"], generation)
+        restored = self.make()
+        self.assertEqual("secure", restored.snapshot()["default_account"])
+        self.assertEqual("root", restored.snapshot()["task_account"])
+        self.assertTrue(restored.snapshot()["can_refresh"])
+        for field in ("default_account", "task_account"):
+            with self.subTest(field=field), self.assertRaises(JumpServerError):
+                self.store.configure({field: "root#invalid"})
+        record = json.loads(self.store.path.read_text(encoding="utf-8"))
+        record["settings"].pop("task_account")
+        self.store.path.write_text(json.dumps(record), encoding="utf-8")
+        self.assertEqual("", self.make().snapshot()["task_account"])
+
     def test_login_failure_and_mfa_are_fixed_and_redacted(self):
         self.login_status = 401
         self.login_body = {"detail": "sensitive upstream account contents"}

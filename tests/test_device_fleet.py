@@ -333,8 +333,9 @@ class DeviceFleetTests(unittest.TestCase):
         managed = self.owner / "jumpserver.conf"
         managed.write_text("Host jms-fixture\n  HostName example.test\n", encoding="utf-8")
         profiles = [dict(self.profiles[0], id="jms-fixture", ssh_alias="jms-fixture", source="jumpserver",
-                         ssh_connection={"host": "example.test"}, ssh_config_path=str(managed))]
-        bridge = SimpleNamespace(profiles=Mock(side_effect=lambda *args: copy.deepcopy(profiles)))
+                         ssh_connection={"host": "example.test", "user": "fixture#secure#11111111-2222-4333-8444-555555555555",
+                                         "port": 2222, "inherit_ssh_config": False}, ssh_config_path=str(managed))]
+        bridge = SimpleNamespace(profiles=Mock(side_effect=lambda *args, **kwargs: copy.deepcopy(profiles)))
         return catalog, inventory, profiles, bridge
 
     def test_jumpserver_source_uses_only_managed_bridge_profiles(self):
@@ -354,10 +355,61 @@ class DeviceFleetTests(unittest.TestCase):
         self.assertEqual(["jms-fixture", "jms-unusable"], sorted(row["id"] for row in value["hosts"]))
         self.assertEqual(1, value["summary"]["free_cards"])
         self.assertEqual(1, len(self.calls))
-        self.assertEqual(str(self.owner / "jumpserver.conf"), self.calls[0][0][self.calls[0][0].index("-F") + 1])
+        path = Path(self.calls[0][0][self.calls[0][0].index("-F") + 1])
+        self.assertTrue(path.is_relative_to(self.owner / "device-probes"))
+        self.assertFalse(path.exists())
+        bridge.profiles.assert_called_once_with("vllm", self.manager, purpose="monitor")
         unusable = next(row for row in value["hosts"] if row["id"] == "jms-unusable")
         self.assertIn("授权 SSH 账号", unusable["error"])
         self.assertEqual("unknown", unusable["verdict"])
+
+    def test_monitor_uses_secure_without_overwriting_root_task_config(self):
+        from fl_dashboard.agents.codex_sessions import CodexSessionManager
+        from fl_dashboard.resources.jumpserver_profiles import JumpServerProfiles
+        identity = "11111111-2222-4333-8444-555555555555"
+        catalog = {"enabled": True, "authenticated": True, "error": None, "generation": 1,
+                   "base_url": "https://example.test", "username": "fixture", "ssh_port": 2222,
+                   "default_account": "secure", "task_account": "root",
+                   "assets": [{"id": identity, "name": "a100-test", "ssh_supported": True, "accounts": ["secure", "root"]}]}
+        inventory = SimpleNamespace(catalog=lambda: copy.deepcopy(catalog))
+        manager = object.__new__(CodexSessionManager)
+        manager.root, manager._lock, manager._profiles, manager.backends = self.owner, threading.RLock(), {}, {"cuda"}
+        manager.snapshot = lambda **kwargs: {"machine_profiles": copy.deepcopy(list(manager._profiles.values())), "backends": ["cuda"], "sessions": []}
+        bridge = JumpServerProfiles(inventory)
+        task = bridge.profiles("vllm", manager)[0]
+        task_path = Path(task["ssh_config_path"])
+        task_text = task_path.read_text(encoding="utf-8")
+        self.assertIn("#root#", task_text)
+        observed = []
+        def runner(argv, **kwargs):
+            path = Path(argv[argv.index("-F") + 1])
+            observed.append(path)
+            text = path.read_text(encoding="utf-8")
+            self.assertIn("#secure#", text)
+            self.assertNotIn("#root#", text)
+            self.assertNotIn("Include", text)
+            self.assertNotEqual(task_path, path)
+            self.assertEqual(task_text, task_path.read_text(encoding="utf-8"))
+            return self.runner(argv, **kwargs)
+        projects = [SimpleNamespace(id="vllm", sessions=manager, monitor=SimpleNamespace(config={}))]
+        fleet = self.make(runner, projects=projects, inventory=inventory, profile_source=bridge)
+        with patch.object(manager, "save_profile", wraps=manager.save_profile) as save:
+            fleet.refresh("vllm")
+            self.assertEqual(1, self.wait(fleet)["summary"]["free_cards"])
+            save.assert_not_called()
+        self.assertEqual(1, len(observed))
+        self.assertFalse(observed[0].exists())
+        self.assertEqual(task_text, task_path.read_text(encoding="utf-8"))
+        self.assertIn("#root#", bridge.profiles("vllm", manager)[0]["ssh_connection"]["user"])
+        self.now += 6
+        def failing_runner(argv, **kwargs):
+            observed.append(Path(argv[argv.index("-F") + 1]))
+            raise subprocess.TimeoutExpired(argv, 1)
+        fleet._runner = failing_runner
+        fleet.refresh("vllm")
+        self.assertIn("超时", self.wait(fleet)["hosts"][0]["error"])
+        self.assertFalse(observed[-1].exists())
+        self.assertEqual(task_text, task_path.read_text(encoding="utf-8"))
 
     def test_jumpserver_generation_and_authentication_errors_immediately_invalidate_capacity(self):
         catalog, inventory, profiles, bridge = self.jumpserver_fixture()
@@ -460,7 +512,7 @@ class DeviceFleetTests(unittest.TestCase):
         self.addCleanup(release.set)
         captured = copy.deepcopy(profiles)
         calls = []
-        def prepare(*args):
+        def prepare(*args, **kwargs):
             calls.append(1)
             if len(calls) == 1:
                 entered.set()

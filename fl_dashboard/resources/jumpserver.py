@@ -25,7 +25,7 @@ MAX_RESPONSE = 2 * 1024 * 1024
 MAX_PAGES = 32
 REQUEST_TIMEOUT = 15
 DEFAULTS = {"enabled": False, "base_url": "", "username": "", "ssh_host": "", "ssh_port": 2222,
-            "identity_file": "", "default_account": ""}
+            "identity_file": "", "default_account": "", "task_account": ""}
 _UUID = re.compile(r"[0-9a-fA-F]{8}-(?:[0-9a-fA-F]{4}-){3}[0-9a-fA-F]{12}\Z")
 _USER = re.compile(r"[A-Za-z0-9_][A-Za-z0-9_.@+-]{0,99}\Z")
 LOGIN_ERROR = "JumpServer 登录失败，请检查账号、密码和服务器登录策略。"
@@ -143,10 +143,11 @@ def _settings(payload, previous):
             raise JumpServerError("SSH 密钥路径必须是本机现有文件的绝对路径。")
         identity = str(path.resolve())
     value["identity_file"] = identity
-    account = _text(value["default_account"])
-    if account and not _USER.fullmatch(account):
-        raise JumpServerError("默认资产账号格式无效。")
-    value["default_account"] = account
+    for key in ("default_account", "task_account"):
+        account = _text(value[key])
+        if account and not _USER.fullmatch(account):
+            raise JumpServerError("资产账号格式无效。")
+        value[key] = account
     if value["enabled"] and (not value["base_url"] or not value["username"]):
         raise JumpServerError("请先填写 JumpServer 地址和用户名。")
     return value

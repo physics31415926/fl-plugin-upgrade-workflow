@@ -57,7 +57,9 @@ class JumpServerProfiles:
         self._guard = threading.Lock()
         self._projects = {}
 
-    def profiles(self, project_id, manager):
+    def profiles(self, project_id, manager, *, purpose="task"):
+        if purpose not in {"task", "monitor"}:
+            raise ValueError("Unknown JumpServer connection purpose")
         # Workbench and resource polling may import the same newly discovered
         # assets simultaneously. Serialize snapshot+comparison+saves per project.
         with self._guard:
@@ -114,7 +116,7 @@ class JumpServerProfiles:
                        "role": previous.get("role", "compute"), "hardware": previous.get("hardware", ""),
                        "remote_workspace": previous.get("remote_workspace", ""),
                        "model_paths": previous.get("model_paths", {}), "notes": previous.get("notes", "")}
-                connection, connection_error = self._connection(catalog, asset, asset_id, default_host)
+                connection, connection_error = self._connection(catalog, asset, asset_id, default_host, purpose=purpose)
                 failure = error or connection_error
                 row["ssh_connection"] = connection
                 if not failure:
@@ -124,7 +126,11 @@ class JumpServerProfiles:
                         validator = getattr(manager, "_ssh_connection", None)
                         if callable(validator):
                             row["ssh_connection"] = validator(connection)
-                        if all(previous.get(field) == row.get(field) for field in _FIELDS):
+                        if purpose == "monitor":
+                            # Telemetry owns an isolated, short-lived SSH config;
+                            # it must never rewrite the task manager's profile.
+                            row["ssh_config_path"] = None
+                        elif all(previous.get(field) == row.get(field) for field in _FIELDS):
                             row = dict(previous)
                         else:
                             row = manager.save_profile(row)
@@ -146,18 +152,21 @@ class JumpServerProfiles:
             return current
 
     @staticmethod
-    def _connection(catalog, asset, asset_id, default_host):
+    def _connection(catalog, asset, asset_id, default_host, *, purpose="task"):
         accounts = asset.get("accounts")
         accounts = list(dict.fromkeys(a for a in accounts if isinstance(a, str) and _USER.fullmatch(a))) if isinstance(accounts, list) else []
         if not accounts:
             return None, "未找到可用的授权 SSH 账号，请在 JumpServer 检查资产账号权限"
-        preferred = catalog.get("default_account")
-        if len(accounts) == 1:
-            account = accounts[0]
-        elif preferred in accounts:
+        preferred = (catalog.get("task_account") or catalog.get("default_account")) if purpose == "task" else catalog.get("default_account")
+        label = "任务执行账号" if purpose == "task" else "设备采集账号"
+        if preferred:
+            if preferred not in accounts:
+                return None, "该资产未授权所选" + label + "（" + _text(preferred, 100) + "），请检查 JumpServer 账号权限"
             account = preferred
+        elif len(accounts) == 1:
+            account = accounts[0]
         else:
-            return None, "资产有多个授权账号，请在 JumpServer 设置中选择默认账号"
+            return None, "资产有多个授权账号，请在 JumpServer 设置中选择已授权的" + label
         username = catalog.get("username")
         host = catalog.get("ssh_host") or default_host
         port = catalog.get("ssh_port", 2222)

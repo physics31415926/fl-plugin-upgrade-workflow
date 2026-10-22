@@ -6,6 +6,7 @@
 <style>
 :root{font:14px/1.6 system-ui,-apple-system,"Segoe UI",sans-serif;--bg:#f4f7fb;--panel:#fff;--ink:#1c2a40;--muted:#687890;--line:#e0e7ef;--blue:#315bdb;--soft:#f7f9fc}*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--ink)}a{color:var(--blue);text-decoration:none}a:hover{text-decoration:underline}button,input,select{font:inherit}button,a,input,select{touch-action:manipulation}:focus-visible{outline:3px solid #8db1ff;outline-offset:3px}[hidden]{display:none!important}.shell{max-width:1560px;margin:auto;padding:0 28px 32px}.topbar{min-height:76px;display:flex;justify-content:space-between;align-items:center;gap:18px;border-bottom:1px solid var(--line)}.brand{display:flex;align-items:center;gap:11px;font-weight:700;font-size:16px}.mark{display:grid;place-items:center;width:34px;height:34px;border-radius:10px;background:var(--blue);color:#fff}.nav{display:flex;align-items:center;gap:18px;flex-wrap:wrap}.nav a{min-height:42px;display:inline-flex;align-items:center}.hero{display:flex;justify-content:space-between;align-items:flex-end;gap:18px;margin:27px 0 22px}h1{font-size:28px;margin:0 0 5px;letter-spacing:-.03em}.hero p{color:var(--muted);margin:0}.eyebrow{color:var(--muted);text-transform:uppercase;font-size:10px;letter-spacing:.12em;font-weight:700}.actions{display:flex;gap:10px;align-items:center;flex-wrap:wrap}.button{min-height:40px;padding:8px 13px;border:1px solid #becce0;border-radius:8px;background:var(--panel);color:#2e496c;font-weight:650;cursor:pointer;white-space:nowrap}.button:hover:not(:disabled){background:#edf3ff}.button:disabled{opacity:.5;cursor:not-allowed}.primary{background:var(--blue);border-color:var(--blue);color:#fff}.primary:hover:not(:disabled){background:#244bc3}.auto{display:flex;align-items:center;gap:6px;white-space:nowrap;font-size:12px;color:var(--muted)}.stats{display:grid;grid-template-columns:repeat(4,1fr);gap:14px;margin-bottom:20px}.stat{border:1px solid var(--line);border-radius:11px;background:var(--panel);padding:18px 20px}.stat span{display:block;font-size:12px;color:var(--muted)}.stat strong{font-size:28px;line-height:1.6;font-weight:700;font-variant-numeric:tabular-nums}.stat small{display:block;font-size:11px;color:var(--muted)}.panel{background:var(--panel);border:1px solid var(--line);border-radius:12px;overflow:hidden}.toolbar{display:flex;flex-wrap:wrap;align-items:center;gap:10px;padding:17px 20px;border-bottom:1px solid var(--line)}input[type=search],select{border:1px solid #c6d2e1;border-radius:7px;padding:9px 11px;min-height:40px;color:var(--ink);background:var(--panel)}input[type=search]{width:240px;max-width:100%}select{max-width:250px}.toolbar .note{margin-left:auto}.note,.muted{font-size:12px;color:var(--muted)}.notice{padding:11px 14px;margin-bottom:16px;border-radius:9px;border:1px solid #ebc1ca;background:#fff2f5;color:#97374b;overflow-wrap:anywhere}.table-wrap{overflow:auto}table{border-collapse:collapse;width:100%;text-align:left}th,td{padding:14px 14px;border-bottom:1px solid var(--line);vertical-align:middle}th{font-size:11px;color:var(--muted);font-weight:650;white-space:nowrap;background:var(--soft)}td{font-size:12px}#fleet-table{min-width:1080px}#fleet-table tbody tr:last-child td{border-bottom:0}#fleet-table tr.selected{background:#f0f5ff}.host-button{padding:0;background:none;border:0;color:var(--blue);font:inherit;font-weight:700;cursor:pointer;text-align:left;max-width:220px;overflow-wrap:anywhere}.sub{display:block;font-size:11px;color:var(--muted);margin-top:3px}.status-reason{max-width:24ch;display:-webkit-box;-webkit-box-orient:vertical;-webkit-line-clamp:2;overflow:hidden;overflow-wrap:anywhere;white-space:normal;line-height:1.45}.mono{font-family:ui-monospace,SFMono-Regular,Consolas,monospace}.pill{display:inline-block;font-size:11px;line-height:1.5;padding:4px 8px;border-radius:6px;background:#edf0f6;color:#65728a;white-space:nowrap}.pill.free{background:#e3f6ee;color:#117252}.pill.partial{background:#e8efff;color:#385cc0}.pill.busy,.pill.residual{background:#fff0d8;color:#956113}.pill.down{background:#fdebed;color:#a43b4b}.pill.stale{background:#f0eafa;color:#7b55a5}.cards{display:flex;gap:3px;flex-wrap:wrap;max-width:220px}.card-chip{font:600 11px/1.5 ui-monospace,Consolas,monospace;display:inline-flex;justify-content:center;align-items:center;min-width:19px;height:22px;border-radius:4px;background:#edf0f6;color:#69748b}.card-chip.free{color:#117252;background:#e3f6ee}.card-chip.busy{color:#956113;background:#fff0d8}.card-chip.residual{color:#934ba1;background:#f5e9f7}.card-chip.stale{color:#7b55a5;background:#f0eafa}.small-action{font-size:11px;white-space:nowrap}.empty{padding:42px 20px;text-align:center;color:var(--muted)}.legend{display:flex;gap:15px;flex-wrap:wrap;padding:13px 20px;border-top:1px solid var(--line);color:var(--muted);font-size:11px}.legend span{display:flex;align-items:center;gap:5px}.detail{margin-top:20px}.detail-head{padding:18px 20px;display:flex;align-items:center;justify-content:space-between;gap:12px;border-bottom:1px solid var(--line)}h2{font-size:17px;margin:0}.detail-head p{margin:3px 0 0}.detail th{white-space:nowrap}.detail td{font-variant-numeric:tabular-nums}.detail-table{min-width:650px}.detail-note{margin:0;padding:12px 20px;color:var(--muted);font-size:12px;white-space:pre-wrap}.footnote{font-size:11px;color:var(--muted);margin:17px 0 0}.sr-only{position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip:rect(0,0,0,0);white-space:nowrap;border:0}
 .source-panel{margin:0 0 20px}.source-head{display:flex;justify-content:space-between;align-items:center;gap:16px;padding:16px 20px}.source-head p{margin:3px 0 0;color:var(--muted);font-size:12px}.source-form{padding:0 20px 18px}.source-form>summary{cursor:pointer;color:var(--blue);font-size:12px;font-weight:650;padding-bottom:12px}.connection-grid{display:grid;grid-template-columns:minmax(220px,2fr) minmax(140px,1fr) minmax(140px,1fr) auto;gap:12px;align-items:end}.connection-grid label{display:flex;flex-direction:column;gap:5px;font-size:12px;font-weight:600}.connection-grid input{width:100%;min-height:40px;padding:9px 11px;border:1px solid #c6d2e1;border-radius:7px;color:var(--ink);background:var(--panel)}.ssh-options{margin-top:14px}.ssh-options summary{font-size:12px;color:var(--muted);cursor:pointer}.ssh-options .connection-grid{margin-top:12px;grid-template-columns:1fr 110px 2fr 1fr}.source-note{color:var(--muted);font-size:12px;margin:12px 0 0}.source-feedback{margin:0;padding:0 20px 15px;white-space:pre-wrap;font-size:12px;color:var(--muted)}.source-feedback.error{color:#a43b4b}.source-actions{display:flex;gap:9px;align-items:center;flex-wrap:wrap}.text-button{padding:5px 0;border:0;background:none;color:var(--blue);font:inherit;font-size:12px;cursor:pointer}.text-button:disabled{opacity:.5;cursor:not-allowed}@media(max-width:1000px){.connection-grid{grid-template-columns:1fr 1fr}.ssh-options .connection-grid{grid-template-columns:1fr 1fr}.source-head{align-items:flex-start;flex-wrap:wrap}}@media(max-width:550px){.connection-grid,.ssh-options .connection-grid{grid-template-columns:1fr}.source-form{padding:0 14px 16px}.source-head{padding:14px}}
+.connection-status{padding:14px 16px;border:1px solid var(--line);border-radius:9px;background:var(--soft)}.connection-user{margin-left:10px;font-size:13px;font-weight:650}.connection-status .source-note{margin-top:5px;overflow-wrap:anywhere}.account-settings{margin-top:18px;padding:16px;border:1px solid var(--line);border-radius:9px}.account-settings h3{margin:0;font-size:15px}.account-settings>.source-note{margin-top:6px}.account-grid{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr) auto;gap:12px;align-items:end;margin-top:14px}.account-grid label{display:flex;flex-direction:column;gap:5px;font-size:12px;font-weight:600}.account-grid select{width:100%;max-width:none}.ssh-options .connection-grid{grid-template-columns:1fr 110px 2fr}.ssh-options>.button{margin-top:12px}@media(max-width:850px){.account-grid{grid-template-columns:1fr 1fr}.account-grid>.button{justify-self:start}.ssh-options .connection-grid{grid-template-columns:1fr 1fr}}@media(max-width:550px){.account-grid,.ssh-options .connection-grid{grid-template-columns:1fr}.account-settings{padding:12px}.connection-status{padding:12px}}
 @media(max-width:800px){.shell{padding:0 14px 24px}.topbar{padding:14px 0;align-items:flex-start;flex-wrap:wrap}.nav{gap:14px}.hero{align-items:flex-start;flex-direction:column}.stats{grid-template-columns:repeat(2,1fr);gap:10px}.stat{padding:14px}.stat strong{font-size:24px}.toolbar{padding:14px}.toolbar .note{width:100%;margin-left:0}.button,input[type=search],select{min-height:44px}.detail-head{align-items:flex-start}.cards{max-width:180px}}
 @media(prefers-color-scheme:dark){:root{color-scheme:dark;--bg:#111a29;--panel:#1c283a;--ink:#e8eef7;--muted:#a0aec3;--line:#354257;--blue:#99b6ff;--soft:#202e42}.mark,.primary{background:#315bdb;color:#fff}.button{color:#c5d5f2;border-color:#536780}.primary:hover:not(:disabled){background:#234dc6}.button:hover:not(:disabled){background:#2b3e60}input[type=search],select{border-color:#536780}#fleet-table tr.selected{background:#263a5d}.notice{color:#ffbaca;border-color:#80505a;background:#432933}.pill,.card-chip{background:#334055;color:#bfccdf}.pill.free,.card-chip.free{background:#174b3c;color:#b1e9d3}.pill.partial{background:#29447c;color:#baceff}.pill.busy,.pill.residual,.card-chip.busy{background:#4a3c25;color:#f7d59b}.pill.down{background:#562d39;color:#ffc1cd}.pill.stale,.card-chip.stale,.card-chip.residual{background:#41304f;color:#d9b7f4}}
 </style>
@@ -17,12 +18,14 @@
 <section class="hero"><div><div class="eyebrow">Fleet availability · jms-top</div><h1>先看资源，再开始任务</h1><p>查看各设备的可用卡、显存和负载，从 JumpServer 同步授权机器，或使用工作台已有的 SSH 连接。</p></div><div id="collection-actions" class="actions"><label class="auto"><input id="auto-refresh" type="checkbox" checked>自动采集</label><button id="refresh-devices" class="button primary" type="button" disabled>立即刷新资源</button></div></section>
 <div id="error" class="notice" role="status" aria-live="polite" hidden></div>
 <section id="machine-source-panel" class="panel source-panel" aria-labelledby="machine-source-title" hidden>
- <div class="source-head"><div><h2 id="machine-source-title">机器来源 <span id="machine-source" class="pill">读取中</span></h2><p id="jumpserver-summary">正在读取连接设置…</p></div><div class="source-actions"><button id="refresh-machines" class="button" type="button" disabled>刷新机器列表</button><button id="use-ssh-config" class="text-button" type="button" hidden>切回 SSH 配置</button><button id="jumpserver-logout" class="text-button" type="button" hidden>退出 JumpServer</button></div></div>
+ <div class="source-head"><div><h2 id="machine-source-title">机器来源 <span id="machine-source" class="pill">读取中</span></h2><p id="jumpserver-summary">正在读取连接设置…</p></div><div class="source-actions"><button id="refresh-machines" class="button" type="button" disabled>刷新机器列表</button><button id="use-jumpserver" class="button" type="button" hidden>启用并同步机器</button><button id="use-ssh-config" class="text-button" type="button" hidden>切回 SSH 配置</button><button id="jumpserver-logout" class="text-button" type="button" hidden>退出 JumpServer</button></div></div>
  <details id="jumpserver-settings" class="source-form"><summary>JumpServer 连接设置</summary>
   <form id="jumpserver-form" autocomplete="off">
-   <div class="connection-grid"><label for="jumpserver-url">平台地址<input id="jumpserver-url" type="url" required placeholder="https://jumpserver.example.com" autocomplete="off" spellcheck="false"></label><label for="jumpserver-username">用户名<input id="jumpserver-username" required autocomplete="off" spellcheck="false"></label><label for="jumpserver-password">密码<input id="jumpserver-password" type="password" autocomplete="off" placeholder="仅用于本次登录"></label><button id="jumpserver-login" type="submit" class="button primary">登录并同步机器</button></div>
-   <details class="ssh-options"><summary>SSH 连接选项（可选）</summary><div class="connection-grid"><label for="jumpserver-ssh-host">SSH 入口<input id="jumpserver-ssh-host" placeholder="自动使用平台主机" autocomplete="off" spellcheck="false"></label><label for="jumpserver-ssh-port">SSH 端口<input id="jumpserver-ssh-port" type="number" min="1" max="65535" value="2222"></label><label for="jumpserver-identity">本机私钥路径<input id="jumpserver-identity" placeholder="留空使用已授权的 ssh-agent / 默认密钥" autocomplete="off" spellcheck="false"></label><label for="jumpserver-account">登录资产账号<input id="jumpserver-account" placeholder="单账号自动选择" autocomplete="off" spellcheck="false"></label></div><p id="jumpserver-account-hint" class="source-note" hidden></p><button id="jumpserver-save" class="text-button" type="button">保存 SSH 连接选项</button></details>
-   <p class="source-note">机器列表使用本机缓存，仅在登录或手动刷新时同步。SSH 资源采集还需平台认可的本机密钥或 ssh-agent。密码提交后立即清空，不保存密码。两个仓库共用此连接设置。</p>
+   <div id="jumpserver-connection-status" class="connection-status" hidden><div><span id="jumpserver-credential-state" class="pill free"></span><span id="jumpserver-connected-user" class="connection-user"></span></div><p id="jumpserver-connected-url" class="source-note"></p><p class="source-note">已保存连接凭据，刷新机器无需重新登录。更换平台或平台账号时，请先退出 JumpServer。</p></div>
+   <div id="jumpserver-login-fields" hidden><div class="connection-grid"><label for="jumpserver-url">平台地址<input id="jumpserver-url" type="url" required placeholder="https://jumpserver.example.com" autocomplete="off" spellcheck="false"></label><label for="jumpserver-username">平台用户名<input id="jumpserver-username" required autocomplete="off" spellcheck="false"></label><label for="jumpserver-password">密码<input id="jumpserver-password" type="password" required autocomplete="off" placeholder="仅用于本次登录"></label><button id="jumpserver-login" type="submit" class="button primary">登录并同步机器</button></div><p class="source-note">密码仅用于本次登录，提交后立即清空，不保存密码。</p></div>
+   <section id="jumpserver-account-settings" class="account-settings" aria-labelledby="jumpserver-account-title" hidden><h3 id="jumpserver-account-title">设备登录账号</h3><p class="source-note">选择远端机器的系统账号。资源采集和任务执行分别设置。未指定账号时，单账号设备自动选择；指定后仅连接授权了该账号的设备。</p><div class="account-grid"><label for="jumpserver-account">资源采集账号<select id="jumpserver-account" aria-describedby="jumpserver-account-hint"></select></label><label for="jumpserver-task-account">任务执行账号<select id="jumpserver-task-account" aria-describedby="jumpserver-account-hint"></select></label><button id="jumpserver-account-save" class="button primary" type="button">保存并刷新资源</button></div><p id="jumpserver-account-hint" class="source-note" aria-live="polite"></p></section>
+   <details id="jumpserver-ssh-options" class="ssh-options"><summary>SSH 连接选项</summary><div class="connection-grid"><label for="jumpserver-ssh-host">SSH 入口<input id="jumpserver-ssh-host" placeholder="自动使用平台主机" autocomplete="off" spellcheck="false"></label><label for="jumpserver-ssh-port">SSH 端口<input id="jumpserver-ssh-port" type="number" min="1" max="65535" value="2222"></label><label for="jumpserver-identity">本机私钥路径<input id="jumpserver-identity" placeholder="留空使用已授权的 ssh-agent / 默认密钥" autocomplete="off" spellcheck="false"></label></div><p class="source-note">资源采集还需平台认可的本机密钥或 ssh-agent。两个仓库共用此连接设置。</p><button id="jumpserver-save" class="button" type="button">保存连接选项</button></details>
+   <p class="source-note">机器列表使用本地缓存，在登录或手动刷新时同步。</p>
   </form>
  </details>
  <p id="jumpserver-feedback" class="source-feedback" role="status" aria-live="polite"></p>
@@ -111,33 +114,57 @@ async function selectProject(project){
  finally{if(generation===state.generation){state.switching=false;render();}}
  if(generation===state.generation&&state.allowed&&!document.hidden){if(jumpserver.resourceQueued)await refreshSyncedResources();else if(state.auto&&!jumpserver.data?.refreshing&&!jumpserver.mutating&&!jumpserver.error&&(!jumpserver.data?.enabled||jumpserver.data.authenticated)&&due())await refreshResources();}
 }
-function jumpserverFields(){return {base_url:$('jumpserver-url').value.trim(),username:$('jumpserver-username').value.trim(),ssh_host:$('jumpserver-ssh-host').value.trim(),ssh_port:Number($('jumpserver-ssh-port').value||2222),identity_file:$('jumpserver-identity').value.trim(),default_account:$('jumpserver-account').value.trim()};}
+function hasJumpserverCredential(data=jumpserver.data){return data?.can_refresh===true||data?.authenticated===true;}
+function jumpserverConnectionFields(){return {ssh_host:$('jumpserver-ssh-host').value.trim(),ssh_port:Number($('jumpserver-ssh-port').value||2222),identity_file:$('jumpserver-identity').value.trim(),default_account:$('jumpserver-account').value.trim(),task_account:$('jumpserver-task-account').value.trim()};}
+function jumpserverFields(){return {base_url:$('jumpserver-url').value.trim(),username:$('jumpserver-username').value.trim(),...jumpserverConnectionFields()};}
+function jumpserverAssets(data){return (Array.isArray(data?.assets)?data.assets:[]).filter(asset=>asset&&asset.ssh_supported!==false);}
+function assetAccounts(asset){return [...new Set((Array.isArray(asset.accounts)?asset.accounts:[]).filter(value=>typeof value==='string'&&/^[A-Za-z0-9_][A-Za-z0-9_.@+-]{0,99}$/.test(value)))];}
+function accountChoices(data){const counts=new Map();for(const asset of jumpserverAssets(data))for(const account of assetAccounts(asset))counts.set(account,(counts.get(account)||0)+1);return [...counts].sort((a,b)=>a[0].localeCompare(b[0],'en'));}
+function fillAccountChoices(data,id,value){
+ const select=$(id),choices=accountChoices(data),signature=JSON.stringify(choices),selected=choices.some(([name])=>name===value)?value:'';
+ if(select.accountSignature!==signature){const placeholder=el('option','',id==='jumpserver-task-account'?'跟随资源采集账号':'请选择账号 · 单账号设备自动选择');placeholder.value='';const options=[placeholder];for(const [name,count] of choices){const option=el('option','',name+'（'+number(count)+' 台授权设备）');option.value=name;options.push(option);}select.replaceChildren(...options);select.accountSignature=signature;}
+ select.value=selected;
+}
+function needsAccountSelection(data){return jumpserverAssets(data).some(asset=>{const accounts=assetAccounts(asset);return accounts.length>1&&(!accounts.includes(data.default_account)||!accounts.includes(data.task_account||data.default_account));});}
 function fillJumpserver(data,force=false){
  if(jumpserver.filled&&(!force||jumpserver.dirty))return;
- for(const [id,key] of [['jumpserver-url','base_url'],['jumpserver-username','username'],['jumpserver-ssh-host','ssh_host'],['jumpserver-identity','identity_file'],['jumpserver-account','default_account']])$(id).value=data[key]||'';
- $('jumpserver-ssh-port').value=data.ssh_port||2222;jumpserver.filled=true;
+ for(const [id,key] of [['jumpserver-url','base_url'],['jumpserver-username','username'],['jumpserver-ssh-host','ssh_host'],['jumpserver-identity','identity_file']])$(id).value=data[key]||'';
+ $('jumpserver-ssh-port').value=data.ssh_port||2222;fillAccountChoices(data,'jumpserver-account',data.default_account||'');fillAccountChoices(data,'jumpserver-task-account',data.task_account||'');jumpserver.filled=true;
 }
 function renderJumpserver(){
  $('machine-source-panel').hidden=!state.allowed||!state.jumpserverSettings;if(!state.allowed||!state.jumpserverSettings)return;
- const data=jumpserver.data,busy=!!jumpserver.mutating||data?.refreshing===true,enabled=data?.enabled===true,canRefresh=data?.can_refresh===true||data?.authenticated===true;
+ const data=jumpserver.data,busy=!!jumpserver.mutating||data?.refreshing===true,enabled=data?.enabled===true,canRefresh=hasJumpserverCredential(data),disabled=busy||state.switching;
  $('machine-source').textContent=state.machineSource==='jumpserver'?'JumpServer':'本机 SSH 配置';
  $('jumpserver-summary').textContent=!data?'正在读取连接设置…':enabled?(data.authenticated?'已登录 '+(data.username||'平台账号'):canRefresh?'登录凭据已保存，机器待同步':'平台登录已退出或失效')+' · '+number(data.asset_count??0)+' 台授权机器'+(data.updated_at?' · 最近同步 '+new Date(data.updated_at).toLocaleString('zh-CN',{hour12:false}):' · 尚未同步'):'使用本机已保存的 SSH 设备；也可连接 JumpServer 获取授权机器。';
- $('refresh-machines').hidden=!enabled;$('refresh-machines').disabled=busy||!canRefresh||state.switching;
+ $('jumpserver-login-fields').hidden=!data||canRefresh;$('jumpserver-connection-status').hidden=!canRefresh;
+ $('jumpserver-credential-state').textContent=data?.authenticated?'凭据有效':'凭据已保存 · 待同步';
+ $('jumpserver-connected-user').textContent=data?.username||'';$('jumpserver-connected-url').textContent=data?.base_url||'';
+ for(const id of ['jumpserver-url','jumpserver-username','jumpserver-password']){$(id).disabled=disabled||canRefresh;$(id).required=!canRefresh;}
+ if(canRefresh)$('jumpserver-password').value='';
+ $('refresh-machines').hidden=!enabled;$('refresh-machines').disabled=disabled||!canRefresh;
  $('refresh-machines').textContent=data?.refreshing?'正在同步机器…':'刷新机器列表';
- $('use-ssh-config').hidden=!enabled;$('use-ssh-config').disabled=busy||state.switching;
- $('jumpserver-logout').hidden=!canRefresh;$('jumpserver-logout').disabled=busy||state.switching;
- $('jumpserver-login').disabled=busy||state.switching;$('jumpserver-login').textContent=jumpserver.mutating?.kind==='login'?'正在登录…':'登录并同步机器';
- $('jumpserver-save').disabled=busy||state.switching||!data;
+ $('use-jumpserver').hidden=!canRefresh||enabled;$('use-jumpserver').disabled=disabled;
+ $('use-ssh-config').hidden=!enabled;$('use-ssh-config').disabled=disabled;
+ $('jumpserver-logout').hidden=!canRefresh;$('jumpserver-logout').disabled=disabled;
+ $('jumpserver-login').disabled=disabled||canRefresh;$('jumpserver-login').textContent=jumpserver.mutating?.kind==='login'?'正在登录…':'登录并同步机器';
+ $('jumpserver-save').disabled=disabled||!data||!canRefresh;
+ $('jumpserver-account-settings').hidden=!canRefresh;
+ fillAccountChoices(data,'jumpserver-account',$('jumpserver-account').value);fillAccountChoices(data,'jumpserver-task-account',$('jumpserver-task-account').value);
+ const assets=jumpserverAssets(data),account=$('jumpserver-account').value,taskAccount=$('jumpserver-task-account').value||account;
+ const multiple=assets.filter(asset=>assetAccounts(asset).length>1),missing=assets.filter(asset=>!assetAccounts(asset).length).length;
+ const monitorPending=multiple.filter(asset=>!account).length,taskPending=multiple.filter(asset=>!taskAccount).length;
+ const monitorDenied=account?assets.filter(asset=>assetAccounts(asset).length&&!assetAccounts(asset).includes(account)).length:0,taskDenied=taskAccount?assets.filter(asset=>assetAccounts(asset).length&&!assetAccounts(asset).includes(taskAccount)).length:0;
+ const dirty=account!==(data?.default_account||'')||$('jumpserver-task-account').value!==(data?.task_account||'');
+ $('jumpserver-account-hint').textContent=[monitorPending?number(monitorPending)+' 台机器有多个授权账号，请选择资源采集账号。':'资源采集账号已就绪。',taskPending?number(taskPending)+' 台机器需选择任务执行账号。':'任务执行账号已就绪。',monitorDenied?number(monitorDenied)+' 台机器未授权所选采集账号。':'',taskDenied?number(taskDenied)+' 台机器未授权所选任务账号。':'',missing?number(missing)+' 台机器尚未获得可自动登录账号。':'',dirty?'选择尚未保存，保存后生效。':''].filter(Boolean).join(' ');
+ $('jumpserver-account-save').disabled=disabled||!canRefresh||!data?.authenticated||!dirty;
+ for(const id of ['jumpserver-account','jumpserver-task-account'])$(id).disabled=disabled||!data?.authenticated;
  const message=jumpserver.error||data?.error||jumpserver.notice||(data?.refreshing?'正在从平台读取授权机器，历史记录暂保留。':'');
  $('jumpserver-feedback').textContent=message;$('jumpserver-feedback').className='source-feedback'+(jumpserver.error||data?.error?' error':'');
- const assets=Array.isArray(data?.assets)?data.assets:[],account=$('jumpserver-account').value.trim();
- const multiple=assets.filter(asset=>Array.isArray(asset.accounts)&&asset.accounts.length>1&&!asset.accounts.includes(account)).length,missing=assets.filter(asset=>Array.isArray(asset.accounts)&&asset.accounts.length===0).length;
- $('jumpserver-account-hint').hidden=!multiple&&!missing;$('jumpserver-account-hint').textContent=[multiple?multiple+' 台机器有多个授权账号，请填写平台已授权的登录资产账号。':'',missing?missing+' 台机器尚未获得可登录账号，请联系平台管理员授权。':''].filter(Boolean).join(' ');
 }
 function acceptJumpserver(data,{baseline,initial=false,sourceChanged=false}={}){
  if(!data||typeof data!=='object'||typeof data.enabled!=='boolean')throw new Error('未收到有效的 JumpServer 状态，请重试。');
  const previous=jumpserver.data;jumpserver.data=data;state.machineSource=data.enabled?'jumpserver':'ssh_config';fillJumpserver(data);
- if(initial)$('jumpserver-settings').open=!data.authenticated&&data.can_refresh!==true;
+ if(initial)$('jumpserver-settings').open=!hasJumpserverCredential(data)||needsAccountSelection(data);
  if(data.refreshing){if(jumpserver.awaitedUpdate===null)jumpserver.awaitedUpdate=baseline??previous?.updated_at??data.updated_at??'';jumpserver.uncertain=true;}
  else if(data.error){jumpserver.error=String(data.error);jumpserver.uncertain=true;jumpserver.awaitedUpdate=null;}
  else if(sourceChanged||(jumpserver.awaitedUpdate!==null&&data.updated_at&&data.updated_at!==jumpserver.awaitedUpdate)){
@@ -157,7 +184,7 @@ async function readJumpserver(initial=false){
  finally{if(jumpserver.loading===operation)jumpserver.loading=null;}
 }
 async function refreshSyncedResources(){
- if(!jumpserver.resourceQueued||document.hidden||!state.allowed||state.switching||state.requesting||state.data?.refreshing||jumpserver.mutating||jumpserver.data?.refreshing)return;
+ if(!jumpserver.resourceQueued||(jumpserver.data?.enabled&&!jumpserver.data?.authenticated)||document.hidden||!state.allowed||state.switching||state.requesting||state.data?.refreshing||jumpserver.mutating||jumpserver.data?.refreshing)return;
  jumpserver.resourceQueued=false;jumpserver.waitingResources=true;jumpserver.resourceStarted=false;await refreshResources();
 }
 async function jumpserverAction(kind,body={}){
@@ -170,7 +197,7 @@ async function jumpserverAction(kind,body={}){
   const data=await promise;if(operation.generation!==state.generation)return;
   if(kind==='settings')jumpserver.dirty=false;
   acceptJumpserver(data,{baseline,sourceChanged:kind==='settings'});
-  if(kind==='login'&&data.authenticated){$('jumpserver-settings').open=false;jumpserver.dirty=false;}
+  if(kind==='login'&&data.authenticated){$('jumpserver-settings').open=needsAccountSelection(data);jumpserver.dirty=false;}
   if(kind==='logout'){jumpserver.awaitedUpdate=null;jumpserver.resourceQueued=false;jumpserver.uncertain=data.enabled===true;jumpserver.notice=data.enabled?'已退出平台登录，保留历史机器记录；请重新登录后同步。':'已退出平台登录，设备继续使用本机 SSH 配置。';$('jumpserver-settings').open=true;}
  }catch(error){if(operation.generation===state.generation)jumpserverFailure(error);}
  finally{
@@ -184,22 +211,38 @@ async function jumpserverAction(kind,body={}){
  }
 }
 async function loginJumpserver(event){
- event?.preventDefault();if(!state.allowed||!state.jumpserverSettings||jumpserver.mutating||jumpserver.data?.refreshing||state.switching)return;
+ event?.preventDefault();if(!state.allowed||!state.jumpserverSettings||hasJumpserverCredential()||jumpserver.mutating||jumpserver.data?.refreshing||state.switching)return;
  const body=jumpserverFields();body.password=$('jumpserver-password').value;$('jumpserver-password').value='';
  if(!body.base_url||!body.username||!body.password){delete body.password;jumpserver.error='请填写平台地址、用户名和密码。';renderJumpserver();return;}
  await jumpserverAction('login',body);
+}
+
+async function saveJumpserverSettings(event){
+ event?.preventDefault();if(!state.allowed||!state.jumpserverSettings||!hasJumpserverCredential()||jumpserver.mutating||jumpserver.data?.refreshing||state.switching)return;
+ const body=jumpserverConnectionFields(),authorized=new Set(accountChoices(jumpserver.data).map(([name])=>name));
+ if([body.default_account,body.task_account].some(account=>account&&!authorized.has(account))){jumpserver.error='请选择平台当前授权的设备账号。';renderJumpserver();return;}
+ await jumpserverAction('settings',body);
+ if(!jumpserver.error&&jumpserver.data?.enabled&&!jumpserver.data.authenticated&&hasJumpserverCredential())await jumpserverAction('refresh');
+}
+async function resumeJumpserver(){
+ if(!state.allowed||!state.jumpserverSettings||!hasJumpserverCredential()||jumpserver.data?.enabled||jumpserver.mutating||jumpserver.data?.refreshing||state.switching)return;
+ await jumpserverAction('settings',{enabled:true});
+ if(!jumpserver.error&&jumpserver.data?.enabled&&hasJumpserverCredential())await jumpserverAction('refresh');
 }
 
 async function initialize(){
  for(const id of Object.keys(labels).sort((a,b)=>a==='cuda'?-1:b==='cuda'?1:labels[a].toLowerCase().localeCompare(labels[b].toLowerCase(),'en'))){const option=el('option','',labels[id]);option.value=id;$('backend-filter').append(option);}
  try{const data=await request('/api/projects',undefined,'');const projects=Array.isArray(data.projects)?data.projects:[];if(!projects.length)throw new Error('尚未配置监控仓库。');if(!projects.some(item=>item.id===state.project))state.project=projects[0].id;for(const project of projects){const option=el('option','',project.label||project.id);option.value=project.id;$('project-select').append(option);}$('project-select').value=state.project;$('project-picker').hidden=projects.length<2;await selectProject(state.project);}catch(error){failure(error);}
 }
-$('jumpserver-form').addEventListener('submit',loginJumpserver);
+$('jumpserver-form').addEventListener('submit',event=>hasJumpserverCredential()?saveJumpserverSettings(event):loginJumpserver(event));
 $('refresh-machines').addEventListener('click',()=>jumpserverAction('refresh'));
+$('use-jumpserver').addEventListener('click',resumeJumpserver);
 $('use-ssh-config').addEventListener('click',()=>jumpserverAction('settings',{enabled:false}));
 $('jumpserver-logout').addEventListener('click',()=>jumpserverAction('logout'));
-$('jumpserver-save').addEventListener('click',()=>jumpserverAction('settings',jumpserverFields()));
-for(const id of ['jumpserver-url','jumpserver-username','jumpserver-ssh-host','jumpserver-ssh-port','jumpserver-identity','jumpserver-account'])$(id).addEventListener('input',()=>{jumpserver.dirty=true;renderJumpserver();});
+$('jumpserver-save').addEventListener('click',saveJumpserverSettings);
+$('jumpserver-account-save').addEventListener('click',saveJumpserverSettings);
+for(const id of ['jumpserver-url','jumpserver-username','jumpserver-ssh-host','jumpserver-ssh-port','jumpserver-identity'])$(id).addEventListener('input',()=>{jumpserver.dirty=true;renderJumpserver();});
+for(const id of ['jumpserver-account','jumpserver-task-account'])$(id).addEventListener('change',()=>{jumpserver.dirty=true;renderJumpserver();});
 $('refresh-devices').addEventListener('click',refreshResources);$('auto-refresh').addEventListener('change',()=>{state.auto=$('auto-refresh').checked;renderStatus();if(state.auto&&!document.hidden)tick();});$('search').addEventListener('input',()=>{state.search=$('search').value;renderTable();});$('backend-filter').addEventListener('change',()=>{state.backend=$('backend-filter').value;renderTable();});$('status-filter').addEventListener('change',()=>{state.status=$('status-filter').value;renderTable();});$('close-detail').addEventListener('click',()=>{state.selected=null;renderTable();renderDetail();});$('project-select').addEventListener('change',()=>{const project=$('project-select').value;const url=new URL(location.href);url.searchParams.set('project',project);history.replaceState(null,'',url.href);selectProject(project);});document.addEventListener('visibilitychange',()=>{if(!document.hidden)tick();});
 initialize();setInterval(tick,3000);
 })();
