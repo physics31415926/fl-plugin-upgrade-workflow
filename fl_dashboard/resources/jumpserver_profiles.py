@@ -90,7 +90,8 @@ class JumpServerProfiles:
             if not isinstance(assets, list):
                 return []
             for asset in assets:
-                if not isinstance(asset, dict) or asset.get("ssh_supported") is not True:
+                if (not isinstance(asset, dict) or asset.get("ssh_supported") is not True
+                        or asset.get("is_active", True) is not True):
                     continue
                 try:
                     asset_id = str(uuid.UUID(str(asset.get("id"))))
@@ -156,12 +157,12 @@ class JumpServerProfiles:
         accounts = asset.get("accounts")
         accounts = list(dict.fromkeys(a for a in accounts if isinstance(a, str) and _USER.fullmatch(a))) if isinstance(accounts, list) else []
         if not accounts:
-            return None, "未找到可用的授权 SSH 账号，请在 JumpServer 检查资产账号权限"
+            return None, "平台未返回可自动连接的 SSH 账号，请检查该资产的账号配置"
         preferred = (catalog.get("task_account") or catalog.get("default_account")) if purpose == "task" else catalog.get("default_account")
         label = "任务执行账号" if purpose == "task" else "设备采集账号"
         if preferred:
             if preferred not in accounts:
-                return None, "该资产未授权所选" + label + "（" + _text(preferred, 100) + "），请检查 JumpServer 账号权限"
+                return None, "平台未返回所选" + label + "（" + _text(preferred, 100) + "），请检查资产账号配置"
             account = preferred
         elif len(accounts) == 1:
             account = accounts[0]

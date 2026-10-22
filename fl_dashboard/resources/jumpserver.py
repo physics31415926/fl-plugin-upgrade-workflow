@@ -153,6 +153,13 @@ def _settings(payload, previous):
     return value
 
 
+def _asset_is_active(row):
+    active = row.get("is_active", True)
+    if not isinstance(active, bool):
+        raise JumpServerError(INVENTORY_ERROR)
+    return active
+
+
 def _asset(row):
     if not isinstance(row, dict):
         raise JumpServerError(INVENTORY_ERROR)
@@ -178,7 +185,7 @@ def _asset(row):
             raise JumpServerError(INVENTORY_ERROR)
         supported = any((p.get("name") if isinstance(p, dict) else p) == "ssh" for p in protocols)
     return {"id": identity.lower(), "name": _text(name, 300), "accounts": [], "platform": _text(platform),
-            "tags": sorted(set(clean_tags)), "ssh_supported": supported}
+            "tags": sorted(set(clean_tags)), "ssh_supported": supported, "is_active": _asset_is_active(raw)}
 
 
 def _asset_permissions(payload, identity):
@@ -186,6 +193,8 @@ def _asset_permissions(payload, identity):
     if (not isinstance(payload, dict) or not isinstance(payload.get("id"), str)
             or payload["id"].lower() != identity):
         raise JumpServerError(INVENTORY_ERROR)
+    if not _asset_is_active(payload):
+        return False, []
     protocols, accounts = payload.get("permed_protocols"), payload.get("permed_accounts")
     if (not isinstance(protocols, list) or len(protocols) > 64
             or not isinstance(accounts, list) or len(accounts) > 128):
@@ -270,7 +279,8 @@ class JumpServerInventory:
                     raise ValueError()
                 clean["accounts"] = list(dict.fromkeys(accounts))
                 clean["ssh_supported"] = bool(row.get("ssh_supported", True))
-                self._assets.append(clean)
+                if clean["is_active"]:
+                    self._assets.append(clean)
             self._updated_at = record.get("updated_at") if isinstance(record.get("updated_at"), str) else None
             encrypted = record.get("encrypted_token")
             if encrypted and self._decrypt:
@@ -477,6 +487,9 @@ class JumpServerInventory:
             if asset["id"] in assets and assets[asset["id"]] != asset:
                 raise JumpServerError(INVENTORY_ERROR)
             assets[asset["id"]] = asset
+        # Validate the full paginated inventory before excluding disabled records.
+        # Old records may share an address/name with an active replacement.
+        assets = {identity: asset for identity, asset in assets.items() if asset["is_active"]}
 
         def permissions(asset):
             with self._lock:
@@ -487,7 +500,7 @@ class JumpServerInventory:
             if not 200 <= status < 300:
                 raise JumpServerError(INVENTORY_ERROR)
             supported, values = _asset_permissions(payload, asset["id"])
-            return asset["id"], supported, values
+            return asset["id"], _asset_is_active(payload), supported, values
 
         pending = []
         try:
@@ -496,7 +509,12 @@ class JumpServerInventory:
                     self._ensure_active(revision)
                 pending.append(self._accounts.submit(permissions, asset))
             for future in as_completed(pending):
-                identity, supported, values = future.result()
+                identity, active, supported, values = future.result()
+                if not active:
+                    # Permission details can observe a later disable operation
+                    # than the list query; never publish that asset as usable.
+                    assets.pop(identity, None)
+                    continue
                 assets[identity]["ssh_supported"] = supported
                 assets[identity]["accounts"] = values
             return sorted(assets.values(), key=lambda row: (row["name"].casefold(), row["id"]))

@@ -92,7 +92,7 @@ test('switching back to SSH sends only the public source setting and refreshes r
  const ui=harness(url=>new URL(url).pathname==='/api/jumpserver/settings'?jms({enabled:false}):snapshot());localJms(ui);ui.api.state.auto=false;await ui.api.jumpserverAction('settings',{enabled:false});assert.deepEqual(JSON.parse(ui.calls[0].options.body),{enabled:false});assert.equal(ui.api.state.machineSource,'ssh_config');assert.equal(new URL(ui.calls[1].url).pathname,'/api/devices/refresh');
 });
 test('multiple asset accounts require an authorized selection and missing accounts never default to root',()=>{
- const ui=harness();localJms(ui,jms({assets:[{accounts:['operator','reader']},{accounts:[]}]}));assert.match(ui.node('jumpserver-account-hint').textContent,/1 台机器有多个授权账号/);assert.match(ui.node('jumpserver-account-hint').textContent,/1 台机器尚未获得/);assert.equal(ui.node('jumpserver-account').value,'');ui.node('jumpserver-account').value='operator';ui.api.renderJumpserver();assert.doesNotMatch(ui.node('jumpserver-account-hint').textContent,/多个授权账号/);
+ const ui=harness();localJms(ui,jms({assets:[{accounts:['operator','reader']},{accounts:[]}]}));assert.match(ui.node('jumpserver-account-hint').textContent,/1 台机器有多个授权账号/);assert.match(ui.node('jumpserver-account-hint').textContent,/1 台机器：平台未返回可自动连接账号/);assert.equal(ui.node('jumpserver-account').value,'');ui.node('jumpserver-account').value='operator';ui.api.renderJumpserver();assert.doesNotMatch(ui.node('jumpserver-account-hint').textContent,/多个授权账号/);
 });
 
 test('a failed resource restart cannot make historical machines available again on the next cached read',async()=>{
@@ -256,4 +256,24 @@ test('monitoring and task account choices stay independent while polling preserv
  assert.equal(monitor.value,'secure');assert.equal(task.value,'root');assert.equal(ui.api.jumpserver.dirty,true);
  assert.equal(ui.calls.some(call=>call.options.method==='POST'),false);
  assert.match(file('devices.html'),/<select\b[^>]*id="jumpserver-task-account"/);
+});
+test('inactive asset records never affect account coverage, pending choices or missing-account diagnostics',()=>{
+ const ui=harness();localJms(ui);
+ ui.api.acceptJumpserver(jms({assets:[
+  {id:'active',is_active:true,ssh_supported:true,accounts:['secure']},
+  {id:'legacy-active',ssh_supported:true,accounts:['root']},
+  {id:'retired-multiple',is_active:false,ssh_supported:true,accounts:['secure','retired-account']},
+  {id:'retired-empty',is_active:false,ssh_supported:true,accounts:[]}
+ ]}),{initial:true});
+ const choices=ui.node('jumpserver-account').children.filter(option=>option.value);
+ assert.deepEqual(choices.map(option=>option.value).sort(),['root','secure']);
+ assert.match(choices.find(option=>option.value==='secure').textContent,/1 台/);
+ assert.match(choices.find(option=>option.value==='root').textContent,/1 台/);
+ assert.equal(ui.node('jumpserver-settings').open,false);
+ assert.doesNotMatch(ui.node('jumpserver-account-hint').textContent,/多个授权账号|需选择任务执行账号|未返回可自动连接账号/);
+ ui.node('jumpserver-account').value='secure';ui.node('jumpserver-task-account').value='root';ui.api.renderJumpserver();
+ assert.match(ui.node('jumpserver-account-hint').textContent,/1 台机器：平台未返回所选采集账号/);
+ assert.match(ui.node('jumpserver-account-hint').textContent,/1 台机器：平台未返回所选任务账号/);
+ assert.doesNotMatch(ui.node('jumpserver-account-hint').textContent,/未授权|尚未获得|未返回可自动连接账号/);
+ assert.equal(ui.node('jumpserver-login-fields').hidden,true);
 });

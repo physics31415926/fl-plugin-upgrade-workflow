@@ -178,6 +178,85 @@ class JumpServerTests(unittest.TestCase):
         self.assertTrue(value["authenticated"])
         self.assertEqual(["secure", "root"], value["assets"][1]["accounts"])
 
+    def test_full_pagination_precedes_inactive_filter_and_skips_disabled_details(self):
+        rows = [asset(1, is_active=False), asset(2, is_active=True), asset(3, is_active=False), asset(4)]
+        calls = []
+        def requester(method, url, **kwargs):
+            path = urlsplit(url).path
+            calls.append(url)
+            if path == "/api/v1/authentication/auth/":
+                return 200, {"token": "fixture-token"}
+            if is_detail(path):
+                identity = path.rstrip("/").rsplit("/", 1)[-1]
+                self.assertIn(identity, (rows[1]["id"], rows[3]["id"]))
+                return 200, detail({"id": identity})
+            offset = int(parse_qs(urlsplit(url).query)["offset"][0])
+            return 200, {"count": len(rows), "next": f"?offset={offset + 2}&limit=2&search=" if offset == 0 else None,
+                         "results": rows[offset:offset + 2]}
+        store = self.make(requester)
+        store.login(self.login_payload)
+        value = self.wait(store)
+        self.assertTrue(value["authenticated"])
+        self.assertEqual([rows[1]["id"], rows[3]["id"]], [row["id"] for row in value["assets"]])
+        self.assertTrue(all(row["is_active"] for row in value["assets"]))
+        list_urls = [url for url in calls if urlsplit(url).path == "/api/v1/perms/users/my/assets/"]
+        self.assertEqual(["0", "2"], [parse_qs(urlsplit(url).query)["offset"][0] for url in list_urls])
+        self.assertEqual(2, sum(is_detail(urlsplit(url).path) for url in calls))
+        # Even a page containing only inactive assets must not hide missing rows.
+        previous = value["assets"]
+        store._requester = lambda *args, **kwargs: (200, {"count": 2, "next": None, "results": [asset(8, is_active=False)]})
+        store.refresh()
+        self.assertEqual(previous, self.wait(store)["assets"])
+        self.assertFalse(store.snapshot()["authenticated"])
+
+    def test_detail_disable_during_refresh_removes_asset(self):
+        self.rows = [asset(1, is_active=True), asset(2, is_active=True)]
+        original = self.store._requester
+        def requester(method, url, **kwargs):
+            path = urlsplit(url).path
+            if is_detail(path) and self.rows[0]["id"] in path:
+                return 200, detail(self.rows[0], is_active=False)
+            return original(method, url, **kwargs)
+        self.store._requester = requester
+        value = self.login()
+        self.assertTrue(value["authenticated"])
+        self.assertEqual([self.rows[1]["id"]], [row["id"] for row in value["assets"]])
+        self.assertEqual(1, value["asset_count"])
+
+    def test_explicit_invalid_active_flags_fail_closed_in_lists_and_details(self):
+        previous = self.login()["assets"]
+        original = self.store._requester
+        for active in (None, 0, 1, "false", "true", [], {}):
+            for location in ("list", "detail"):
+                with self.subTest(active=active, location=location):
+                    if location == "list":
+                        self.rows = [asset(2, is_active=active)]
+                        self.store._requester = original
+                    else:
+                        self.rows = [asset(2)]
+                        self.store._requester = lambda method, url, active=active, **kwargs: ((200, detail(self.rows[0], is_active=active)) if is_detail(urlsplit(url).path) else original(method, url, **kwargs))
+                    self.store.refresh()
+                    value = self.wait()
+                    self.assertFalse(value["authenticated"])
+                    self.assertEqual(previous, value["assets"])
+
+    def test_cached_inactive_assets_are_not_restored_and_legacy_active_is_supported(self):
+        self.login()
+        record = json.loads(self.store.path.read_text(encoding="utf-8"))
+        original = record["assets"][0]
+        original.pop("is_active", None)
+        record["assets"] = [{**original, "is_active": False}, {**original, "id": asset(2)["id"]}]
+        self.store.path.write_text(json.dumps(record), encoding="utf-8")
+        value = self.make().snapshot()
+        self.assertEqual([asset(2)["id"]], [row["id"] for row in value["assets"]])
+        self.assertTrue(value["assets"][0]["is_active"])
+        self.assertTrue(value["can_refresh"])
+        record["assets"][0]["is_active"] = "false"
+        self.store.path.write_text(json.dumps(record), encoding="utf-8")
+        value = self.make().snapshot()
+        self.assertEqual([], value["assets"])
+        self.assertFalse(value["can_refresh"])
+
     def test_failed_or_incomplete_refresh_keeps_previous_complete_snapshot(self):
         self.login()
         previous = self.store.snapshot()["assets"]

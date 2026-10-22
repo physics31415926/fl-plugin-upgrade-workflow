@@ -117,7 +117,7 @@ async function selectProject(project){
 function hasJumpserverCredential(data=jumpserver.data){return data?.can_refresh===true||data?.authenticated===true;}
 function jumpserverConnectionFields(){return {ssh_host:$('jumpserver-ssh-host').value.trim(),ssh_port:Number($('jumpserver-ssh-port').value||2222),identity_file:$('jumpserver-identity').value.trim(),default_account:$('jumpserver-account').value.trim(),task_account:$('jumpserver-task-account').value.trim()};}
 function jumpserverFields(){return {base_url:$('jumpserver-url').value.trim(),username:$('jumpserver-username').value.trim(),...jumpserverConnectionFields()};}
-function jumpserverAssets(data){return (Array.isArray(data?.assets)?data.assets:[]).filter(asset=>asset&&asset.ssh_supported!==false);}
+function jumpserverAssets(data){return (Array.isArray(data?.assets)?data.assets:[]).filter(asset=>asset&&asset.is_active!==false&&asset.ssh_supported!==false);}
 function assetAccounts(asset){return [...new Set((Array.isArray(asset.accounts)?asset.accounts:[]).filter(value=>typeof value==='string'&&/^[A-Za-z0-9_][A-Za-z0-9_.@+-]{0,99}$/.test(value)))];}
 function accountChoices(data){const counts=new Map();for(const asset of jumpserverAssets(data))for(const account of assetAccounts(asset))counts.set(account,(counts.get(account)||0)+1);return [...counts].sort((a,b)=>a[0].localeCompare(b[0],'en'));}
 function fillAccountChoices(data,id,value){
@@ -155,7 +155,7 @@ function renderJumpserver(){
  const monitorPending=multiple.filter(asset=>!account).length,taskPending=multiple.filter(asset=>!taskAccount).length;
  const monitorDenied=account?assets.filter(asset=>assetAccounts(asset).length&&!assetAccounts(asset).includes(account)).length:0,taskDenied=taskAccount?assets.filter(asset=>assetAccounts(asset).length&&!assetAccounts(asset).includes(taskAccount)).length:0;
  const dirty=account!==(data?.default_account||'')||$('jumpserver-task-account').value!==(data?.task_account||'');
- $('jumpserver-account-hint').textContent=[monitorPending?number(monitorPending)+' 台机器有多个授权账号，请选择资源采集账号。':'资源采集账号已就绪。',taskPending?number(taskPending)+' 台机器需选择任务执行账号。':'任务执行账号已就绪。',monitorDenied?number(monitorDenied)+' 台机器未授权所选采集账号。':'',taskDenied?number(taskDenied)+' 台机器未授权所选任务账号。':'',missing?number(missing)+' 台机器尚未获得可自动登录账号。':'',dirty?'选择尚未保存，保存后生效。':''].filter(Boolean).join(' ');
+ $('jumpserver-account-hint').textContent=[monitorPending?number(monitorPending)+' 台机器有多个授权账号，请选择资源采集账号。':'资源采集账号已就绪。',taskPending?number(taskPending)+' 台机器需选择任务执行账号。':'任务执行账号已就绪。',monitorDenied?number(monitorDenied)+' 台机器：平台未返回所选采集账号。':'',taskDenied?number(taskDenied)+' 台机器：平台未返回所选任务账号。':'',missing?number(missing)+' 台机器：平台未返回可自动连接账号。':'',dirty?'选择尚未保存，保存后生效。':''].filter(Boolean).join(' ');
  $('jumpserver-account-save').disabled=disabled||!canRefresh||!data?.authenticated||!dirty;
  for(const id of ['jumpserver-account','jumpserver-task-account'])$(id).disabled=disabled||!data?.authenticated;
  const message=jumpserver.error||data?.error||jumpserver.notice||(data?.refreshing?'正在从平台读取授权机器，历史记录暂保留。':'');

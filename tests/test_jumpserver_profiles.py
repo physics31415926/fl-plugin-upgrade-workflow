@@ -135,11 +135,11 @@ class JumpServerProfilesTests(unittest.TestCase):
         self.assertIn("设备采集账号", self.bridge.profiles("vllm", self.manager, purpose="monitor")[0]["configuration_error"])
         self.inventory.data.update(default_account="secure", task_account="root")
         self.inventory.data["assets"][0]["accounts"] = ["secure"]
-        self.assertIn("未授权所选任务执行账号（root）", self.rows()[0]["configuration_error"])
+        self.assertIn("平台未返回所选任务执行账号（root）", self.rows()[0]["configuration_error"])
         self.assertIn("#secure#", self.bridge.profiles("vllm", self.manager, purpose="monitor")[0]["ssh_connection"]["user"])
         self.inventory.data["assets"][0]["accounts"] = ["root"]
         monitor = self.bridge.profiles("vllm", self.manager, purpose="monitor")[0]
-        self.assertIn("未授权所选设备采集账号（secure）", monitor["configuration_error"])
+        self.assertIn("平台未返回所选设备采集账号（secure）", monitor["configuration_error"])
         self.assertIsNone(monitor["ssh_connection"])
         self.assertIn("#root#", self.rows()[0]["ssh_connection"]["user"])
         self.inventory.data.update(default_account="", task_account="")
@@ -154,6 +154,21 @@ class JumpServerProfilesTests(unittest.TestCase):
         self.assertEqual(self.rows(), [])
         self.assertIn(original["id"], self.manager.rows)
         self.assertEqual(len(self.manager.writes), 1)
+
+    def test_inactive_assets_are_hidden_but_owner_profiles_remain(self):
+        original = self.rows()[0]
+        saved = copy.deepcopy(self.manager.rows)
+        self.inventory.data["assets"][0]["is_active"] = False
+        self.inventory.data["assets"].append({**self.inventory.data["assets"][0], "id": SECOND, "is_active": True})
+        for purpose in ("task", "monitor"):
+            with self.subTest(purpose=purpose):
+                rows = self.bridge.profiles("vllm", self.manager, purpose=purpose)
+                self.assertEqual([profile_id(self.inventory.data["base_url"], SECOND)], [row["id"] for row in rows])
+        self.assertEqual(saved[original["id"]], self.manager.rows[original["id"]])
+        self.assertEqual(2, len(self.manager.rows))
+        for invalid in (None, 0, "false"):
+            self.inventory.data["assets"][1]["is_active"] = invalid
+            self.assertEqual([], self.rows())
 
     def test_expired_authentication_or_refresh_error_returns_blocked_cached_rows(self):
         original = self.rows()[0]
