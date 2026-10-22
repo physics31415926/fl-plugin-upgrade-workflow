@@ -180,6 +180,50 @@ def _asset(row):
             "tags": sorted(set(clean_tags)), "ssh_supported": supported}
 
 
+def _asset_permissions(payload, identity):
+    """Only the permission-detail API proves current SSH and connect rights."""
+    if (not isinstance(payload, dict) or not isinstance(payload.get("id"), str)
+            or payload["id"].lower() != identity):
+        raise JumpServerError(INVENTORY_ERROR)
+    protocols, accounts = payload.get("permed_protocols"), payload.get("permed_accounts")
+    if (not isinstance(protocols, list) or len(protocols) > 64
+            or not isinstance(accounts, list) or len(accounts) > 128):
+        raise JumpServerError(INVENTORY_ERROR)
+    protocol_names = []
+    for protocol in protocols:
+        name = protocol.get("name") if isinstance(protocol, dict) else None
+        if not isinstance(name, str) or not name or len(name) > 64 or any(ord(c) < 32 for c in name):
+            raise JumpServerError(INVENTORY_ERROR)
+        protocol_names.append(name)
+    ssh_supported = "ssh" in protocol_names
+    usernames = []
+    for account in accounts:
+        if not isinstance(account, dict) or not isinstance(account.get("has_username"), bool):
+            raise JumpServerError(INVENTORY_ERROR)
+        actions = account.get("actions")
+        if not isinstance(actions, list) or len(actions) > 64:
+            raise JumpServerError(INVENTORY_ERROR)
+        rights = []
+        for action in actions:
+            value = action.get("value") if isinstance(action, dict) else action
+            if not isinstance(value, str) or not value or len(value) > 64 or any(ord(c) < 32 for c in value):
+                raise JumpServerError(INVENTORY_ERROR)
+            rights.append(value)
+        # Virtual accounts require interactive username entry; never substitute
+        # their aliases, the platform user, or a guessed root account.
+        if not account["has_username"] or "connect" not in rights:
+            continue
+        username = account.get("username")
+        alias = account.get("alias")
+        if isinstance(alias, str) and alias.startswith("@") and (not isinstance(username, str) or not _USER.fullmatch(username)):
+            continue
+        if not isinstance(username, str) or not _USER.fullmatch(username):
+            raise JumpServerError("JumpServer 授权账号列表无效，请检查资产账号配置。")
+        if ssh_supported:
+            usernames.append(username)
+    return ssh_supported, list(dict.fromkeys(usernames))
+
+
 class JumpServerInventory:
     """Shared source of authorized assets; never returns tokens or saves passwords."""
 
@@ -261,6 +305,7 @@ class JumpServerInventory:
 
     def _snapshot(self):
         return {**self._settings, "authenticated": self._authenticated and bool(self._token),
+                "can_refresh": bool(self._token),
                 "refreshing": self._refreshing, "updated_at": self._updated_at, "error": self._error,
                 "asset_count": len(self._assets), "assets": copy.deepcopy(self._assets)}
 
@@ -426,25 +471,26 @@ class JumpServerInventory:
                 raise JumpServerError(INVENTORY_ERROR)
             assets[asset["id"]] = asset
 
-        def accounts(asset):
-            rows = self._pages(settings, token, "perms/users/assets/" + asset["id"] + "/accounts/", revision, 128)
-            values = []
-            for row in rows:
-                username = row.get("username") or row.get("alias")
-                if not isinstance(username, str) or not _USER.fullmatch(username):
-                    raise JumpServerError("JumpServer 授权账号列表无效，请检查资产账号配置。")
-                values.append(username)
-            return asset["id"], list(dict.fromkeys(values))
+        def permissions(asset):
+            with self._lock:
+                self._ensure_active(revision)
+            status, payload = self._call("GET", self._url(settings, "perms/users/my/assets/" + asset["id"] + "/"), token)
+            if status in (401, 403):
+                raise _Unauthorized(AUTH_ERROR)
+            if not 200 <= status < 300:
+                raise JumpServerError(INVENTORY_ERROR)
+            supported, values = _asset_permissions(payload, asset["id"])
+            return asset["id"], supported, values
 
         pending = []
         try:
             for asset in assets.values():
                 with self._lock:
                     self._ensure_active(revision)
-                if asset["ssh_supported"]:
-                    pending.append(self._accounts.submit(accounts, asset))
+                pending.append(self._accounts.submit(permissions, asset))
             for future in as_completed(pending):
-                identity, values = future.result()
+                identity, supported, values = future.result()
+                assets[identity]["ssh_supported"] = supported
                 assets[identity]["accounts"] = values
             return sorted(assets.values(), key=lambda row: (row["name"].casefold(), row["id"]))
         finally:

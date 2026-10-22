@@ -119,13 +119,13 @@ function fillJumpserver(data,force=false){
 }
 function renderJumpserver(){
  $('machine-source-panel').hidden=!state.allowed||!state.jumpserverSettings;if(!state.allowed||!state.jumpserverSettings)return;
- const data=jumpserver.data,busy=!!jumpserver.mutating||data?.refreshing===true,enabled=data?.enabled===true;
+ const data=jumpserver.data,busy=!!jumpserver.mutating||data?.refreshing===true,enabled=data?.enabled===true,canRefresh=data?.can_refresh===true||data?.authenticated===true;
  $('machine-source').textContent=state.machineSource==='jumpserver'?'JumpServer':'本机 SSH 配置';
- $('jumpserver-summary').textContent=!data?'正在读取连接设置…':enabled?(data.authenticated?'已登录 '+(data.username||'平台账号'):'平台登录已退出或失效')+' · '+number(data.asset_count??0)+' 台授权机器'+(data.updated_at?' · 最近同步 '+new Date(data.updated_at).toLocaleString('zh-CN',{hour12:false}):' · 尚未同步'):'使用本机已保存的 SSH 设备；也可连接 JumpServer 获取授权机器。';
- $('refresh-machines').hidden=!enabled;$('refresh-machines').disabled=busy||!data?.authenticated||state.switching;
+ $('jumpserver-summary').textContent=!data?'正在读取连接设置…':enabled?(data.authenticated?'已登录 '+(data.username||'平台账号'):canRefresh?'登录凭据已保存，机器待同步':'平台登录已退出或失效')+' · '+number(data.asset_count??0)+' 台授权机器'+(data.updated_at?' · 最近同步 '+new Date(data.updated_at).toLocaleString('zh-CN',{hour12:false}):' · 尚未同步'):'使用本机已保存的 SSH 设备；也可连接 JumpServer 获取授权机器。';
+ $('refresh-machines').hidden=!enabled;$('refresh-machines').disabled=busy||!canRefresh||state.switching;
  $('refresh-machines').textContent=data?.refreshing?'正在同步机器…':'刷新机器列表';
  $('use-ssh-config').hidden=!enabled;$('use-ssh-config').disabled=busy||state.switching;
- $('jumpserver-logout').hidden=!data?.authenticated;$('jumpserver-logout').disabled=busy||state.switching;
+ $('jumpserver-logout').hidden=!canRefresh;$('jumpserver-logout').disabled=busy||state.switching;
  $('jumpserver-login').disabled=busy||state.switching;$('jumpserver-login').textContent=jumpserver.mutating?.kind==='login'?'正在登录…':'登录并同步机器';
  $('jumpserver-save').disabled=busy||state.switching||!data;
  const message=jumpserver.error||data?.error||jumpserver.notice||(data?.refreshing?'正在从平台读取授权机器，历史记录暂保留。':'');
@@ -137,7 +137,7 @@ function renderJumpserver(){
 function acceptJumpserver(data,{baseline,initial=false,sourceChanged=false}={}){
  if(!data||typeof data!=='object'||typeof data.enabled!=='boolean')throw new Error('未收到有效的 JumpServer 状态，请重试。');
  const previous=jumpserver.data;jumpserver.data=data;state.machineSource=data.enabled?'jumpserver':'ssh_config';fillJumpserver(data);
- if(initial)$('jumpserver-settings').open=!data.authenticated;
+ if(initial)$('jumpserver-settings').open=!data.authenticated&&data.can_refresh!==true;
  if(data.refreshing){if(jumpserver.awaitedUpdate===null)jumpserver.awaitedUpdate=baseline??previous?.updated_at??data.updated_at??'';jumpserver.uncertain=true;}
  else if(data.error){jumpserver.error=String(data.error);jumpserver.uncertain=true;jumpserver.awaitedUpdate=null;}
  else if(sourceChanged||(jumpserver.awaitedUpdate!==null&&data.updated_at&&data.updated_at!==jumpserver.awaitedUpdate)){

@@ -142,3 +142,19 @@ test('anonymous visitors read cached details and filters but cannot collect or c
 test('a revoked share downgrades a live device page to cached read-only without losing details',async()=>{
  const ui=harness(()=>snapshot([fresh('public')],{read_only:true}));put(ui,snapshot([fresh('old')]));ui.api.state.selected='public';await ui.api.tick();assert.equal(ui.api.state.allowed,false);assert.equal(ui.api.state.readable,true);assert.equal(ui.api.state.auto,false);assert.match(ui.node('hosts').textContent,/Host public/);assert.equal(ui.node('card-details').children.length,1);assert.equal(ui.node('collection-actions').hidden,true);assert.equal(ui.calls.some(call=>call.options.method==='POST'),false);await ui.api.refreshResources();assert.equal(ui.calls.length,1);
 });
+
+
+test('inventory failure with a saved credential can retry without another password',async()=>{
+ const ui=harness(()=>jms({refreshing:true,can_refresh:true}));
+ localJms(ui,jms({authenticated:false,can_refresh:true,error:'资产详情同步失败',updated_at:null}));
+ assert.equal(ui.node('refresh-machines').disabled,false);
+ assert.equal(ui.node('jumpserver-logout').hidden,false);
+ assert.match(ui.node('jumpserver-summary').textContent,/凭据已保存/);
+ assert.doesNotMatch(ui.node('jumpserver-summary').textContent,/退出或失效/);
+ await ui.api.jumpserverAction('refresh');
+ assert.equal(new URL(ui.calls[0].url).pathname,'/api/jumpserver/refresh');
+ assert.equal(JSON.parse(ui.calls[0].options.body).password,undefined);
+ ui.api.jumpserver.data=jms({authenticated:false,can_refresh:false});ui.api.renderJumpserver();
+ assert.equal(ui.node('refresh-machines').disabled,true);
+ assert.equal(ui.node('jumpserver-logout').hidden,true);
+});

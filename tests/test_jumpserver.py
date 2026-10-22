@@ -1,6 +1,7 @@
 import base64
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import json
+import re
 from pathlib import Path
 import tempfile
 import threading
@@ -18,6 +19,20 @@ def asset(number=1, **extra):
     return {"id": f"00000000-0000-0000-0000-{number:012d}", "name": f"test-device-{number}",
             "address": "private-address-never-published", "platform": {"name": "Linux"},
             "protocols": [{"name": "ssh"}], "tags": [{"name": "gpu"}], **extra}
+
+
+def account(username="secure", **extra):
+    return {"username": username, "alias": username, "has_username": True,
+            "actions": [{"value": "connect", "label": "Connect"}], **extra}
+
+
+def detail(row, **extra):
+    return {"id": row["id"], "permed_protocols": row.get("protocols", [{"name": "ssh"}]),
+            "permed_accounts": [account("secure"), account("root")], **extra}
+
+
+def is_detail(path):
+    return re.fullmatch(r"/api/v1/perms/users/my/assets/[0-9a-f-]{36}/", path) is not None
 
 
 class JumpServerTests(unittest.TestCase):
@@ -51,11 +66,14 @@ class JumpServerTests(unittest.TestCase):
         path = urlsplit(url).path
         if path.endswith("authentication/auth/"):
             return self.login_status, self.login_body
-        if path.endswith("/accounts/"):
+        if path == "/api/v1/perms/users/my/assets/":
+            return self.status, {"count": len(self.rows), "next": None, "results": self.rows}
+        if is_detail(path):
             if self.before_accounts:
                 self.before_accounts()
-            return self.account_status, [{"username": "secure"}, {"username": "root"}]
-        return self.status, {"count": len(self.rows), "next": None, "results": self.rows}
+            row = next((row for row in self.rows if row["id"] == path.rstrip("/").rsplit("/", 1)[-1]), None)
+            return (self.account_status, detail(row)) if row else (404, None)
+        return 404, None
 
     def wait(self, store=None):
         store = store or self.store
@@ -91,6 +109,7 @@ class JumpServerTests(unittest.TestCase):
         self.assertEqual("Bearer fixture-private-session-token", self.calls[1][2]["headers"]["Authorization"])
         restored = self.make()
         self.assertFalse(restored.snapshot()["authenticated"])
+        self.assertTrue(restored.snapshot()["can_refresh"])
         self.assertEqual(1, restored.snapshot()["asset_count"])
         restored.refresh()
         self.assertTrue(self.wait(restored)["authenticated"])
@@ -118,17 +137,19 @@ class JumpServerTests(unittest.TestCase):
             self.store.login(self.login_payload)
         self.assertNotIn("secret password", json.dumps(self.store.snapshot()))
 
-    def test_complete_paginated_inventory_and_accounts(self):
+    def test_complete_paginated_inventory_and_permission_details(self):
         def requester(method, url, **kwargs):
-            if method == "POST":
-                return 200, {"token": "token-fixture"}
             parts = urlsplit(url)
-            offset = int(parse_qs(parts.query)["offset"][0])
-            if parts.path.endswith("/accounts/"):
+            if method == "POST" and parts.path == "/api/v1/authentication/auth/":
+                return 200, {"token": "token-fixture"}
+            if is_detail(parts.path):
+                identity = parts.path.rstrip("/").rsplit("/", 1)[-1]
+                return 200, detail({"id": identity})
+            if parts.path == "/api/v1/perms/users/my/assets/":
+                offset = int(parse_qs(parts.query)["offset"][0])
                 return 200, {"count": 2, "next": "?limit=1&offset=1" if offset == 0 else None,
-                             "results": [{"username": "secure" if offset == 0 else "root"}]}
-            return 200, {"count": 2, "next": "?limit=1&offset=1" if offset == 0 else None,
-                         "results": [asset(offset + 1)]}
+                             "results": [asset(offset + 1)]}
+            return 404, None
         store = self.make(requester)
         store.login(self.login_payload)
         value = self.wait(store)
@@ -153,23 +174,88 @@ class JumpServerTests(unittest.TestCase):
                 self.store.refresh()
                 value = self.wait()
                 self.assertFalse(value["authenticated"])
+                self.assertTrue(value["can_refresh"])
                 self.assertTrue(value["error"])
                 self.assertEqual(previous, value["assets"])
 
     def test_asset_dedup_conflicts_and_protocols(self):
         self.rows = [asset(), asset(), asset(2, protocols=[{"name": "rdp"}])]
         original = self.store._requester
-        self.store._requester = lambda method, url, **kwargs: ((200, self.rows) if "/my/assets/" in url
+        self.store._requester = lambda method, url, **kwargs: ((200, self.rows) if urlsplit(url).path == "/api/v1/perms/users/my/assets/"
                                                               else original(method, url, **kwargs))
         value = self.login()
         self.assertEqual(2, value["asset_count"])
         self.assertFalse(value["assets"][1]["ssh_supported"])
         self.assertEqual([], value["assets"][1]["accounts"])
-        self.assertEqual(1, sum(urlsplit(c[1]).path.endswith("/accounts/") for c in self.calls))
+        self.assertEqual(2, sum(is_detail(urlsplit(c[1]).path) for c in self.calls))
         self.rows = [asset(), asset(name="conflicting identity")]
         self.store.refresh()
         self.assertFalse(self.wait()["authenticated"])
         self.assertEqual(2, self.store.snapshot()["asset_count"])
+
+    def test_permission_details_are_authoritative_and_virtual_accounts_do_not_break_inventory(self):
+        self.rows = [asset(1), asset(2)]
+        original = self.store._requester
+        def requester(method, url, **kwargs):
+            path = urlsplit(url).path
+            if is_detail(path):
+                row = self.rows[int(path.rstrip("/")[-1]) - 1]
+                if row["id"] == self.rows[1]["id"]:
+                    return 200, detail(row, permed_protocols=[{"name": "rdp"}])
+                return 200, detail(row, permed_accounts=[
+                    account("@INPUT", alias="@INPUT", has_username=False),
+                    account(None, alias="@USER", has_username=False),
+                    account("@INPUT", alias="@INPUT", has_username=True),
+                    account("no-connect", actions=[{"value": "upload_file"}]),
+                    account("secure", actions=["connect"], has_secret=True, secret_type="private-type", secret="private-secret"),
+                    account("secure")])
+            return original(method, url, **kwargs)
+        self.store._requester = requester
+        value = self.login()
+        self.assertTrue(value["authenticated"])
+        self.assertEqual(["secure"], value["assets"][0]["accounts"])
+        self.assertTrue(value["assets"][0]["ssh_supported"])
+        self.assertFalse(value["assets"][1]["ssh_supported"])
+        self.assertEqual([], value["assets"][1]["accounts"])
+        self.assertTrue(all(not urlsplit(call[1]).path.endswith("/accounts/") for call in self.calls))
+        persisted = self.store.path.read_text(encoding="utf-8")
+        for field in ("has_secret", "secret_type", "private-secret", "private-type", "@INPUT", "@USER"):
+            self.assertNotIn(field, json.dumps(value))
+            self.assertNotIn(field, persisted)
+
+    def test_detail_identity_structure_and_limits_must_be_complete(self):
+        previous = self.login()["assets"]
+        original = self.store._requester
+        bad = [detail(asset(2)), {"id": asset()["id"]},
+               detail(asset(), permed_accounts=None), detail(asset(), permed_protocols=None),
+               detail(asset(), permed_protocols=["ssh"]), detail(asset(), permed_protocols=[{"name": "ssh"}] * 65),
+               detail(asset(), permed_accounts=[account()] * 129),
+               detail(asset(), permed_accounts=[{"username": "secure"}]),
+               detail(asset(), permed_accounts=[account(actions=None)])]
+        for payload in bad:
+            with self.subTest(payload=payload):
+                self.store._requester = lambda method, url, payload=payload, **kwargs: ((200, payload) if is_detail(urlsplit(url).path) else original(method, url, **kwargs))
+                self.store.refresh()
+                value = self.wait()
+                self.assertFalse(value["authenticated"])
+                self.assertTrue(value["can_refresh"])
+                self.assertEqual(previous, value["assets"])
+        self.store._requester = original
+        self.store.refresh()
+        self.assertTrue(self.wait()["authenticated"])
+
+    def test_missing_detail_endpoint_does_not_publish_partial_inventory_or_discard_token(self):
+        previous = self.login()["assets"]
+        self.account_status = 404
+        self.store.refresh()
+        value = self.wait()
+        self.assertEqual(INVENTORY_ERROR, value["error"])
+        self.assertFalse(value["authenticated"])
+        self.assertTrue(value["can_refresh"])
+        self.assertEqual(previous, value["assets"])
+        self.account_status = 200
+        self.store.refresh()
+        self.assertTrue(self.wait()["authenticated"])
 
     def test_account_failure_prevents_partial_publication_and_expires_token(self):
         previous = self.login()["assets"]
@@ -178,6 +264,7 @@ class JumpServerTests(unittest.TestCase):
         self.store.refresh()
         value = self.wait()
         self.assertEqual(AUTH_ERROR, value["error"])
+        self.assertFalse(value["can_refresh"])
         self.assertEqual(previous, value["assets"])
         self.assertFalse(value["authenticated"])
         self.assertIsNone(json.loads(self.store.path.read_text(encoding="utf-8"))["encrypted_token"])
@@ -200,6 +287,7 @@ class JumpServerTests(unittest.TestCase):
         self.assertIsNone(json.loads(self.store.path.read_text(encoding="utf-8"))["encrypted_token"])
         value = self.store.logout()
         self.assertFalse(value["enabled"])
+        self.assertFalse(value["can_refresh"])
         self.assertFalse(value["authenticated"])
         self.assertFalse(self.store.refresh()["refreshing"])
 
@@ -222,7 +310,7 @@ class JumpServerTests(unittest.TestCase):
         self.assertTrue(entered.wait(2))
         self.store.refresh()
         self.store.refresh()
-        self.assertEqual(1, sum("/my/assets/" in c[1] for c in self.calls))
+        self.assertEqual(1, sum(urlsplit(c[1]).path == "/api/v1/perms/users/my/assets/" for c in self.calls))
         release.set()
         self.assertEqual(8, self.wait()["asset_count"])
         self.assertEqual(4, peak[0])
