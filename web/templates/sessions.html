@@ -45,7 +45,7 @@
 </head>
 <body>
 <div class="shell">
-  <header class="topbar"><div class="brand"><span class="mark" aria-hidden="true">FL</span><span><span id="project-brand">vLLM-Plugin-FL</span> <span class="brand-extra" style="font-weight:400;color:var(--muted)">/ 升级任务</span></span></div><nav class="toplinks" aria-label="页面导航"><a id="overview-link" href="/" hidden>总览</a><label id="project-picker" hidden>仓库 <select id="project-select" aria-label="选择仓库"></select></label><a id="monitor-link" href="/">分支进展</a><a class="current" href="#session-list" aria-current="page">任务</a><a id="access-shares-link" href="/access-shares" hidden>访问分享</a><span id="shared-access-mode" class="pill passed" hidden>分享管理权限</span><button id="share-logout" class="button small" type="button" hidden>退出管理</button><a class="secondary" href="/workflow">演示流程</a></nav></header>
+  <header class="topbar"><div class="brand"><span class="mark" aria-hidden="true">FL</span><span><span id="project-brand">vLLM-Plugin-FL</span> <span class="brand-extra" style="font-weight:400;color:var(--muted)">/ 升级任务</span></span></div><nav class="toplinks" aria-label="页面导航"><a id="overview-link" href="/" hidden>总览</a><label id="project-picker" hidden>仓库 <select id="project-select" aria-label="选择仓库"></select></label><a id="monitor-link" href="/">分支进展</a><a class="current" href="#session-list" aria-current="page">任务</a><a id="devices-link" href="/devices" hidden>设备资源</a><a id="access-shares-link" href="/access-shares" hidden>访问分享</a><span id="shared-access-mode" class="pill passed" hidden>分享管理权限</span><button id="share-logout" class="button small" type="button" hidden>退出管理</button><a class="secondary" href="/workflow">演示流程</a></nav></header>
   <main>
     <section class="hero"><div><div class="eyebrow">Backend upgrade sessions</div><h1>任务工作台</h1><p>查看任务进展、处理待办，或选择设备和 Agent 开始新任务。</p></div></section>
     <div id="global-notice" class="notice" role="status" aria-live="polite"></div>
@@ -230,6 +230,8 @@ Grep</textarea><small class="hint">SSH 命令可显式配置 Bash(ssh *)。未�
   $('save-flagscale-settings').addEventListener('click',()=>saveFlagscaleSettings());
   $('delete-flagscale-key').addEventListener('click',()=>saveFlagscaleSettings(true));
   const params = new URLSearchParams(location.search);
+  const requestedProfile = (params.get('profile') || '').slice(0,128);
+  let profileLinkHandled = false;
   const selectionTarget={session:params.get('session')||null,branch:params.get('branch')||(params.get('backend')?$('branch').value:null),backend:params.get('backend')||null};
   state.selected=selectionTarget.session;
   if (params.get('branch')) $('branch').value = params.get('branch');
@@ -771,7 +773,7 @@ Grep</textarea><small class="hint">SSH 命令可显式配置 Bash(ssh *)。未�
     if(state.refreshPromise){if(!force)return state.refreshPromise;await state.refreshPromise;}
     const revision=state.sessionRevision,profileRevision=state.profileRevision;state.fetching=true;
     state.refreshPromise=(async()=>{
-    try{const data=await request(API);if(revision!==state.sessionRevision)return;state.sessions=Array.isArray(data.sessions)?data.sessions:[];state.deletedSessions=Array.isArray(data.deleted_sessions)?data.deleted_sessions:[];state.policies=data.backend_task_policies&&typeof data.backend_task_policies==='object'?data.backend_task_policies:{};if(profileRevision===state.profileRevision&&!state.sshSyncBusy){state.profiles=Array.isArray(data.machine_profiles)?data.machine_profiles:[];renderSshSync(data.ssh_config_sync);}state.available=!!data.available;state.providers=data.providers&&typeof data.providers==='object'?data.providers:{};renderProviderSettings(data.agent_settings);if(data.agent_settings_by_provider?.flagscale)renderFlagscaleSettings(data.agent_settings_by_provider.flagscale);if(!state.selectionRevision&&selectionTarget.session&&state.deletedSessions.some(item=>String(item.id)===selectionTarget.session)){state.view='trash';state.showHistory=false;}state.selected=selectSessionId([...prioritizedSessions(state.sessions),...state.deletedSessions],state.selected,state.selectionRevision?{}:selectionTarget);showProfiles();renderHealth(data.health);renderList();renderDetail();$('sync-status').textContent='已更新 '+new Date().toLocaleTimeString('zh-CN',{hour12:false});checkButtons();if(!quiet)notice('global-notice','');}
+    try{const data=await request(API);if(revision!==state.sessionRevision)return;state.sessions=Array.isArray(data.sessions)?data.sessions:[];state.deletedSessions=Array.isArray(data.deleted_sessions)?data.deleted_sessions:[];state.policies=data.backend_task_policies&&typeof data.backend_task_policies==='object'?data.backend_task_policies:{};if(profileRevision===state.profileRevision&&!state.sshSyncBusy){state.profiles=Array.isArray(data.machine_profiles)?data.machine_profiles:[];renderSshSync(data.ssh_config_sync);}state.available=!!data.available;state.providers=data.providers&&typeof data.providers==='object'?data.providers:{};renderProviderSettings(data.agent_settings);if(data.agent_settings_by_provider?.flagscale)renderFlagscaleSettings(data.agent_settings_by_provider.flagscale);if(!state.selectionRevision&&selectionTarget.session&&state.deletedSessions.some(item=>String(item.id)===selectionTarget.session)){state.view='trash';state.showHistory=false;}state.selected=selectSessionId([...prioritizedSessions(state.sessions),...state.deletedSessions],state.selected,state.selectionRevision?{}:selectionTarget);showProfiles();applyRequestedProfile();renderHealth(data.health);renderList();renderDetail();$('sync-status').textContent='已更新 '+new Date().toLocaleTimeString('zh-CN',{hour12:false});checkButtons();if(!quiet)notice('global-notice','');}
     catch(error){$('sync-status').textContent='连接失败，将自动重试';notice('global-notice',error.message,true);}finally{state.fetching=false;}
     })();
     try{await state.refreshPromise;}finally{state.refreshPromise=null;}
@@ -849,7 +851,15 @@ Grep</textarea><small class="hint">SSH 命令可显式配置 Bash(ssh *)。未�
   $('confirm-delete').addEventListener('click',()=>{const id=state.deleteTarget;$('delete-dialog').close();state.deleteTarget=null;manageTask('delete',id);});
   $('restore-session').addEventListener('click',()=>manageTask('restore',current()?.id));
   // END task management controls
-  $('profile').addEventListener('change',()=>{const profile=state.profiles.find(x=>String(x.id)===$('profile').value),connection=profile?.ssh_connection||{};$('backend').value=labels[profile?.backend]?profile.backend:'';$('ssh-alias').value=profile?.ssh_alias||'';$('remote-workspace').value=profile?.remote_workspace||'';$('model-paths').value=Object.keys(profile?.model_paths||{}).length?JSON.stringify(profile.model_paths,null,2):'';$('profile-label').value=profile?.label||'';$('connection-mode').value=profile?.ssh_connection?'direct':'alias';$('ssh-host').value=connection.host||'';$('ssh-user').value=connection.user||'';$('ssh-port').value=connection.port||22;$('identity-file').value=connection.identity_file||'';$('jump-alias').value=connection.jump_alias||'';connectionMode();invalidateCheck();showProfileGuidance();});
+  function applyProfileSelection(){const profile=state.profiles.find(x=>String(x.id)===$('profile').value),connection=profile?.ssh_connection||{};$('backend').value=labels[profile?.backend]?profile.backend:'';$('ssh-alias').value=profile?.ssh_alias||'';$('remote-workspace').value=profile?.remote_workspace||'';$('model-paths').value=Object.keys(profile?.model_paths||{}).length?JSON.stringify(profile.model_paths,null,2):'';$('profile-label').value=profile?.label||'';$('connection-mode').value=profile?.ssh_connection?'direct':'alias';$('ssh-host').value=connection.host||'';$('ssh-user').value=connection.user||'';$('ssh-port').value=connection.port||22;$('identity-file').value=connection.identity_file||'';$('jump-alias').value=connection.jump_alias||'';connectionMode();invalidateCheck();showProfileGuidance();}
+  function applyRequestedProfile(){
+    if(profileLinkHandled||!requestedProfile||state.readOnly)return;
+    profileLinkHandled=true;
+    const profile=state.profiles.find(item=>String(item.id)===requestedProfile&&isCompute(item));
+    if(!profile){notice('form-notice','链接中的设备已不可用，请重新选择设备。',true);return;}
+    $('profile').value=String(profile.id);applyProfileSelection();$('new-task').open=true;
+  }
+  $('profile').addEventListener('change',()=>{profileLinkHandled=true;applyProfileSelection();});
   $('connection-mode').addEventListener('change',()=>{$('profile').value='';$('ssh-alias').value='';connectionMode();invalidateCheck();showProfileGuidance();});
   for(const id of ['backend','branch','ssh-alias','ssh-host','ssh-user','ssh-port','identity-file','jump-alias','remote-workspace','model-paths'])$(id).addEventListener('input',invalidateCheck);
   $('branch').addEventListener('input',()=>{state.branchEdited=true;$('monitor-link').href=monitorUrl($('branch').value);});
@@ -887,9 +897,11 @@ Grep</textarea><small class="hint">SSH 命令可显式配置 Bash(ssh *)。未�
       const capabilities = await request('/api/capabilities');
       state.readOnly = capabilities.read_only === true;renderSshSync();
       $('access-shares-link').hidden=capabilities.access_shares!==true;
+      $('devices-link').hidden=capabilities.devices!==true;
       $('shared-access-mode').hidden=capabilities.shared_access!==true;
       $('share-logout').hidden=capabilities.shared_access!==true;
       if (capabilities.multi_project) projectId = projectId || capabilities.project_id;
+      $('devices-link').href=projectUrl('/devices');
       if (!params.get('branch') && !state.branchEdited && capabilities.default_branch) $('branch').value = capabilities.default_branch;
       renderBranchOptions();
       if ((capabilities.project_label || capabilities.label)) {
@@ -912,7 +924,7 @@ Grep</textarea><small class="hint">SSH 命令可显式配置 Bash(ssh *)。未�
         $('project-select').addEventListener('change', () => { const url=new URL('/sessions',location.href);url.searchParams.set('project',$('project-select').value);location.assign(url.href); });
       }
     } catch (error) { notice('global-notice',error.message,true); }
-    configureTaskMode();if(!state.readOnly)loadBranchOptions();await refresh();if(!state.readOnly)$('new-task').open=location.hash==='#new-task'||!(state.sessions.length||state.deletedSessions.length);
+    configureTaskMode();if(!state.readOnly)loadBranchOptions();await refresh();if(!state.readOnly)$('new-task').open=!!requestedProfile||location.hash==='#new-task'||!(state.sessions.length||state.deletedSessions.length);
     try{const settings=await request('/api/agent-settings');renderProviderSettings(settings.settings||settings);}
     catch(_){$('agent-provider').querySelector('option[value="claude"]').disabled=true;}
     try{const settings=await request('/api/agent-settings?provider=flagscale');renderFlagscaleSettings(settings.settings||settings);}

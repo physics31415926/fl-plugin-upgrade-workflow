@@ -231,3 +231,24 @@ python scripts/flflow.py serve --config workflow.json --host 127.0.0.1 --port 87
 以明确的目标 tag 和完整 commit 为准。截至 2026-09-24，仓库主线的[测试依赖指向 vLLM 0.24.0](https://raw.githubusercontent.com/flagos-ai/vllm-plugin-FL/main/pyproject.toml)；本机已有的 setup 技能仍写 0.13.0，部分 worker 文件头写 0.19.0，均不能单独作为当前兼容版本的依据。真实 preflight 还应记录每台 GPU 机器实际安装的 vLLM/fork、PyTorch、FlagGems、驱动和模型版本。
 
 SGLang 与 vLLM 使用相同的 backend CI 判定：只汇总关联 PR 提交上该 backend 的测试，不受其他 backend、通知或整体 workflow 结论影响。没有该 backend 的测试保持未知，取消或失败不算通过；旧提交的验收记录不覆盖新提交 CI。PR checks 超过一页时继续读取，避免漏掉目标设备测试。SGLang 的 feat(backend) 升级/运行时适配标题、以设备名称开头的升级描述以及 MThreads/MUSA 别名均支持自动发现。
+
+## 设备资源与 jms-top
+
+本机或有效分享打开 `/devices?project=vllm`（SGLang 改为 `project=sglang`）。设备来自现有 SSH 同步和手工机器档案，跳板机、开发机不作为计算设备采集。可按设备名称、backend 和状态筛选，点设备查看每张卡的利用率、显存及进程；“新建任务”会预选对应设备。
+
+页面自动刷新默认启用，后台采集有限并发，完整一轮通常比页面状态轮询更慢。正在采集时显示进度；切到其他页面或暂停自动刷新后，不再自动提交新采集。每次 SSH 仅执行固定的管理工具和系统计数器读取，不安装包、不启动模型、不杀进程，也不会调用可选模型接口或发送飞书消息。
+
+| 状态 | 含义 |
+| --- | --- |
+| 空闲 | 加速器信号确认空闲，节点负载符合条件 |
+| 部分可用 | 部分卡空闲，或卡空闲但节点负载偏高 |
+| 忙碌 | 进程、显存或计算使用达到占用条件 |
+| 显存残留 | 高显存占用但未观测到对应进程 / 计算信号 |
+| 未知 / 已过期 | 工具不支持、输出不完整或数据过旧，不能视为空闲 |
+| 离线 | 当前 SSH 连接不可用，页面显示可处理的连接原因 |
+
+集成覆盖 jms-top 的 NVIDIA、Ascend、Kunlunxin、MetaX、Enflame、Moore Threads、Tsingmicro、T-Head、iluvatar 和 Hygon 解析。无法识别的设备（包括上游尚无解析器的 Sunrise）保持未知，不凭 SSH 名称宣称硬件空闲。Ascend / Tsingmicro 的芯片与板卡编号同时保留；显示的可用设备数量按管理工具的设备单位计数。
+
+接口仅接受保存的设备 ID，不能传入任意命令、地址或密钥路径。遇到主机密钥未信任或认证失败时，在本机终端核对已保存 SSH 别名后重试；监控不会自动跳过主机校验。CPU 利用率需两次计数器采样，首次为空是正常现象。
+
+上游来源：[lvyufeng/jms-top](https://github.com/lvyufeng/jms-top)，Apache-2.0；固定提交及集成调整见 `fl_dashboard/vendor/jms_top/NOTICE`。

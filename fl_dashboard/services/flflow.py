@@ -737,6 +737,9 @@ def make_server(engine: Engine | None, host: str, port: int, monitor: object | N
         state_path = Path(state_root) / "ssh-config-sync.json" if state_root else None
         ssh_syncs[project.id] = SSHProfileSync(config.get("ssh_import_config"), state_path)
 
+    from fl_dashboard.resources.fleet import DeviceFleet
+    device_fleet = DeviceFleet(registry, ssh_syncs)
+
     class Handler(BaseHTTPRequestHandler):
         def _json(self, status: int, body: dict) -> None:
             data = json.dumps(body, indent=2).encode("utf-8")
@@ -884,9 +887,24 @@ def make_server(engine: Engine | None, host: str, port: int, monitor: object | N
                 self._json(200, {"read_only": False, "sessions": sessions is not None,
                                  "refresh": monitor is not None, "workflow": engine is not None,
                                  "access_shares": access_shares is not None, "shared_access": False,
+                                 "devices": sessions is not None,
                                  "project_id": project.id, "label": project.label, "multi_project": registry.multi_project,
                                  "engine": project.engine_name, "default_branch": project.default_branch,
                                  "adaptation_tasks": project.native_tasks is not None or sessions is not None})
+                return
+            if target.path == "/api/devices":
+                if sessions is None:
+                    self._json(503, {"error": "Device profiles are not configured for this project"})
+                    return
+                try:
+                    query = parse_qs(target.query, keep_blank_values=True)
+                    if set(query) - {"project"} or any(len(values) != 1 for values in query.values()):
+                        raise ValueError("Invalid device status query")
+                    self._json(200, device_fleet.snapshot(project.id))
+                except ValueError as exc:
+                    self._json(400, {"error": str(exc)})
+                except Exception:
+                    self._json(503, {"error": "Device status is temporarily unavailable"})
                 return
             if target.path in ("/api/codex-sessions", "/api/codex-health"):
                 if sessions is None:
@@ -1009,8 +1027,9 @@ def make_server(engine: Engine | None, host: str, port: int, monitor: object | N
                 except (KeyError, IndexError, ValueError):
                     self._json(400, {"error": "Invalid platform, attempt, or tail"})
                 return
-            if target.path in ("/", "/index.html", "/monitor", "/monitor.html", "/workflow", "/workflow.html", "/sessions", "/sessions.html"):
-                filename = ("sessions.html" if target.path in ("/sessions", "/sessions.html") else
+            if target.path in ("/", "/index.html", "/monitor", "/monitor.html", "/workflow", "/workflow.html", "/sessions", "/sessions.html", "/devices", "/devices.html"):
+                filename = ("devices.html" if target.path in ("/devices", "/devices.html") else
+                            "sessions.html" if target.path in ("/sessions", "/sessions.html") else
                             "workflow.html" if target.path in ("/workflow", "/workflow.html") else
                             "overview.html" if registry.multi_project and target.path in ("/", "/index.html") else "index.html")
                 path = TEMPLATES / filename
@@ -1046,6 +1065,25 @@ def make_server(engine: Engine | None, host: str, port: int, monitor: object | N
                 body = json.loads(self.rfile.read(length) or b"{}")
                 if not isinstance(body, dict):
                     raise WorkflowError("Request body must be a JSON object")
+                if target == "/api/devices/refresh":
+                    if sessions is None:
+                        self._json(503, {"error": "Device profiles are not configured for this project"})
+                        return
+                    query = parse_qs(parsed.query, keep_blank_values=True)
+                    if set(query) - {"project"} or any(len(values) != 1 for values in query.values()):
+                        raise WorkflowError("Invalid device refresh query")
+                    if set(body) - {"profile_id"}:
+                        raise WorkflowError("Device refresh accepts only a saved profile ID")
+                    profile_id = body.get("profile_id")
+                    if "profile_id" in body and (not isinstance(profile_id, str) or not profile_id or len(profile_id) > 128):
+                        raise WorkflowError("Invalid device profile ID")
+                    try:
+                        self._json(202, device_fleet.refresh(project.id, profile_id=profile_id))
+                    except ValueError as exc:
+                        self._json(400, {"error": str(exc)})
+                    except Exception:
+                        self._json(503, {"error": "Device collection is temporarily unavailable"})
+                    return
                 revoke_share = re.fullmatch(r"/api/access-shares/([0-9a-f]{32})/revoke", target)
                 if target == "/api/access-shares" or revoke_share:
                     if access_shares is None:
@@ -1154,7 +1192,12 @@ def make_server(engine: Engine | None, host: str, port: int, monitor: object | N
             except Exception as exc:
                 self._json(HTTPStatus.INTERNAL_SERVER_ERROR, {"error": f"Request failed: {exc}"})
 
-    return ThreadingHTTPServer((host, port), Handler)
+    class DashboardServer(ThreadingHTTPServer):
+        def server_close(self):
+            device_fleet.close()
+            super().server_close()
+
+    return DashboardServer((host, port), Handler)
 
 
 def serve(engine: Engine | None, host: str, port: int, monitor: object | None = None,

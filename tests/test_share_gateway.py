@@ -100,6 +100,16 @@ class GatewayTests(unittest.TestCase):
         self.assertEqual(self.request("/api/codex-sessions", method="POST", body={})[0], 405)
         self.assertEqual(self.calls, [])
 
+    def test_device_monitoring_requires_authorized_share(self):
+        for path in ("/devices", "/devices.html", "/api/devices?project=vllm"):
+            self.assertEqual(404, self.request(path)[0])
+        self.assertEqual(405, self.request("/api/devices/refresh", method="POST", body={})[0])
+        self.assertEqual([], self.calls)
+        for path in ("/devices", "/api/devices?project=vllm"):
+            self.assertEqual(200, self.request(path, token=self.created["token"])[0])
+        self.assertEqual(200, self.request("/api/devices/refresh?project=vllm", method="POST", body={"profile_id": "ssh-test"}, token=self.created["token"])[0])
+        self.assertEqual("/api/devices/refresh?project=vllm", self.calls[-1][1])
+
     def test_login_cookie_is_secure_and_token_is_never_in_response_body(self):
         status, headers, data = self.login()
         self.assertEqual(status, 200)

@@ -48,7 +48,7 @@
 </head>
 <body>
 <div class="shell">
-  <header class="topbar"><div class="brand"><span class="mark" aria-hidden="true">FL</span><span>适配工作台</span></div><div class="top-status"><a id="access-shares-link" href="/access-shares" hidden>访问分享</a><span class="mode-badge" id="access-mode" hidden>局域网只读</span><span class="sync" id="sync" role="status" aria-live="polite">正在连接监控服务…</span></div></header>
+  <header class="topbar"><div class="brand"><span class="mark" aria-hidden="true">FL</span><span>适配工作台</span></div><div class="top-status"><a id="devices-link" href="/devices" hidden>设备资源</a><a id="access-shares-link" href="/access-shares" hidden>访问分享</a><span class="mode-badge" id="access-mode" hidden>局域网只读</span><span class="sync" id="sync" role="status" aria-live="polite">正在连接监控服务…</span></div></header>
   <main>
     <div class="intro"><div><h1>多项目适配进展</h1><p>vLLM-Plugin-FL 与 SGLang-Plugin-FL</p></div><div class="intro-note">选择仓库和分支，查看适配进展。<br>点击验收结果可查看测试明细。</div></div>
     <div id="error" class="error" role="alert" hidden></div>
@@ -249,7 +249,7 @@
   async function update(){
     if(loading)return;loading=true;const generations=new Map([...cards].map(([id,card])=>[id,card.generation]));try{const data=await request(appUrl('api/projects-status'));for(const entry of data.projects||[]){const card=cards.get(entry.id);if(!card||card.busy||card.generation!==generations.get(entry.id))continue;if(card.branch!==card.project.default_branch){await loadCard(card);continue;}if(entry.status){renderSnapshot(card,entry.status);renderTasks(card,entry.adaptation_tasks||entry.sessions);}if(entry.error)showError(card,entry.error);} $('sync').textContent='已连接 · 页面读取于 '+new Date().toLocaleTimeString('zh-CN',{hour12:false});$('error').hidden=true;}catch(error){$('sync').textContent='连接中断 · 正在等待重试';$('error').textContent=error.message+'；已有采集结果保留。';$('error').hidden=false;}finally{loading=false;}
   }
-  async function loadAccessNavigation(){try{const capabilities=await request(appUrl('api/capabilities'));$('access-shares-link').hidden=capabilities.access_shares!==true;if(capabilities.shared_access===true){$('access-mode').textContent='分享管理权限';$('access-mode').hidden=false;}}catch(_){$('access-shares-link').hidden=true;}}
+  async function loadAccessNavigation(){try{const capabilities=await request(appUrl('api/capabilities'));$('access-shares-link').hidden=capabilities.access_shares!==true;$('devices-link').hidden=capabilities.devices!==true;if(capabilities.shared_access===true){$('access-mode').textContent='分享管理权限';$('access-mode').hidden=false;}}catch(_){$('access-shares-link').hidden=true;}}
   async function initialize(){try{const data=await request(appUrl('api/projects'));readOnly=data.read_only===true;$('access-mode').hidden=!readOnly;loadAccessNavigation();$('projects').replaceChildren();for(const project of data.projects||[]){const card=makeCard(project);cards.set(project.id,card);$('projects').append(card.root);}if(!cards.size)throw new Error('尚未配置监控仓库');if(readOnly)$('footnote').textContent='团队只读看板每 15 秒读取状态，后台定期重新采集。可分别刷新各个仓库；原生子任务状态只读展示；机器配置、任务控制与原始私有存档由维护者在本机管理。';await update();setInterval(()=>{if(!document.hidden)update();},15000);document.addEventListener('visibilitychange',()=>{if(!document.hidden)update();});}catch(error){$('error').textContent=error.message;$('error').hidden=false;$('sync').textContent='监控服务需要处理';}}
   window.addEventListener('resize',scheduleAlignment);
   if(document.fonts)document.fonts.ready.then(scheduleAlignment);

@@ -1,0 +1,25 @@
+jms-top monitoring core
+Source: https://github.com/lvyufeng/jms-top
+Upstream commit: 40a92c2149c8ab473c4a992cf0df0cbca409b259
+Author: lvyufeng
+License: Apache-2.0 (upstream license notice is retained in LICENSE).
+
+The files cpu.py, families.py, model.py, probe.py and scan.py are copied without
+source changes from this commit. TUI, authentication, inventory discovery,
+notifications and AI integration are not included.
+
+FL dashboard integration changes live in fl_dashboard/resources/telemetry.py:
+- Use existing dashboard SSH profiles instead of separate JumpServer credentials.
+- Correct timeout shell assignment, require timeout, and cap the entire probe.
+- Correct node uptime ordering and CPU idle+iowait fields in the generated probe.
+- Reject every unsuccessful summary query, preserve MetaX/Enflame process query status,
+  require positive process evidence, and mark every truncated vendor table unknown.
+- Treat ambiguous memory capacity and unassigned Hygon queues conservatively.
+- Omit login/top-process collection and command-line reads; Hygon uses comm.
+- Add completion checking and reject incomplete, malformed or stalled availability.
+- Bound and sanitize UI fields, preserve chip/board counts, and compute CPU deltas.
+- Repair Ascend board/process ownership from explicit NPU numbers in repeated headers.
+- Do not infer free accelerator capacity when no supported tool answers.
+
+Parser test snippets in tests/test_device_telemetry.py are minimized and anonymized
+adaptations of upstream parser fixtures, under the same Apache-2.0 license.

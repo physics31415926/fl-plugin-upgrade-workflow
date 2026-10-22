@@ -19,7 +19,8 @@ MAX_BODY = 1_000_000
 MAX_RESPONSE = 16 * 1024 * 1024
 GET_ROUTES = frozenset({
     "/", "/index.html", "/monitor", "/monitor.html", "/workflow", "/workflow.html",
-    "/sessions", "/sessions.html", "/api/projects", "/api/projects-status",
+    "/sessions", "/sessions.html", "/devices", "/devices.html", "/api/devices",
+    "/api/projects", "/api/projects-status",
     "/api/capabilities", "/api/agent-settings", "/api/agent-providers",
     "/api/adaptation-tasks", "/api/codex-sessions", "/api/codex-health",
     "/api/branches", "/api/branch-status", "/api/acceptance-record",
@@ -27,7 +28,7 @@ GET_ROUTES = frozenset({
 })
 POST_ROUTES = frozenset({
     "/api/agent-settings", "/api/codex-machines/sync-ssh", "/api/codex-machines",
-    "/api/codex-machines/check", "/api/codex-sessions", "/api/branch-refresh",
+    "/api/codex-machines/check", "/api/codex-sessions", "/api/branch-refresh", "/api/devices/refresh",
     "/api/start", "/api/retry", "/api/retry-failed", "/api/pause", "/api/resume", "/api/cancel",
 })
 
