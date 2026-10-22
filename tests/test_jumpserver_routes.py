@@ -5,6 +5,7 @@ from http.client import HTTPConnection
 import json
 from pathlib import Path
 from types import SimpleNamespace
+import tempfile
 import threading
 import unittest
 from unittest.mock import Mock, patch
@@ -256,7 +257,7 @@ class JumpServerRouteTests(unittest.TestCase):
         self.sync.synchronize.assert_not_called()
 
     def test_only_authenticated_single_owner_requests_preserve_raw_profiles(self):
-        token_path = "D:/Codex/work/explicit-dummy-owner-token.json"
+        token_path = str(Path(tempfile.gettempdir()) / "explicit-dummy-owner-token.json")
         monitor = SimpleNamespace(config={"sessions_owner_token_file": token_path})
         server = self.make_server(sessions=self.sessions, monitor=monitor)
         self.owner_token.assert_called_once_with(token_path)
@@ -291,7 +292,8 @@ class JumpServerRouteTests(unittest.TestCase):
             worker.join(3)
 
     def test_owner_header_does_not_bypass_aggregate_controller_authorization(self):
-        monitor = SimpleNamespace(config={"sessions_owner_token_file": "D:/Codex/work/explicit-dummy-owner-token.json"})
+        token_path = str(Path(tempfile.gettempdir()) / "explicit-dummy-owner-token.json")
+        monitor = SimpleNamespace(config={"sessions_owner_token_file": token_path})
         registry = ProjectRegistry([ProjectContext("vllm", "vLLM", monitor=monitor, sessions=self.sessions),
                                     ProjectContext("sglang", "SGLang")])
         server = self.make_server(registry=registry)
@@ -317,7 +319,7 @@ class JumpServerRouteTests(unittest.TestCase):
             worker.join(3)
 
     def test_resource_state_paths_isolate_single_owner_and_multi_project_controller(self):
-        base = Path("D:/Codex/work/explicit-test-resource-state")
+        base = Path(tempfile.gettempdir()) / "explicit-test-resource-state"
         monitor = SimpleNamespace(config={"sessions_dir": str(base / "sessions"),
                                           "resource_state_dir": str(base / "resources")})
         single = self.make_server(sessions=self.sessions, monitor=monitor)
