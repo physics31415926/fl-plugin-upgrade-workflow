@@ -12,7 +12,7 @@ SAMPLES = {
     'nvidia': '##NVIDIA\n0, NVIDIA A100, 0, 4, 40960, 30, 60, 00000000:01:00.0\nfl-dashboard-process-ok:nvidia',
     'ascend': '##ASCEND\n+------------------------------------------------------------------------------------------------+\n| npu-smi 25.5.0                   Version: 25.5.0                                               |\n+---------------------------+---------------+----------------------------------------------------+\n| NPU   Name                | Health        | Power(W)    Temp(C)           Hugepages-Usage(page)|\n| Chip  Phy-ID              | Bus-Id        | AICore(%)   Memory-Usage(MB)  HBM-Usage(MB)        |\n+===========================+===============+====================================================+\n| 0     Ascend910           | OK            | 168.7       53                0    / 0             |\n| 0     0                   | 0000:01:00.0  | 0           0    / 0          3179 / 65536         |\n+------------------------------------------------------------------------------------------------+\n| 0     Ascend910           | OK            | -           52                0    / 0             |\n| 1     1                   | 0000:01:00.0  | 0           0    / 0          2891 / 65536         |\nProcesses:\nNo running processes found',
     'kunlunxin': '##KUNLUNXIN\nWed Oct 21 19:07:46 2026       \n+-----------------------------------------------------------------------------+\n| XPU-SMI               Driver Version: 5.0.21.43    XPU-RT Version: 5.0.21   |\n|-------------------------------+----------------------+----------------------+\n| XPU  Name        Persistence-M| Bus-Id        Disp.A | Volatile Uncorr. ECC |\n| Fan  Temp  Perf  Pwr:Usage/Cap|         Memory-Usage | XPU-Util  Compute M. |\n|                               |             L3-Usage |            SR-IOV M. |\n|===============================+======================+======================|\n|   0  P800 OAM           N/A   | 00000000:01:00.0 N/A |                    0 |\n| N/A   36C  N/A    102W / 400W |    164MiB / 98304MiB |    100%      Default |\nProcesses:\nNo running processes found',
-    'metax': '##METAX-WIDE\nGPU#0  MXC550  0000:01:00.0\n    Memory\n        vis_vram total                            : 67108864 KB\n        vis_vram used                             : 47663812 KB\n        vis_vram usage                            : 71 %\n        vram total                                : 67108864 KB\n        vram used                                 : 47663812 KB\n        vram usage                                : 71 %\nProcess:\nfl-dashboard-process-ok:metax',
+    'metax': '##METAX-WIDE\nGPU#0  MXC550  0000:01:00.0\n    Memory\n        vis_vram total                            : 67108864 KB\n        vis_vram used                             : 47663812 KB\n        vis_vram usage                            : 71 %\n        GPU                                      : 0 %\n        vram total                                : 67108864 KB\n        vram used                                 : 47663812 KB\n        vram usage                                : 71 %\nProcess:\nfl-dashboard-process-ok:metax',
     'enflame': '##ENFLAME\n-------------------------------------------------------------------------------\n--------------------- Enflame System Management Interface ---------------------\n--------- Enflame Tech, All Rights Reserved. 2024-2026 Copyright (C) ----------\n-------------------------------------------------------------------------------\n                                                                               \n+2000-01-01, 00:00:00 UTC-----------------------------------------------------+\n| EFSMI: 1.9.10                Driver Ver: 1.9.10                             |\n+-----------------------------+-------------------+---------------------------+\n| DEV    NAME                 | Boot FW VER       | BUS-ID      ECC           |\n| TEMP   Lpm   Pwr(Usage/Cap) | Mem      GCU Virt | DUsed       SN            |\n|=============================================================================|\n| 0      ZIXIAOC200           | 35.6.5            | 00:23:00.0  Enable        |\n| 51℃    LP0      132W / 300W | 42976MiB  Disable | 0%          REDACTED-SERIAL |\n*Dev Pid DevMem SysMem Command\n0 N/A N/A N/A no process running on\nfl-dashboard-process-ok:enflame',
     'mthreads': '##MTHREADS\nWed Oct 21 19:07:54 2026\n---------------------------------------------------------------------\n    mthreads-gmi:2.3.2           Driver Version:3.3.5-server\n---------------------------------------------------------------------\nID   Name                 |PCIe                |%GPU  Mem             \n     Device Type   Perf   |Pcie Lane Width     |Temp  MPC Capable     \n                                               |      ECC Mode        \n+-------------------------------------------------------------------+\n0    MTT S5000            |0000:01:00.0    |0%    0MiB(81920MiB)\nProcesses:\nNo running processes found',
     'tsingmicro': '##TSINGMICRO\n##TSINGMICRO\nThu Oct 22 05:09:53 2026\n+----------------------------------------------------------------------------------------------+\n| SMI V0.29842.5.01                          Chip count: 32                                    |\n|--------------------------+-------------------------------------------------------------------|\n|  Card  Name              | Chip    Bus-Id      Temp   Pwr-Usage      Mem-Usage      NPU-Util |\n|==========================+===================================================================|\n|  0    TX8110-256-00      |  0    0000:01:00.0   45C   68W / 200W   58997M / 65536M     0%    |\n|                          |-------------------------------------------------------------------|\n|                          |  1    0000:01:00.0   44C   64W / 200W   59427M / 65536M     0%    |\n|                          |-------------------------------------------------------------------|\n|                          |  2    0000:01:00.0   45C   63W / 200W   59427M / 65536M     0%    |\n|                          |-------------------------------------------------------------------|\n|                          |  3    0000:01:00.0   45C   64W / 200W   59427M / 65536M     0%    |\nProcesses:\nNo running processes found',
@@ -155,13 +155,51 @@ class DeviceTelemetryTests(unittest.TestCase):
         self.assertNotIn("private-value", json.dumps(result))
         self.assertNotIn("cmdline", result["procs"][0])
 
+    def test_an_unrelated_failed_vendor_tool_does_not_invalidate_real_cards(self):
+        raw = reply(SAMPLES["metax"], system=True).replace(COMPLETE, "##STALLED:nvidia:12s\n" + COMPLETE)
+        host, _ = parse_telemetry("fixture", raw)
+        self.assertTrue(host["collection_complete"])
+        self.assertEqual(host["backend"], "metax")
+        self.assertEqual(host["accel"]["busy"], 1)
+        self.assertEqual(host["accel"]["unknown"], 0)
+        own = raw.replace("##STALLED:nvidia:12s", "##STALLED:metax:query-failed")
+        host, _ = parse_telemetry("fixture", own)
+        self.assertFalse(host["collection_complete"])
+        self.assertEqual(host["accel"]["unknown"], 1)
+
+    def test_other_vendor_process_tables_cannot_prove_selected_cards_free(self):
+        for family in ("ascend", "mthreads", "iluvatar", "thead"):
+            own = SAMPLES[family].replace("Processes:", "").replace("No running processes found", "")
+            other = "NVIDIA" if family == "iluvatar" else "ILUVATAR"
+            host, _ = parse_telemetry("fixture", reply(own + "\n##" + other + "\nProcesses:\nNo running processes found"))
+            self.assertEqual(host["accel"]["free"], 0, family)
+        own = SAMPLES["thead"].replace("Processes:", "").replace("No running processes found", "")
+        foreign_table = "\n##ILUVATAR\n| Processes: |\n| PPU GI CI PID Type Process name PPU Memory |\n| 0 N/A N/A 4242 C worker 2MiB |\n+--------+"
+        host, _ = parse_telemetry("fixture", reply(own + foreign_table))
+        self.assertEqual(host["accel"]["unknown"], 1)
+        self.assertEqual(host["accel"]["cards"][0]["procs"], [])
+
+    def test_sunrise_timeout_names_the_actual_tool_and_never_advertises_capacity(self):
+        host, _ = parse_telemetry("fixture", reply("##SUNRISE\n##STALLED:sunrise:tool-timeout", system=True))
+        self.assertEqual(host["backend"], "sunrise")
+        self.assertIn("pt_smi", host["error"])
+        self.assertFalse(host["collection_complete"])
+        self.assertEqual(host["accel"]["free"], 0)
+        self.assertIn('timeout -k 1s 6s "$P"', probe_script())
+
+    def test_complete_but_unknown_readings_are_fresh_and_explain_missing_evidence(self):
+        host, _ = parse_telemetry("fixture", reply(SAMPLES["nvidia"].replace("fl-dashboard-process-ok:nvidia", "")))
+        self.assertTrue(host["collection_complete"])
+        self.assertEqual(host["verdict"], "unknown")
+        self.assertIn("进程", host["accel"]["cards"][0]["reason"])
+
     def test_fixed_probe_is_read_only_bounded_and_cpu_layout_is_correct(self):
         script = probe_script()
-        self.assertIn("timeout 28s bash", script)
-        self.assertIn("T='timeout 12'", script)
+        self.assertIn("timeout -k 1s 28s bash", script)
+        self.assertIn("T='timeout -k 1s 12'", script)
         self.assertIn("$8+$9, $5+$6", script)
         self.assertLess(script.index("cut -d. -f1 /proc/uptime"), script.index("awk '/^cpu /"))
-        for forbidden in ("/cmdline", "##TOP", "##WHO", "T=timeout ", "head -", "--showproductname", "-eq 124", "curl ", "wget ", "kill ", "tmux "):
+        for forbidden in ("/cmdline", "##TOP", "##WHO", "T=timeout ", "head -", "--showproductname", "[ $? -eq 124 ]", "[ $rc -eq 124 ]", "curl ", "wget ", "kill ", "tmux "):
             self.assertNotIn(forbidden, script)
         for required in ("/proc/$p/comm", "bounded_head()", "##STALLED:generic:output-truncated",
                          "##STALLED:metax:process-query-failed", "##STALLED:enflame:process-query-failed",

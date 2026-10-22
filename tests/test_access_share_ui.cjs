@@ -46,6 +46,18 @@ test('creating a share reveals it once and only explicit copy sends it to clipbo
   await ui.node('copy-share').listeners.click();assert.equal(ui.copies.length,1);
 });
 
+test('permanent links send an explicit lifetime and show revocable permanence',async()=>{
+  const share={id:'permanent-id',label:'Ongoing',active:true,permanent:true,expires_at:null};
+  const ui=manager((url,options)=>options.method==='POST'?{share,url:sharedUrl}:{available:true,public_url:publicUrl,shares:[share]});await settle();
+  ui.node('share-duration').value='permanent';ui.node('share-label').value='Ongoing';await ui.node('share-form').listeners.submit({preventDefault(){}});
+  assert.deepEqual(JSON.parse(ui.calls[1].options.body),{label:'Ongoing',permanent:true});
+  assert.match(ui.node('fresh-expires').textContent,/永久有效.*撤销/);
+  const row=ui.node('share-list').children[0];assert.equal(row.children[2].textContent,'永久有效（可撤销）');
+  assert.equal(row.children[2].children.length,0);assert.equal(row.children[3].children[0].textContent,'撤销权限');
+  assert.match(template('access_shares.html'),/<option value="24" selected>/);
+  assert.match(template('access_shares.html'),/<option value="permanent">永久有效（可撤销）<\/option>/);
+});
+
 test('share creation rejects a link outside configured HTTPS origin without showing token',async()=>{
   const ui=manager((url,options)=>options.method==='POST'?{share:{id:'bad'},url:'https://unrelated.example/access#token='+token}:{available:true,public_url:publicUrl,shares:[]});await settle();
   await ui.node('share-form').listeners.submit({preventDefault(){}});assert.equal(ui.node('share-url').value,'');assert.match(ui.node('notice').textContent,/分享链接无效/);assert.equal(ui.copies.length,0);

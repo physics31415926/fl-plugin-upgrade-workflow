@@ -11,8 +11,11 @@ import math
 import re
 
 from fl_dashboard.monitoring.branch_monitor import LABELS
+from fl_dashboard.resources.metax import adapt_metax_probe, metax_metrics_complete
+from fl_dashboard.resources.vendor_metrics import augment_vendor_metrics, probe_vendor_metrics, vendor_sections
+from fl_dashboard.resources.sunrise import probe_sunrise
 from fl_dashboard.vendor.jms_top.cpu import CpuSample
-from fl_dashboard.vendor.jms_top.families import Card, Proc, _NPU_CARD, _NPU_CHIP, _NPU_PROC
+from fl_dashboard.vendor.jms_top.families import AccelResult, Card, Proc, _NPU_CARD, _NPU_CHIP, _NPU_PROC
 from fl_dashboard.vendor.jms_top.model import HostView
 from fl_dashboard.vendor.jms_top.probe import ProbeLimits, build_script, SENTINEL
 from fl_dashboard.vendor.jms_top.scan import parse_reply, reached
@@ -24,12 +27,13 @@ FAMILY_BACKENDS = {
     "nvidia": "cuda", "ascend": "ascend", "kunlunxin": "kunlunxin",
     "metax": "metax", "enflame": "enflame", "mthreads": "musa",
     "tsingmicro": "tsingmicro", "thead": "thead", "iluvatar": "corex", "hygon": "hygon",
+    "sunrise": "sunrise",
 }
 
 
 def probe_script() -> str:
     """A fixed Linux shell probe: counters only, no installation or job control."""
-    body = build_script(limits=ProbeLimits(top_n=0, tile_n=260, half=90))
+    body = adapt_metax_probe(build_script(limits=ProbeLimits(top_n=0, tile_n=260, half=90)))
     # Upstream emits `T=timeout 6`, which executes a command named `6`.
     # T is a fixed command and integer here; word splitting yields timeout argv.
     body = body.replace("T=timeout 6;", "T='timeout 6';")
@@ -44,6 +48,12 @@ def probe_script() -> str:
     body = body.replace(process_query, 'apps=$(' + process_query + '); prc=$?; '
                         'if [ "$prc" -eq 0 ]; then printf "%s\\n" "$apps"; echo "fl-dashboard-process-ok:nvidia"; '
                         "else echo '##STALLED:nvidia:process-query-failed'; fi")
+    # MetaX emits its process proof before choosing the output layout. Give it
+    # its own vendor section so proof cannot leak into a previous tool's section.
+    metax_start = 'if [ -n "$M" ]; then u='
+    if body.count(metax_start) != 1:
+        raise RuntimeError("Unexpected MetaX probe header")
+    body = body.replace(metax_start, 'if [ -n "$M" ]; then echo "##METAX-PROBE"; u=')
     # Preserve command status before a pipe hides vendor query failures.
     for var, flag in (("u", "--show-usage"), ("m", "--show-memory")):
         query = var + '=$($T "$M" ' + flag + ' 2>/dev/null);'
@@ -81,11 +91,13 @@ def probe_script() -> str:
     cpu_line = next(i for i, line in enumerate(lines) if line.startswith("awk '/^cpu /"))
     uptime_line = next(i for i, line in enumerate(lines) if line.startswith("cut -d. -f1 /proc/uptime"))
     lines[cpu_line], lines[uptime_line] = lines[uptime_line], lines[cpu_line]
-    body = bounded_head + "\n".join(lines)
+    body = bounded_head + "\n".join(lines) + "\n" + probe_vendor_metrics() + probe_sunrise()
+    # A wedged SMI may ignore TERM; stop only our bounded query after one second.
+    body = body.replace("timeout 6", "timeout -k 1s 6").replace("timeout 12", "timeout -k 1s 12")
     return (f"echo '{SENTINEL}'\n"
             "command -v timeout >/dev/null 2>&1 || { echo '##STALLED:generic:no-timeout'; "
             f"echo '{COMPLETE}'; exit 0; }}\n"
-            "timeout 28s bash <<'FL_DASHBOARD_FIXED_PROBE'\nexport LC_ALL=C\n" + body +
+            "timeout -k 1s 28s bash <<'FL_DASHBOARD_FIXED_PROBE'\nexport LC_ALL=C\n" + body +
             "\nFL_DASHBOARD_FIXED_PROBE\nrc=$?\n"
             "[ \"$rc\" -eq 0 ] || echo '##STALLED:generic:probe-timeout-or-failure'\n"
             f"echo '{COMPLETE}'\n")
@@ -130,15 +142,22 @@ def _card(card, *, invalidated=False):
         total = None
     if used is not None and total is not None and used > total:
         used = None
+    unmapped_processes = card.procs_shared and not card.procs_known
     safe = Card(index=card.index, name=_text(card.name), util=util,
                 mem_used=used, mem_total=total, health=_text(card.health, 40) or None,
-                procs=card.procs, procs_known=card.procs_known)
+                procs=[] if unmapped_processes else card.procs, procs_known=card.procs_known)
     busy = None if invalidated or invalid else safe.busy
     if busy is False and (not card.procs_known or (used is not None and used > 0 and total is None)):
         # In particular efsmi can report positive memory with no capacity. Its
         # zero utilisation does not establish that this allocation is available.
         busy = None
-    residual = False if busy is None else safe.residual
+    residual = False if busy is None or unmapped_processes else safe.residual
+    reason = None
+    if busy is None:
+        reason = ("本轮采集不完整，等待有效读数" if invalidated else
+                  "设备返回了无效指标" if invalid else
+                  "未取得该卡的完整进程信息" if not card.procs_known else
+                  "显存或利用率指标不完整")
     procs = [{"pid": p.pid if type(p.pid) is int and 0 < p.pid < 2**32 else None,
               "user": _text(p.user, 64) or None, "name": _process_name(p.name),
               "mem_mib": _number(p.mem_mib)} for p in card.procs[:80]]
@@ -147,6 +166,7 @@ def _card(card, *, invalidated=False):
             "temp": _number(card.temp, minimum=-50, maximum=250), "power": _number(card.power, maximum=100000),
             "health": safe.health, "busy": busy, "residual": residual,
             "state": "unknown" if busy is None else "residual" if residual else "busy" if busy else "free",
+            "reason": reason,
             "procs": procs, "procs_shared": bool(card.procs_shared)}
 
 
@@ -177,6 +197,7 @@ def _ascend_owners(view, raw):
 def _process_evidence(view, raw):
     """The pinned parsers default procs_known=True; verify evidence explicitly."""
     family = view.family
+    raw = vendor_sections(raw, family)
     if family == "nvidia":
         known = "fl-dashboard-process-ok:nvidia" in raw
     elif family == "metax":
@@ -206,14 +227,27 @@ def parse_telemetry(alias: str, raw: str, previous_sample: CpuSample | None = No
         try:
             parse_reply(view, raw)
             if view.family == "ascend":
-                _ascend_owners(view, raw)
+                _ascend_owners(view, vendor_sections(raw, "ascend"))
             _process_evidence(view, raw)
+            augment_vendor_metrics(view, raw)
+            if not view.cards and re.search(r"(?m)^##SUNRISE$", raw):
+                view.accel = AccelResult(family="sunrise", label=LABELS["sunrise"])
         except (ValueError, TypeError, IndexError, OverflowError, AttributeError):
             malformed = True
             view = HostView(name=alias, reachable=True)
-    stalled = bool(re.search(r"(?m)^##STALLED(?::|\s*$)", raw)) if valid_size else False
-    invalidated = not complete or malformed or stalled or not valid_size or len(view.cards) > MAX_CARDS
+    failures = re.findall(r"(?m)^##STALLED(?::([a-z]+):([^\r\n]*))?\s*$", raw) if valid_size else []
+    # A leftover NVIDIA executable may fail on a healthy MetaX host. Only the
+    # family that actually returned cards, or a whole-probe failure, invalidates it.
+    relevant = [(family or "generic", detail) for family, detail in failures
+                if not family or family == "generic" or family == view.family or view.family == "generic"]
+    stalled = bool(relevant)
+    metax_incomplete = view.family == "metax" and not metax_metrics_complete(view, vendor_sections(raw, "metax"))
+    invalidated = not complete or malformed or stalled or not valid_size or len(view.cards) > MAX_CARDS or metax_incomplete
     cards = [_card(card, invalidated=invalidated) for card in view.cards[:MAX_CARDS]]
+    if not invalidated and view.family == "hygon" and any(card.procs_shared for card in view.cards):
+        for card in cards:
+            if card["busy"] is None:
+                card["reason"] = "hy-smi 返回了未归属到具体卡的显存进程"
     total = len(cards)
     free = sum(c["busy"] is False for c in cards)
     busy = sum(c["busy"] is True for c in cards)
@@ -231,11 +265,26 @@ def parse_telemetry(alias: str, raw: str, previous_sample: CpuSample | None = No
     if not reachable:
         verdict, error = "down", "SSH 未返回有效的设备采集响应"
     elif invalidated:
-        verdict, error = "unknown", "采集超时、输出不完整或数据无效；空闲容量暂不可用"
+        if view.family == "sunrise" and any(detail == "tool-timeout" for _, detail in relevant):
+            error = "pt_smi 查询超时，请检查曦望驱动与运行时状态"
+        elif any("output-truncated" in detail for _, detail in relevant):
+            error = "SMI 输出超过采集上限，本轮数据不完整"
+        elif metax_incomplete:
+            error = "mx-smi 返回的卡数或指标不完整"
+        elif stalled:
+            error = "厂商 SMI 查询失败或超时，本轮可用性待确认"
+        elif malformed:
+            error = "SMI 输出格式无法完整解析"
+        else:
+            error = "采集输出不完整，本轮可用性待确认"
+        verdict = "unknown"
     elif not total:
-        verdict, error = "unknown", "未读取到受支持的加速器数据，请检查驱动及厂商工具"
+        verdict, error = "unknown", ("pt_smi 未返回可解析的设备指标，请检查工具版本与驱动"
+                                    if view.family == "sunrise" else
+                                    "未读取到加速器指标，请检查厂商 SMI 工具及驱动")
     elif unknown == total:
-        verdict, error = "unknown", "设备指标不完整，不能确认空闲容量"
+        verdict, error = "unknown", ("efsmi 未返回完整的显存或进程指标" if family == "enflame" else
+                                    "未取得完整的逐卡进程或资源指标，无法确认空闲容量")
     elif free == total:
         verdict = "free" if node["load_per_cpu"] is not None and node["load_per_cpu"] < 0.75 else "partial"
     elif free:
@@ -246,8 +295,9 @@ def parse_telemetry(alias: str, raw: str, previous_sample: CpuSample | None = No
         verdict = "busy"
     physical = len({c["card"] for c in cards if c["card"] is not None}) or total
     return {"host": _text(alias, 120), "reachable": reachable, "verdict": verdict,
-            "error": error, "updated_at": datetime.now(timezone.utc).isoformat(),
-            "backend": backend, "backend_label": LABELS.get(backend, "无法识别"), "supported": backend is not None,
+            "error": error, "collection_complete": bool(reachable and not invalidated),
+            "updated_at": datetime.now(timezone.utc).isoformat(),
+            "backend": backend, "backend_label": LABELS.get(backend, "无法识别"), "supported": backend is not None and family != "sunrise",
             "accel": {"family": family, "label": LABELS.get(backend, "无法识别"),
                       "card_name": _text(view.card_name), "total": total, "free": free, "busy": busy,
                       "unknown": unknown, "residual": residual, "physical_cards": physical,

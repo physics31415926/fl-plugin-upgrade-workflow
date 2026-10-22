@@ -69,6 +69,64 @@ class AccessShareStoreTests(unittest.TestCase):
         self.assertEqual(self.store.list()[0]["status"], "expired")
         self.assertFalse(self.store.list()[0]["active"])
 
+    def test_permanent_share_remains_valid_until_explicit_revocation(self):
+        created = self.store.create("Permanent collaborator", permanent=True)
+        self.assertTrue(created["permanent"])
+        self.assertIsNone(created["expires_at"])
+        self.assertNotIn(created["token"], self.path.read_text(encoding="utf-8"))
+        reader = AccessShareStore(self.path)
+        self.clock_mock.return_value = NOW + timedelta(days=3650)
+        self.assertTrue(reader.validate(created["token"])["active"])
+        self.assertEqual(reader.list()[0]["status"], "active")
+        self.store.revoke(created["id"])
+        self.assertIsNone(reader.validate(created["token"]))
+        self.assertEqual(reader.list()[0]["status"], "revoked")
+
+    def test_legacy_expiring_record_keeps_its_expiration(self):
+        created = self.store.create(expires_in_hours=1)
+        old = json.loads(self.path.read_text(encoding="utf-8"))
+        old["shares"][0].pop("permanent")
+        self.path.write_text(json.dumps(old), encoding="utf-8")
+        self.assertFalse(self.store.validate(created["token"])["permanent"])
+        self.store.create("New permanent grant", permanent=True)
+        self.clock_mock.return_value = NOW + timedelta(hours=1)
+        self.assertIsNone(self.store.validate(created["token"]))
+        self.assertEqual(self.store.list()[-1]["status"], "expired")
+
+    def test_only_an_explicit_valid_permanent_flag_can_remove_expiry(self):
+        created = self.store.create()
+        original = json.loads(self.path.read_text(encoding="utf-8"))
+        for flag, expires in ((None, None), (False, None), (1, None), ("true", None),
+                              (True, created["expires_at"])):
+            with self.subTest(flag=flag, expires=expires):
+                changed = json.loads(json.dumps(original))
+                record = changed["shares"][0]
+                record["expires_at"] = expires
+                if flag is None:
+                    record.pop("permanent")
+                else:
+                    record["permanent"] = flag
+                self.path.write_text(json.dumps(changed), encoding="utf-8")
+                self.assertIsNone(self.store.validate(created["token"]))
+                with self.assertRaises(ValueError):
+                    self.store.list()
+        self.path.write_text(json.dumps(original), encoding="utf-8")
+        for options in ({"permanent": "true"}, {"permanent": 1}, {"permanent": None},
+                        {"permanent": True, "expires_in_hours": 24},
+                        {"permanent": True, "expires_in_hours": None}):
+            with self.subTest(options=options), self.assertRaises(ValueError):
+                self.store.create(**options)
+        self.assertEqual(len(self.store.list()), 1)
+
+    def test_permanent_grants_count_toward_active_limit(self):
+        with patch("fl_dashboard.services.access_shares.MAX_ACTIVE_SHARES", 1):
+            created = self.store.create(permanent=True)
+            self.clock_mock.return_value = NOW + timedelta(days=3650)
+            with self.assertRaises(ValueError):
+                self.store.create()
+            self.store.revoke(created["id"])
+            self.assertTrue(self.store.create()["active"])
+
     def test_bad_tokens_never_authorize(self):
         created = self.store.create()
         changed = ("A" if created["token"][0] != "A" else "B") + created["token"][1:]

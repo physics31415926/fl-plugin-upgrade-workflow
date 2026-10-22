@@ -28,6 +28,8 @@ from fl_dashboard.paths import TEMPLATES
 from fl_dashboard.monitoring.branch_monitor import BranchMonitor
 from fl_dashboard.projects.project_registry import ProjectRegistry
 from fl_dashboard.monitoring.pr_acceptance import public_acceptance_tables, detail_text
+from fl_dashboard.services.public_devices import read_public_devices
+from fl_dashboard.services.share_gateway import validate_control_url
 
 
 CAPABILITIES = {"read_only": True, "sessions": False, "refresh": True, "evidence": False}
@@ -371,8 +373,9 @@ def make_server(cache, host="127.0.0.1", port=8765, *, username="viewer", passwo
     prefix = "/" + base_path.strip("/") if base_path.strip("/") else ""
     if prefix and not re.fullmatch(r"(?:/[A-Za-z0-9_-]+)+", prefix):
         raise ValueError("base_path must contain simple URL path segments")
-    if (access_shares is None) != (control_url is None):
-        raise ValueError("Access sharing requires both the share store and control URL")
+    if access_shares is not None and control_url is None:
+        raise ValueError("Access sharing requires the control URL")
+    device_control_url = validate_control_url(control_url) if control_url is not None else None
     gateway = None
     if access_shares is not None:
         from fl_dashboard.services.share_gateway import ShareGateway
@@ -380,6 +383,7 @@ def make_server(cache, host="127.0.0.1", port=8765, *, username="viewer", passwo
     registry = cache.registry if isinstance(cache, ProjectSnapshotCache) else ProjectRegistry.single(monitor=cache.monitor)
     page = Path(index_path or (TEMPLATES / ("overview.html" if registry.multi_project else "index.html"))).read_bytes()
     monitor_page = Path(index_path or (TEMPLATES / "index.html")).read_bytes()
+    devices_page = (TEMPLATES / "devices.html").read_bytes()
     def public_projects():
         return {"projects": [_fields(project.metadata(read_only=True),
                                      {"id", "label", "engine", "default_branch", "github_repo", "sessions", "workflow"})
@@ -420,6 +424,8 @@ def make_server(cache, host="127.0.0.1", port=8765, *, username="viewer", passwo
 
         def _send(self, code, value, *, content_type="application/json; charset=utf-8", challenge=False, cookie=None):
             data = value if isinstance(value, bytes) else json.dumps(value, ensure_ascii=False).encode("utf-8")
+            if getattr(self, "_expired_share_cookie", False) and cookie is None:
+                cookie = gateway._clear_cookie()
             self.send_response(code)
             self.send_header("Content-Type", content_type)
             self.send_header("Content-Length", str(len(data)))
@@ -467,6 +473,23 @@ def make_server(cache, host="127.0.0.1", port=8765, *, username="viewer", passwo
                 self._send(200, page, content_type="text/html; charset=utf-8")
             elif path in ("/monitor", "/monitor.html"):
                 self._send(200, monitor_page, content_type="text/html; charset=utf-8")
+            elif path in ("/devices", "/devices.html"):
+                self._send(200, devices_page, content_type="text/html; charset=utf-8")
+            elif path == "/api/devices":
+                try:
+                    query = parse_qs(parsed.query, keep_blank_values=True, max_num_fields=2)
+                    if set(query) - {"project"} or any(len(values) != 1 for values in query.values()):
+                        raise ValueError("Invalid device query")
+                except ValueError:
+                    self._send(400, {"error": "Invalid device query"})
+                    return
+                if device_control_url is None:
+                    self._send(503, {"error": "设备资源服务尚未配置，请联系管理员。"})
+                    return
+                try:
+                    self._send(200, read_public_devices(device_control_url, project.id))
+                except Exception:
+                    self._send(503, {"error": "设备资源暂不可用，请稍后重试。"})
             elif path == "/api/projects":
                 self._send(200, public_projects())
             elif path == "/api/projects-status":
@@ -486,6 +509,7 @@ def make_server(cache, host="127.0.0.1", port=8765, *, username="viewer", passwo
                 self._send(200, {**CAPABILITIES, "refresh": project.monitor is not None, "default_branch": _scalar(project.default_branch),
                                  "project_id": _scalar(project.id), "label": _scalar(project.label), "multi_project": registry.multi_project,
                                  "engine": _scalar(project.engine_name), "workflow": False,
+                                 "devices": device_control_url is not None, "devices_refresh": False, "jumpserver_settings": False,
                                  "adaptation_tasks": project.native_tasks is not None or project.readonly_sessions is not None})
             elif path == "/healthz":
                 self._send(200, {"ok": True, "read_only": True})
@@ -585,7 +609,7 @@ def main(argv=None):
     parser.add_argument("--base-path", default="")
     parser.add_argument("--access-shares-file", type=Path, help="Local share-grant store (hashes only), shared with the control server")
     parser.add_argument("--public-url", help="HTTPS origin used in access-sharing links")
-    parser.add_argument("--control-url", help="Literal loopback HTTP origin of the existing control server")
+    parser.add_argument("--control-url", help="Literal loopback HTTP origin; enables public cached device views, and is also used by access sharing")
     parser.add_argument("--tls-cert", type=Path, help="PEM certificate chain for direct HTTPS")
     parser.add_argument("--tls-key", type=Path, help="Unencrypted PEM private key for direct HTTPS")
     parser.add_argument("--refresh-interval", type=int, default=60, help="Git/API refresh seconds; 0 disables background fetching")
@@ -596,8 +620,10 @@ def main(argv=None):
     access_shares = None
     try:
         supplied = (args.access_shares_file is not None, args.public_url is not None, args.control_url is not None)
-        if any(supplied) and not all(supplied):
-            raise ValueError("--access-shares-file, --public-url and --control-url must be provided together")
+        if any(supplied[:2]) and not all(supplied):
+            raise ValueError("Access sharing needs --access-shares-file, --public-url and --control-url together")
+        if args.control_url is not None:
+            validate_control_url(args.control_url)
         tls_context = load_tls_context(args.tls_cert, args.tls_key)
         if all(supplied):
             from fl_dashboard.services.access_shares import AccessShareStore

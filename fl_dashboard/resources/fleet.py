@@ -468,7 +468,11 @@ class DeviceFleet:
             except Exception:
                 entry = self._failure("设备统计已中断，请稍后重试。", self._monotonic())
             previous = self._cache.get(key)
-            if entry["error"] and previous and previous["view"].get("accel", {}).get("total"):
+            # A complete probe can still have unknown availability (for example,
+            # a vendor omits per-card process ownership). Keep its fresh metrics
+            # and timestamp; only failed/incomplete collection retains history.
+            if (entry["error"] and not entry["view"].get("collection_complete", False)
+                    and previous and previous["view"].get("accel", {}).get("total")):
                 entry["view"]["accel"] = copy.deepcopy(previous["view"]["accel"])
                 entry["view"]["node"] = copy.deepcopy(previous["view"].get("node", {}))
                 entry["observed"] = previous["observed"]

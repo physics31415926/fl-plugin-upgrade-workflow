@@ -126,6 +126,49 @@ class DeviceFleetTests(unittest.TestCase):
         self.assertEqual(1, result["summary"]["total_cards"])
         self.assertIn("超时", result["hosts"][0]["error"])
 
+    def test_complete_unknown_samples_keep_fresh_metrics_and_sampling_time(self):
+        current = view()
+        current.update(verdict="unknown", error="设备指标不完整，不能确认空闲容量", collection_complete=True)
+        current["accel"].update(free=0, unknown=1)
+        current["accel"]["cards"][0].update(state="unknown", busy=None, mem_used=12)
+        self.parse.side_effect = lambda *args: (copy.deepcopy(current), None)
+        self.collector.refresh("vllm")
+        first = self.wait()["hosts"][0]
+        self.assertFalse(first["stale"])
+        self.now += 6
+        current["node"]["mem_pct"] = 42
+        current["accel"]["cards"][0]["mem_used"] = 24
+        self.collector.refresh("vllm")
+        second = self.wait()["hosts"][0]
+        self.assertEqual("unknown", second["verdict"])
+        self.assertFalse(second["stale"])
+        self.assertEqual(0, second["age_seconds"])
+        self.assertNotEqual(first["updated_at"], second["updated_at"])
+        self.assertEqual(42, second["node"]["mem_pct"])
+        self.assertEqual(24, second["accel"]["cards"][0]["mem_used"])
+        self.assertEqual(0, second["accel"]["free"])
+
+    def test_complete_unknown_replaces_old_free_reading_without_reusing_capacity(self):
+        self.collector.refresh("vllm")
+        first = self.wait()["hosts"][0]
+        self.assertEqual(1, first["accel"]["free"])
+        current = view()
+        current.update(verdict="unknown", error="无法确认进程归属", collection_complete=True)
+        current["accel"].update(free=0, unknown=1)
+        current["accel"]["cards"][0].update(state="unknown", busy=None, mem_used=50)
+        current["node"]["mem_pct"] = 35
+        self.parse.side_effect = lambda *args: (copy.deepcopy(current), None)
+        self.now += 6
+        self.collector.refresh("vllm")
+        result = self.wait()
+        second = result["hosts"][0]
+        self.assertFalse(second["stale"])
+        self.assertNotEqual(first["updated_at"], second["updated_at"])
+        self.assertEqual(35, second["node"]["mem_pct"])
+        self.assertEqual(50, second["accel"]["cards"][0]["mem_used"])
+        self.assertEqual(0, result["summary"]["free_cards"])
+        self.assertEqual(1, result["summary"]["unknown_cards"])
+
     def test_include_fingerprint_change_does_not_reuse_old_host_data(self):
         self.collector.refresh("vllm")
         self.wait()

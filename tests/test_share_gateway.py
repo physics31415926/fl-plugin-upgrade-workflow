@@ -33,6 +33,12 @@ class GatewayTests(unittest.TestCase):
             def do_GET(self):
                 outer.calls.append((self.command, self.path, dict(self.headers), None))
                 body = {"read_only": False, "sessions": True, "access_shares": True, "jumpserver_settings": True, "private": "task details"}
+                if self.path.startswith("/api/devices?"):
+                    body = {"project_id": "vllm", "hosts": [{"id": "ssh-demo", "label": "Demo", "backend": "cuda",
+                            "ssh_connection": {"password": "private-password"}, "source_root": "private-path",
+                            "accel": {"cards": [{"index": 0, "busy": True, "procs": [{"pid": 123, "name": "python",
+                                      "cmdline": "private-command-line", "token": "private-token"}]}]}, "node": {"cpu_pct": 20}}],
+                            "agent_settings": {"key": "private-key"}, "refreshing": False}
                 self.send_response(outer.upstream_status)
                 self.send_header("Content-Type", "application/json")
                 if 300 <= outer.upstream_status < 400:
@@ -100,15 +106,39 @@ class GatewayTests(unittest.TestCase):
         self.assertEqual(self.request("/api/codex-sessions", method="POST", body={})[0], 405)
         self.assertEqual(self.calls, [])
 
-    def test_device_monitoring_requires_authorized_share(self):
+    def test_device_views_are_public_but_collection_still_requires_an_authorized_share(self):
         for path in ("/devices", "/devices.html", "/api/devices?project=vllm"):
-            self.assertEqual(404, self.request(path)[0])
+            self.assertEqual(200, self.request(path)[0])
+        status, _, raw = self.request("/api/devices?project=vllm", headers={"Authorization": "Bearer private-token", "X-FL-Session-Owner": "private-owner"})
+        body = json.loads(raw)
+        self.assertTrue(body["read_only"])
+        self.assertEqual(body["hosts"][0]["accel"]["cards"][0]["procs"][0]["pid"], 123)
+        for secret in ("private-password", "private-path", "private-command-line", "private-token", "private-key"):
+            self.assertNotIn(secret, raw.decode())
+        for call in self.calls:
+            self.assertEqual(call[:2], ("GET", "/api/devices?project=vllm"))
+            for header in ("Authorization", "Cookie", "X-FL-Session-Owner"):
+                self.assertNotIn(header, call[2])
         self.assertEqual(405, self.request("/api/devices/refresh", method="POST", body={})[0])
-        self.assertEqual([], self.calls)
-        for path in ("/devices", "/api/devices?project=vllm"):
-            self.assertEqual(200, self.request(path, token=self.created["token"])[0])
         self.assertEqual(200, self.request("/api/devices/refresh?project=vllm", method="POST", body={"profile_id": "ssh-test"}, token=self.created["token"])[0])
         self.assertEqual("/api/devices/refresh?project=vllm", self.calls[-1][1])
+
+    def test_invalid_device_query_does_not_reach_the_controller(self):
+        for path in ("/api/devices?project=vllm&project=vllm", "/api/devices?project=missing", "/api/devices?host=arbitrary", "/api/devices?project=vllm&path=/api/agent-settings"):
+            self.assertEqual(400, self.request(path)[0])
+        self.assertEqual([], self.calls)
+
+    def test_expired_share_cookie_downgrades_public_device_reads_only(self):
+        self.store.revoke(self.created["id"])
+        for path in ("/devices", "/api/devices?project=vllm", "/api/capabilities", "/api/projects"):
+            status, headers, raw = self.request(path, token=self.created["token"])
+            self.assertEqual(200, status)
+            self.assertIn("Max-Age=0", headers["Set-Cookie"])
+            if path.startswith("/api/devices") or path == "/api/capabilities":
+                self.assertTrue(json.loads(raw)["read_only"])
+        self.assertEqual(401, self.request("/api/devices/refresh", method="POST", body={}, token=self.created["token"])[0])
+        self.assertEqual(401, self.request("/api/codex-sessions", token=self.created["token"])[0])
+        self.assertTrue(all(call[0] == "GET" and call[1].startswith("/api/devices?") for call in self.calls))
 
     def test_jumpserver_settings_are_never_forwarded_even_with_full_access_share(self):
         token = self.created["token"]

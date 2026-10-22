@@ -141,6 +141,7 @@ def prepare(args, *, app_root: Path = APP_ROOT) -> tuple[list[str], str]:
         host, port = args.lan_ip, args.lan_port or 8767
         command = [str(python), "-u", "-B", str(app_root / "scripts" / "share_server.py"),
                    "--projects-config", str(projects), "--host", host, "--port", str(port),
+                   "--control-url", f"http://127.0.0.1:{configured_port}",
                    "--anonymous-lan", "--tls-cert", str(args.tls_cert.resolve()),
                    "--tls-key", str(args.tls_key.resolve()), "--refresh-interval", str(refresh)]
         scheme = "https"
@@ -164,7 +165,7 @@ def prepare(args, *, app_root: Path = APP_ROOT) -> tuple[list[str], str]:
         store = Path(args.access_shares_file or saved_sharing.get("--access-shares-file") or app_root / "runs" / "access-sharing" / "grants.json").resolve()
         command += ["--access-shares-file", str(store)]
         if args.lan:
-            command += ["--public-url", public_url, "--control-url", f"http://127.0.0.1:{configured_port}"]
+            command += ["--public-url", public_url]
         else:
             command += ["--share-public-url", public_url]
     elif args.share_public_url is not None or args.access_shares_file is not None:

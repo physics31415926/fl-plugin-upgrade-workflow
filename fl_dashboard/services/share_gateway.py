@@ -15,8 +15,10 @@ from fl_dashboard.paths import TEMPLATES
 from fl_dashboard.services.access_shares import validate_public_url
 
 COOKIE_NAME = "__Host-fl_access"
+PERMANENT_COOKIE_SECONDS = 24 * 60 * 60
 MAX_BODY = 1_000_000
 MAX_RESPONSE = 16 * 1024 * 1024
+PUBLIC_DEVICE_GET_ROUTES = frozenset({"/devices", "/devices.html", "/api/devices", "/api/capabilities", "/api/projects"})
 GET_ROUTES = frozenset({
     "/", "/index.html", "/monitor", "/monitor.html", "/workflow", "/workflow.html",
     "/sessions", "/sessions.html", "/devices", "/devices.html", "/api/devices",
@@ -157,25 +159,38 @@ class ShareGateway:
                 if grant is None:
                     handler._send(401, {"error": "Sharing link is invalid, expired or revoked"}, cookie=self._clear_cookie())
                     return True
-                expires = datetime.fromisoformat(grant["expires_at"].replace("Z", "+00:00"))
-                seconds = int((expires - datetime.now(timezone.utc)).total_seconds())
+                if grant.get("permanent") is True:
+                    # Keep browser persistence bounded; the revocable link can be
+                    # opened again after this cookie expires.
+                    seconds = PERMANENT_COOKIE_SECONDS
+                else:
+                    expires = datetime.fromisoformat(grant["expires_at"].replace("Z", "+00:00"))
+                    seconds = int((expires - datetime.now(timezone.utc)).total_seconds())
                 if seconds <= 0:
                     handler._send(401, {"error": "Sharing link has expired"}, cookie=self._clear_cookie())
                     return True
                 cookie = (f"{COOKIE_NAME}={body['token']}; Path=/; Max-Age={seconds}; "
                           "Secure; HttpOnly; SameSite=Strict")
-                handler._send(200, {"read_only": False, "expires_at": grant["expires_at"]}, cookie=cookie)
+                handler._send(200, {"read_only": False, "expires_at": grant["expires_at"],
+                                    "permanent": grant.get("permanent", False)}, cookie=cookie)
             except (ValueError, TypeError, UnicodeError):
                 handler._send(400, {"error": "Invalid sharing request"})
             except Exception:
                 handler._send(503, {"error": "Sharing access is temporarily unavailable"})
             return True
+        public_read = handler.command in ("GET", "HEAD") and path in PUBLIC_DEVICE_GET_ROUTES
         try:
             grant = self.store.validate(token) if token else None
         except Exception:
+            if public_read:
+                handler._expired_share_cookie = True
+                return False
             handler._send(503, {"error": "Sharing access is temporarily unavailable"})
             return True
         if grant is None:
+            if public_read:
+                handler._expired_share_cookie = True
+                return False
             handler._send(401, {"error": "Sharing access has expired or been revoked"}, cookie=self._clear_cookie())
             return True
         read = handler.command in ("GET", "HEAD")

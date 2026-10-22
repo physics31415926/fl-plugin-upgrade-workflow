@@ -1195,7 +1195,7 @@ def make_server(engine: Engine | None, host: str, port: int, monitor: object | N
                             result = access_shares.revoke(revoke_share[1])
                             self._json(200, {"share": result})
                         else:
-                            if set(body) - {"label", "expires_in_hours"}:
+                            if set(body) - {"label", "expires_in_hours", "permanent"}:
                                 raise ValueError("Invalid access sharing fields")
                             result = access_shares.create(**body)
                             metadata = {key: value for key, value in result.items() if key not in ("token", "url")}
@@ -1338,7 +1338,7 @@ def main(argv: list[str] | None = None) -> int:
             cmd.add_argument("--port", type=int, default=8765)
             cmd.add_argument("--monitor-config", type=Path)
             cmd.add_argument("--projects-config", type=Path)
-            cmd.add_argument("--access-shares-file", type=Path, help="Private local store for expiring management links")
+            cmd.add_argument("--access-shares-file", type=Path, help="Private local store for revocable management links")
             cmd.add_argument("--share-public-url", help="HTTPS root URL of the LAN service")
     args = parser.parse_args(argv)
     access_shares = None

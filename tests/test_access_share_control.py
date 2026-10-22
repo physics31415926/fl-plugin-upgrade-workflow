@@ -60,6 +60,21 @@ class AccessShareControlTests(unittest.TestCase):
         self.assertFalse(revoked["share"]["active"])
         self.assertIsNone(reader.validate(token))
 
+    def test_permanent_share_is_explicit_and_revocable_through_the_api(self):
+        code, created = self.request("/api/access-shares", {"label": "Ongoing work", "permanent": True})
+        self.assertEqual(201, code)
+        self.assertTrue(created["share"]["permanent"])
+        self.assertIsNone(created["share"]["expires_at"])
+        token = created["url"].split("#token=", 1)[1]
+        self.assertIsNotNone(self.store.validate(token))
+        code, revoked = self.request("/api/access-shares/" + created["share"]["id"] + "/revoke", {})
+        self.assertEqual(200, code)
+        self.assertFalse(revoked["share"]["active"])
+        self.assertIsNone(self.store.validate(token))
+        for body in ({"permanent": "true"}, {"permanent": 1},
+                     {"permanent": True, "expires_in_hours": 24}):
+            self.assertEqual(400, self.request("/api/access-shares", body)[0])
+
     def test_untrusted_host_origin_and_cross_site_cannot_mint_links(self):
         for headers in ({"Host": "attacker.example"}, {"Origin": "https://attacker.example"},
                         {"Sec-Fetch-Site": "cross-site"}):

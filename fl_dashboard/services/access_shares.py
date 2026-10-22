@@ -1,4 +1,4 @@
-"""Expiring capability links for an explicitly shared dashboard workspace.
+"""Revocable capability links for an explicitly shared dashboard workspace.
 
 Only the loopback control service writes this store. The LAN gateway reads it
 on every authenticated request so revocation does not depend on a cache or
@@ -23,6 +23,7 @@ import uuid
 MAX_ACTIVE_SHARES = 100
 MAX_STORED_SHARES = 200
 MAX_STORE_BYTES = 256 * 1024
+_DEFAULT_EXPIRY = object()
 _TOKEN = re.compile(r"[A-Za-z0-9_-]{43}\Z")
 _ID = re.compile(r"[a-f0-9]{32}\Z")
 _HASH = re.compile(r"[a-f0-9]{64}\Z")
@@ -115,16 +116,24 @@ class AccessShareStore:
                 raise ValueError("Invalid share store")
             ids, hashes = set(), set()
             for share in data["shares"]:
-                if (not isinstance(share, dict) or set(share) != {
-                        "id", "label", "created_at", "expires_at", "revoked_at", "token_hash"}
+                fields = {"id", "label", "created_at", "expires_at", "revoked_at", "token_hash"}
+                if (not isinstance(share, dict) or set(share) not in (fields, fields | {"permanent"})
                         or not isinstance(share.get("id"), str) or not _ID.fullmatch(share["id"])
                         or not isinstance(share.get("token_hash"), str) or not _HASH.fullmatch(share["token_hash"])):
                     raise ValueError("Invalid share record")
                 _label(share["label"])
                 created = _parse_time(share["created_at"])
-                expires = _parse_time(share["expires_at"])
-                if not timedelta(hours=1) <= expires - created <= timedelta(hours=168):
-                    raise ValueError("Invalid share expiry")
+                permanent = share.get("permanent", False)
+                if type(permanent) is not bool:
+                    raise ValueError("Invalid permanent-share flag")
+                if permanent:
+                    if share["expires_at"] is not None:
+                        raise ValueError("Permanent shares cannot have an expiry")
+                else:
+                    # Legacy records without an explicit flag remain expiring.
+                    expires = _parse_time(share["expires_at"])
+                    if not timedelta(hours=1) <= expires - created <= timedelta(hours=168):
+                        raise ValueError("Invalid share expiry")
                 if share["revoked_at"] is not None and _parse_time(share["revoked_at"]) < created:
                     raise ValueError("Invalid share revocation")
                 if share["id"] in ids or share["token_hash"] in hashes:
@@ -160,17 +169,25 @@ class AccessShareStore:
 
     @staticmethod
     def _metadata(share: dict, now: datetime) -> dict:
-        status = "revoked" if share["revoked_at"] else "expired" if _parse_time(share["expires_at"]) <= now else "active"
+        permanent = share.get("permanent", False)
+        expired = not permanent and _parse_time(share["expires_at"]) <= now
+        status = "revoked" if share["revoked_at"] else "expired" if expired else "active"
         return {**{key: share[key] for key in ("id", "label", "created_at", "expires_at", "revoked_at")},
-                "status": status, "active": status == "active"}
+                "permanent": permanent, "status": status, "active": status == "active"}
 
     def list(self) -> list[dict]:
         with self._lock:
             now = _utc_now()
             return [self._metadata(share, now) for share in reversed(self._read())]
 
-    def create(self, label: str = "", expires_in_hours: int = 24) -> dict:
+    def create(self, label: str = "", expires_in_hours=_DEFAULT_EXPIRY, *, permanent: bool = False) -> dict:
         label = _label(label)
+        if type(permanent) is not bool:
+            raise ValueError("永久有效选项必须是布尔值")
+        if permanent and expires_in_hours is not _DEFAULT_EXPIRY:
+            raise ValueError("永久有效与限时有效期不能同时设置")
+        if expires_in_hours is _DEFAULT_EXPIRY:
+            expires_in_hours = 24
         if type(expires_in_hours) is not int or not 1 <= expires_in_hours <= 168:
             raise ValueError("有效期必须是 1 到 168 小时的整数")
         with self._lock:
@@ -191,8 +208,8 @@ class AccessShareStore:
                 shares = kept
             token = secrets.token_urlsafe(32)
             share = {"id": uuid.uuid4().hex, "label": label, "created_at": _format_time(now),
-                     "expires_at": _format_time(now + timedelta(hours=expires_in_hours)),
-                     "revoked_at": None, "token_hash": _token_hash(token)}
+                     "expires_at": None if permanent else _format_time(now + timedelta(hours=expires_in_hours)),
+                     "permanent": permanent, "revoked_at": None, "token_hash": _token_hash(token)}
             self._write([*shares, share])
             result = {**self._metadata(share, now), "token": token}
             if self.public_url:

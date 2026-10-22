@@ -25,7 +25,7 @@
       <p class="description">链接本身就是访问凭证，请只发给需要管理权限的人。保存的 API Key 不会回显；链接到期或撤销后，访问者会恢复为只读权限。</p>
       <form id="share-form" class="form-grid">
         <div><label for="share-label">备注 <span class="muted">（可选）</span></label><input id="share-label" maxlength="80" placeholder="例如：联调同事" autocomplete="off" disabled></div>
-        <div><label for="share-duration">有效期</label><select id="share-duration" disabled><option value="1">1 小时</option><option value="24" selected>24 小时</option><option value="168">7 天</option></select></div>
+        <div><label for="share-duration">有效期</label><select id="share-duration" disabled><option value="1">1 小时</option><option value="24" selected>24 小时</option><option value="168">7 天</option><option value="permanent">永久有效（可撤销）</option></select></div>
         <button id="create-share" class="button primary" type="submit" disabled>创建分享链接</button>
       </form>
       <div id="fresh-share" class="result" hidden>
@@ -56,7 +56,7 @@
   function clearLink(){state.url='';state.shareId='';$('share-url').value='';$('fresh-expires').textContent='';$('fresh-share').hidden=true;}
   function renderShares(shares){
     const fragment=document.createDocumentFragment();
-    for(const share of shares){const row=element('tr'),label=element('td',share.label||'未填写备注'),status=element('span',share.revoked_at?'已撤销':share.active?'有效':'已到期');status.className='status'+(share.active?'':' inactive');const statusCell=element('td');statusCell.append(status);const expires=element('td'),time=element('time',timeText(share.expires_at));time.dateTime=share.expires_at;expires.append(time);const action=element('td');if(share.active){const button=element('button','撤销权限');button.type='button';button.className='button danger';button.setAttribute('aria-label','撤销 '+(share.label||'未填写备注')+' 的管理权限');button.addEventListener('click',()=>revokeShare(share.id,button));action.append(button);}else action.textContent='—';row.append(label,statusCell,expires,action);fragment.append(row);}
+    for(const share of shares){const row=element('tr'),label=element('td',share.label||'未填写备注'),status=element('span',share.revoked_at?'已撤销':share.active?'有效':'已到期');status.className='status'+(share.active?'':' inactive');const statusCell=element('td');statusCell.append(status);const expires=element('td');if(share.permanent===true)expires.textContent='永久有效（可撤销）';else{const time=element('time',timeText(share.expires_at));time.dateTime=share.expires_at;expires.append(time);}const action=element('td');if(share.active){const button=element('button','撤销权限');button.type='button';button.className='button danger';button.setAttribute('aria-label','撤销 '+(share.label||'未填写备注')+' 的管理权限');button.addEventListener('click',()=>revokeShare(share.id,button));action.append(button);}else action.textContent='—';row.append(label,statusCell,expires,action);fragment.append(row);}
     $('share-list').replaceChildren(fragment);$('empty-shares').hidden=shares.length>0;$('empty-shares').textContent='暂无分享链接';
   }
   async function loadShares(){
@@ -66,7 +66,7 @@
   function validShareUrl(value){try{const url=new URL(value),base=new URL(state.publicUrl);return url.protocol==='https:'&&url.origin===base.origin&&!url.username&&!url.password&&!url.search&&url.pathname===base.pathname.replace(/\/$/,'')+'/access'&&/^#token=[A-Za-z0-9_-]{43}$/.test(url.hash);}catch(_){return false;}}
   async function createShare(event){
     event.preventDefault();if(state.busy||!state.available)return;setBusy(true);notice('');clearLink();
-    try{const data=await request('/api/access-shares',{label:$('share-label').value.trim(),expires_in_hours:Number($('share-duration').value)});if(!validShareUrl(data.url))throw new Error('分享链接无效，请刷新列表后重试');state.url=data.url;state.shareId=data.share.id;$('share-url').value=data.url;$('fresh-expires').textContent='有效至 '+timeText(data.share.expires_at);$('fresh-share').hidden=false;$('share-label').value='';notice('链接已创建，请复制给需要管理权限的人。');try{await loadShares();}catch(_){notice('链接已创建，列表暂未更新；请先复制链接，再刷新列表。');}}
+    try{const lifetime=$('share-duration').value==='permanent'?{permanent:true}:{expires_in_hours:Number($('share-duration').value)};const data=await request('/api/access-shares',{label:$('share-label').value.trim(),...lifetime});if(!validShareUrl(data.url))throw new Error('分享链接无效，请刷新列表后重试');state.url=data.url;state.shareId=data.share.id;$('share-url').value=data.url;$('fresh-expires').textContent=data.share.permanent===true?'永久有效，可随时在下方撤销权限':'有效至 '+timeText(data.share.expires_at);$('fresh-share').hidden=false;$('share-label').value='';notice('链接已创建，请复制给需要管理权限的人。');try{await loadShares();}catch(_){notice('链接已创建，列表暂未更新；请先复制链接，再刷新列表。');}}
     catch(error){notice(error.message,true);}finally{setBusy(false);}
   }
   async function copyShare(){if(!state.url)return;try{await navigator.clipboard.writeText(state.url);notice('链接已复制。');}catch(_){$('share-url').focus();$('share-url').select();notice('浏览器未允许复制，已选中链接，请手动复制。');}}
