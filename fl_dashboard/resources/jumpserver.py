@@ -410,7 +410,11 @@ class JumpServerInventory:
             if offset in seen_offsets:
                 raise JumpServerError(INVENTORY_ERROR)
             seen_offsets.add(offset)
-            url = base + "?" + urlencode({"limit": min(100, maximum + 1 - len(result)), "offset": offset})
+            # JumpServer's default count can come from a stale permission-tree
+            # cache. Empty search preserves all assets and uses queryset.count(),
+            # avoiding both incorrect totals and DRF's count-based offset cutoff.
+            url = base + "?" + urlencode({"limit": min(100, maximum + 1 - len(result)),
+                                          "offset": offset, "search": ""})
             status, payload = self._call("GET", url, token)
             if status in (401, 403):
                 raise _Unauthorized(AUTH_ERROR)
@@ -440,8 +444,10 @@ class JumpServerInventory:
                 next_url, origin = urlsplit(urljoin(url, following)), urlsplit(base)
                 if (next_url.scheme, next_url.netloc, next_url.path) != (origin.scheme, origin.netloc, origin.path) or next_url.fragment:
                     raise JumpServerError(INVENTORY_ERROR)
-                query = parse_qs(next_url.query)
-                if set(query) - {"offset", "limit"} or len(query.get("offset", [])) != 1:
+                query = parse_qs(next_url.query, keep_blank_values=True)
+                if set(query) - {"offset", "limit", "search"} or len(query.get("offset", [])) != 1:
+                    raise JumpServerError(INVENTORY_ERROR)
+                if "search" in query and query["search"] != [""]:
                     raise JumpServerError(INVENTORY_ERROR)
                 try:
                     next_offset = int(query["offset"][0])

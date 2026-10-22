@@ -178,6 +178,38 @@ class JumpServerTests(unittest.TestCase):
                 self.assertTrue(value["error"])
                 self.assertEqual(previous, value["assets"])
 
+    def test_empty_search_uses_live_count_instead_of_stale_permission_tree_count(self):
+        for total, cached_count in ((66, 64), (205, 64), (2, 1000), (2, 0), (0, 9)):
+            with self.subTest(total=total, cached_count=cached_count):
+                offsets = []
+                def requester(method, url, **kwargs):
+                    query = parse_qs(urlsplit(url).query, keep_blank_values=True)
+                    self.assertEqual([""], query.get("search"))
+                    offset, limit = int(query["offset"][0]), int(query["limit"][0])
+                    offsets.append(offset)
+                    # Match JumpServer AssetPaginationBase and DRF: absent
+                    # search uses cached tree count, including offset cutoff.
+                    count = total if query.get("search") == [""] else cached_count
+                    rows = [] if count == 0 or offset > count else [asset(i + 1) for i in range(offset, min(offset + limit, total))]
+                    following = f"?limit={limit}&offset={offset + limit}&search=" if offset + limit < count else None
+                    return 200, {"count": count, "next": following, "results": rows}
+                store = self.make(requester)
+                rows = store._pages(self.config, "fixture", "perms/users/my/assets/", 0, MAX_ASSETS, asset_ids=True)
+                self.assertEqual(total, len(rows))
+                self.assertEqual(list(range(0, max(total, 1), 100)), offsets)
+
+    def test_live_pagination_still_rejects_changed_count_and_filtered_next(self):
+        for next_link in ("?offset=1&search=restricted", "?offset=1&search=&search=", "?offset=1&extra="):
+            with self.subTest(next_link=next_link):
+                store = self.make(lambda *args, **kwargs: (200, {"count": 2, "results": [asset()], "next": next_link}))
+                with self.assertRaisesRegex(JumpServerError, INVENTORY_ERROR):
+                    store._pages(self.config, "fixture", "perms/users/my/assets/", 0, MAX_ASSETS, asset_ids=True)
+        pages = iter([{"count": 2, "results": [asset()], "next": "?offset=1&search="},
+                      {"count": 3, "results": [asset(2), asset(3)], "next": None}])
+        store = self.make(lambda *args, **kwargs: (200, next(pages)))
+        with self.assertRaisesRegex(JumpServerError, INVENTORY_ERROR):
+            store._pages(self.config, "fixture", "perms/users/my/assets/", 0, MAX_ASSETS, asset_ids=True)
+
     def test_asset_dedup_conflicts_and_protocols(self):
         self.rows = [asset(), asset(), asset(2, protocols=[{"name": "rdp"}])]
         original = self.store._requester
