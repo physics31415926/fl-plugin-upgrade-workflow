@@ -32,7 +32,7 @@ class GatewayTests(unittest.TestCase):
 
             def do_GET(self):
                 outer.calls.append((self.command, self.path, dict(self.headers), None))
-                body = {"read_only": False, "sessions": True, "access_shares": True, "private": "task details"}
+                body = {"read_only": False, "sessions": True, "access_shares": True, "jumpserver_settings": True, "private": "task details"}
                 self.send_response(outer.upstream_status)
                 self.send_header("Content-Type", "application/json")
                 if 300 <= outer.upstream_status < 400:
@@ -110,6 +110,19 @@ class GatewayTests(unittest.TestCase):
         self.assertEqual(200, self.request("/api/devices/refresh?project=vllm", method="POST", body={"profile_id": "ssh-test"}, token=self.created["token"])[0])
         self.assertEqual("/api/devices/refresh?project=vllm", self.calls[-1][1])
 
+    def test_jumpserver_settings_are_never_forwarded_even_with_full_access_share(self):
+        token = self.created["token"]
+        for path in ("/api/jumpserver", "/api/jumpserver?project=sglang",
+                     "/api/jumpserver/settings", "/api/jumpserver/login",
+                     "/api/jumpserver/refresh", "/api/jumpserver/logout",
+                     "/api/jumpserver/unknown"):
+            with self.subTest(path=path):
+                self.assertEqual(403, self.request(path, token=token)[0])
+                self.assertEqual(403, self.request(path, method="POST", body={}, token=token)[0])
+        self.assertEqual(404, self.request("/api/jumpserver")[0])
+        self.assertEqual(405, self.request("/api/jumpserver/login", method="POST", body={})[0])
+        self.assertEqual([], self.calls)
+
     def test_login_cookie_is_secure_and_token_is_never_in_response_body(self):
         status, headers, data = self.login()
         self.assertEqual(status, 200)
@@ -130,14 +143,15 @@ class GatewayTests(unittest.TestCase):
         self.assertFalse(capabilities["read_only"])
         self.assertTrue(capabilities["shared_access"])
         self.assertFalse(capabilities["access_shares"])
+        self.assertFalse(capabilities["jumpserver_settings"])
         status, _, _ = self.request("/api/codex-sessions?project=sglang", method="POST", body={"label": "fixture"}, token=token,
-            headers={"Authorization": "Bearer explicit_dummy", "X-Forwarded-For": "untrusted"})
+            headers={"Authorization": "Bearer explicit_dummy", "X-Forwarded-For": "untrusted", "X-FL-Session-Owner": "1"})
         self.assertEqual(status, 200)
         method, path, headers, body = self.calls[-1]
         self.assertEqual((method, path, body), ("POST", "/api/codex-sessions?project=sglang", {"label": "fixture"}))
         self.assertEqual(headers["Host"], self.control_url.removeprefix("http://"))
         self.assertEqual(headers["Origin"], self.control_url)
-        for forbidden in ("Cookie", "Authorization", "X-Forwarded-For"):
+        for forbidden in ("Cookie", "Authorization", "X-Forwarded-For", "X-FL-Session-Owner"):
             self.assertNotIn(forbidden, headers)
 
     def test_revocation_and_expiration_are_checked_on_every_request(self):

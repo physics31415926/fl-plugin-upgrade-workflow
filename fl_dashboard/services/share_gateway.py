@@ -220,7 +220,7 @@ class ShareGateway:
                 capabilities = json.loads(data)
                 if not isinstance(capabilities, dict):
                     raise ValueError("Invalid capabilities response")
-                capabilities.update(access_shares=False, shared_access=True)
+                capabilities.update(access_shares=False, shared_access=True, jumpserver_settings=False)
                 data = json.dumps(capabilities, ensure_ascii=False).encode("utf-8")
             handler._send(response.status, data, content_type=content_type)
         except Exception:

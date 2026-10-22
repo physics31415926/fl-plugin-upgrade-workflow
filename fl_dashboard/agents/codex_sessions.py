@@ -347,14 +347,24 @@ class CodexSessionManager:
             return None
         if not isinstance(value, dict):
             raise SessionError("ssh_connection must be an object")
-        if set(value) - {"host", "user", "port", "identity_file", "jump_alias", "jump_host"}:
-            raise SessionError("SSH connection accepts host, user, port, identity_file and jump_alias only; do not send credentials")
+        if set(value) - {"host", "user", "port", "identity_file", "jump_alias", "jump_host", "inherit_ssh_config"}:
+            raise SessionError("SSH connection accepts host, user, port, identity_file, jump_alias and inherit_ssh_config only; do not send credentials")
         host = self._text(value.get("host", ""), "SSH host", 253, True)
         user = self._text(value.get("user", ""), "SSH user", 200, True)
         if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.:-]*", host):
             raise SessionError("Invalid SSH hostname or IP address")
-        if not re.fullmatch(r"[A-Za-z0-9_][A-Za-z0-9_.@+-]*", user):
+        ordinary_user = r"[A-Za-z0-9_][A-Za-z0-9_.@+-]*"
+        if "#" in user:
+            # KoKo direct access has exactly user#account#asset-UUID. It is not
+            # an arbitrary SSH option or an untrusted asset display name.
+            parts = user.split("#")
+            if (len(parts) != 3 or not all(re.fullmatch(ordinary_user, part) for part in parts[:2])
+                    or not re.fullmatch(r"[0-9a-fA-F]{8}(?:-[0-9a-fA-F]{4}){3}-[0-9a-fA-F]{12}", parts[2])):
+                raise SessionError("Invalid JumpServer SSH username; require user#account#asset UUID")
+        elif not re.fullmatch(ordinary_user, user):
             raise SessionError("Invalid SSH username")
+        if "inherit_ssh_config" in value and type(value["inherit_ssh_config"]) is not bool:
+            raise SessionError("inherit_ssh_config must be a boolean")
         port = value.get("port", 22)
         if isinstance(port, bool) or not re.fullmatch(r"[0-9]{1,5}", str(port)) or not 1 <= int(port) <= 65535:
             raise SessionError("SSH port must be between 1 and 65535")
@@ -369,12 +379,19 @@ class CodexSessionManager:
         jump = value.get("jump_alias") or value.get("jump_host") or ""
         if jump:
             jump = self._name(jump, "jump host alias")
-        return {"host": host, "user": user, "port": int(port), "identity_file": identity, "jump_alias": jump}
+        connection = {"host": host, "user": user, "port": int(port), "identity_file": identity, "jump_alias": jump}
+        if "inherit_ssh_config" in value:
+            connection["inherit_ssh_config"] = value["inherit_ssh_config"]
+        return connection
 
     def _write_ssh_config(self, path, alias, connection):
         # The user config is included for existing jump aliases, without reading
         # it or copying any credential. All managed values precede defaults.
-        lines = [f"Host {alias}", f"  HostName {connection['host']}", f"  User {connection['user']}",
+        user = connection["user"]
+        # In ssh_config an unquoted # begins a comment. The validator above
+        # permits no quote or escape characters in a KoKo login.
+        user = '"' + user + '"' if "#" in user else user
+        lines = [f"Host {alias}", f"  HostName {connection['host']}", f"  User {user}",
                  f"  Port {connection['port']}", "  ServerAliveInterval 60", "  ServerAliveCountMax 3"]
         if connection["identity_file"]:
             lines += ['  IdentityFile "' + Path(connection["identity_file"]).as_posix() + '"', "  IdentitiesOnly yes"]
@@ -382,8 +399,10 @@ class CodexSessionManager:
             lines += ["  ProxyJump " + connection["jump_alias"]]
         # A Host block must be reset before Include, or existing alias blocks
         # would inherit the managed host's HostName/User values.
-        lines += ["Host *", "  BatchMode yes", "  StrictHostKeyChecking yes",
-                  'Include "' + (Path.home() / ".ssh" / "config").as_posix() + '"', ""]
+        lines += ["Host *", "  BatchMode yes", "  StrictHostKeyChecking yes"]
+        if connection.get("inherit_ssh_config", True):
+            lines += ['Include "' + (Path.home() / ".ssh" / "config").as_posix() + '"']
+        lines.append("")
         path.parent.mkdir(parents=True, exist_ok=True)
         temporary = path.with_suffix("." + uuid.uuid4().hex + ".tmp")
         try:

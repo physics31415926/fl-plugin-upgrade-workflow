@@ -111,6 +111,13 @@ class RemoteSessionManager:
             self._host, self._port = parsed.hostname, parsed.port
         except ValueError:
             raise ProjectError("sessions_api_url must be a loopback HTTP base URL") from None
+        self._owner_rpc_token = None
+        if "sessions_owner_token_file" in config:
+            from fl_dashboard.services.owner_rpc import owner_rpc_token, OwnerRPCError
+            try:
+                self._owner_rpc_token = owner_rpc_token(config["sessions_owner_token_file"])
+            except OwnerRPCError as exc:
+                raise ProjectError(str(exc)) from None
 
     @staticmethod
     def _fail(message):
@@ -128,6 +135,8 @@ class RemoteSessionManager:
         connection = HTTPConnection(self._host, self._port, timeout=30)
         try:
             headers = {"Content-Type": "application/json"} if body is not None else {}
+            if self._owner_rpc_token is not None:
+                headers["X-FL-Session-Owner"] = self._owner_rpc_token
             encoded = json.dumps(body, ensure_ascii=False).encode("utf-8") if body is not None else None
             connection.request("POST" if body is not None else "GET", path, encoded, headers)
             response = connection.getresponse()

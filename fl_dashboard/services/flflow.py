@@ -738,9 +738,63 @@ def make_server(engine: Engine | None, host: str, port: int, monitor: object | N
         ssh_syncs[project.id] = SSHProfileSync(config.get("ssh_import_config"), state_path)
 
     from fl_dashboard.resources.fleet import DeviceFleet
-    device_fleet = DeviceFleet(registry, ssh_syncs)
+    from fl_dashboard.resources.jumpserver import JumpServerInventory, JumpServerError
+    from fl_dashboard.resources.jumpserver_profiles import JumpServerProfiles
+    inventory_root = next((getattr(item.monitor, "config", {}).get("sessions_dir")
+                           or getattr(item.sessions, "root", None)
+                           for item in registry.projects
+                           if getattr(item.monitor, "config", {}).get("sessions_dir")
+                           or getattr(item.sessions, "root", None)), APP_ROOT / "runs" / "local")
+    configured_root = next((getattr(item.monitor, "config", {}).get("resource_state_dir")
+                            for item in registry.projects
+                            if getattr(item.monitor, "config", {}).get("resource_state_dir")), None)
+    resource_root = Path(configured_root).expanduser() if configured_root else Path(inventory_root) / "device-resources"
+    if not resource_root.is_absolute():
+        resource_root = APP_ROOT / resource_root
+    # The aggregate controller and a standalone task owner must not share source
+    # settings: an owner only persists profiles sent by its trusted controller.
+    resource_root /= "multi-project" if registry.multi_project else "project-" + registry.projects[0].id
+    jumpserver = JumpServerInventory(resource_root / "jumpserver")
+    jumpserver_profiles = JumpServerProfiles(jumpserver)
+    device_fleet = DeviceFleet(registry, ssh_syncs, inventory=jumpserver, profile_source=jumpserver_profiles,
+                               cache_path=resource_root / "device-resource-cache.json")
+
+    # An explicitly configured private credential distinguishes the aggregate
+    # controller from ordinary requests to a standalone task owner.
+    owner_rpc_secret = None
+    owner_config = getattr(registry.projects[0].monitor, "config", {})
+    if not registry.multi_project and owner_config.get("sessions_owner_token_file"):
+        from fl_dashboard.services.owner_rpc import owner_rpc_token
+        owner_rpc_secret = owner_rpc_token(owner_config["sessions_owner_token_file"])
+
+    def machine_source():
+        return "jumpserver" if jumpserver.snapshot()["enabled"] else "ssh_config"
+
+    def active_jumpserver_profile(project, identity):
+        if machine_source() != "jumpserver":
+            if isinstance(identity, str) and identity.startswith("jms-"):
+                raise WorkflowError("该设备来自已停用的 JumpServer，请重新登录并同步后再启动任务。")
+            return
+        profile = next((row for row in jumpserver_profiles.profiles(project.id, project.sessions)
+                        if row.get("id") == identity), None)
+        if profile is None or profile.get("configuration_error"):
+            raise WorkflowError("所选 JumpServer 资产尚未就绪或授权已变化，请刷新机器列表并检查连接配置。")
+
+    def ssh_snapshot(project, result):
+        result = ssh_syncs[project.id].synchronize(project.sessions, result)
+        # Stored JumpServer profiles remain available to old task history only.
+        result["machine_profiles"] = [row for row in result.get("machine_profiles", [])
+                                      if row.get("source") != "jumpserver"]
+        result["machine_source"] = "ssh_config"
+        return result
 
     class Handler(BaseHTTPRequestHandler):
+        def _session_owner_rpc(self):
+            import hmac
+            values = self.headers.get_all("X-FL-Session-Owner", [])
+            return bool(owner_rpc_secret and len(values) == 1 and values[0].isascii()
+                        and hmac.compare_digest(values[0], owner_rpc_secret))
+
         def _json(self, status: int, body: dict) -> None:
             data = json.dumps(body, indent=2).encode("utf-8")
             self.send_response(status)
@@ -887,10 +941,24 @@ def make_server(engine: Engine | None, host: str, port: int, monitor: object | N
                 self._json(200, {"read_only": False, "sessions": sessions is not None,
                                  "refresh": monitor is not None, "workflow": engine is not None,
                                  "access_shares": access_shares is not None, "shared_access": False,
-                                 "devices": sessions is not None,
+                                 "devices": sessions is not None, "machine_source": machine_source(),
+                                 "jumpserver_settings": sessions is not None,
                                  "project_id": project.id, "label": project.label, "multi_project": registry.multi_project,
                                  "engine": project.engine_name, "default_branch": project.default_branch,
                                  "adaptation_tasks": project.native_tasks is not None or sessions is not None})
+                return
+            if target.path == "/api/jumpserver":
+                if sessions is None:
+                    self._json(503, {"error": "本机任务服务尚未配置"})
+                    return
+                query = parse_qs(target.query, keep_blank_values=True)
+                if set(query) - {"project"} or any(len(values) != 1 for values in query.values()):
+                    self._json(400, {"error": "Invalid JumpServer query"})
+                    return
+                try:
+                    self._json(200, jumpserver.snapshot())
+                except Exception:
+                    self._json(503, {"error": "JumpServer 设置暂时不可用"})
                 return
             if target.path == "/api/devices":
                 if sessions is None:
@@ -917,8 +985,16 @@ def make_server(engine: Engine | None, host: str, port: int, monitor: object | N
                         result = sessions.snapshot(compact=True)
                     else:
                         result = sessions.snapshot()
-                    if target.path == "/api/codex-sessions":
-                        result = ssh_syncs[project.id].synchronize(sessions, result)
+                    if target.path == "/api/codex-sessions" and not self._session_owner_rpc():
+                        if machine_source() == "jumpserver":
+                            result["machine_profiles"] = jumpserver_profiles.profiles(project.id, sessions)
+                            result["machine_source"] = "jumpserver"
+                            state = jumpserver.snapshot()
+                            result["ssh_config_sync"] = {"status": "synced" if state["authenticated"] and not state["error"] else "error",
+                                                         "source": "jumpserver", "error": state["error"],
+                                                         "profile_count": len(result["machine_profiles"])}
+                        else:
+                            result = ssh_snapshot(project, result)
                     self._json(200, result)
                 except ValueError as exc:
                     self._json(HTTPStatus.BAD_REQUEST, {"error": str(exc)})
@@ -1065,6 +1141,27 @@ def make_server(engine: Engine | None, host: str, port: int, monitor: object | N
                 body = json.loads(self.rfile.read(length) or b"{}")
                 if not isinstance(body, dict):
                     raise WorkflowError("Request body must be a JSON object")
+                if target in ("/api/jumpserver/settings", "/api/jumpserver/login", "/api/jumpserver/refresh", "/api/jumpserver/logout"):
+                    if sessions is None:
+                        self._json(503, {"error": "本机任务服务尚未配置"})
+                        return
+                    query = parse_qs(parsed.query, keep_blank_values=True)
+                    if set(query) - {"project"} or any(len(values) != 1 for values in query.values()):
+                        raise WorkflowError("Invalid JumpServer query")
+                    if target in ("/api/jumpserver/refresh", "/api/jumpserver/logout") and body:
+                        raise WorkflowError("This JumpServer action does not accept connection fields")
+                    try:
+                        operation = {"/api/jumpserver/settings": lambda: jumpserver.configure(body),
+                                     "/api/jumpserver/login": lambda: jumpserver.login(body),
+                                     "/api/jumpserver/refresh": jumpserver.refresh,
+                                     "/api/jumpserver/logout": jumpserver.logout}[target]
+                        result = operation()
+                        self._json(202 if target == "/api/jumpserver/refresh" else 200, result)
+                    except JumpServerError as exc:
+                        self._json(400, {"error": str(exc)})
+                    except Exception:
+                        self._json(503, {"error": "JumpServer 操作暂时不可用，请稍后重试"})
+                    return
                 if target == "/api/devices/refresh":
                     if sessions is None:
                         self._json(503, {"error": "Device profiles are not configured for this project"})
@@ -1125,7 +1222,9 @@ def make_server(engine: Engine | None, host: str, port: int, monitor: object | N
                         return
                     if body:
                         raise WorkflowError("SSH sync does not accept client paths or connection fields")
-                    result = ssh_syncs[project.id].synchronize(sessions, sessions.snapshot(compact=True))
+                    if machine_source() == "jumpserver":
+                        raise WorkflowError("当前设备来自 JumpServer，请在本机设备资源页刷新机器列表。")
+                    result = ssh_snapshot(project, sessions.snapshot(compact=True))
                     self._json(200, {"profiles": result.get("machine_profiles", []),
                                      "ssh_config_sync": result.get("ssh_config_sync")})
                     return
@@ -1139,20 +1238,31 @@ def make_server(engine: Engine | None, host: str, port: int, monitor: object | N
                     if target == "/api/codex-machines":
                         result = sessions.save_profile(body)
                     elif target == "/api/codex-machines/check":
+                        if not self._session_owner_rpc():
+                            active_jumpserver_profile(project, body.get("profile_id") or body.get("id"))
                         result = sessions.check_machine(body)
                         if isinstance(result, dict):
                             alias = result.get("ssh_alias")
                             if isinstance(alias, str):
                                 ssh_syncs[project.id].checked(alias)
                     elif target == "/api/codex-sessions":
+                        if not self._session_owner_rpc():
+                            active_jumpserver_profile(project, body.get("profile_id"))
                         from fl_dashboard.tasks.automatic_tasks import normalize_automatic_task
                         task_body = normalize_automatic_task(project, body)
                         result = sessions.create(task_body)
                         if body.get("start") is True:
+                            if not self._session_owner_rpc():
+                                active_jumpserver_profile(project, task_body.get("profile_id"))
                             result = sessions.start(result["id"])
                     else:
                         session_id, action = session_action.groups()
                         if action == "start":
+                            if not self._session_owner_rpc():
+                                draft = next((row for row in sessions.snapshot(compact=True).get("sessions", [])
+                                              if row.get("id") == session_id), None)
+                                if draft is not None:
+                                    active_jumpserver_profile(project, draft.get("profile_id"))
                             result = sessions.start(session_id)
                         elif action == "message":
                             result = sessions.message(session_id, body.get("text", ""))
@@ -1195,6 +1305,7 @@ def make_server(engine: Engine | None, host: str, port: int, monitor: object | N
     class DashboardServer(ThreadingHTTPServer):
         def server_close(self):
             device_fleet.close()
+            jumpserver.close()
             super().server_close()
 
     return DashboardServer((host, port), Handler)

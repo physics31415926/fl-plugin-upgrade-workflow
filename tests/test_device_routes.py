@@ -14,7 +14,12 @@ class DeviceRouteTests(unittest.TestCase):
         self.fleet.snapshot.return_value = {"project_id": "vllm", "hosts": [], "refreshing": False}
         self.fleet.refresh.return_value = {"project_id": "vllm", "hosts": [], "refreshing": True}
         self.sessions = SimpleNamespace(snapshot=lambda **kw: {"sessions": [], "machine_profiles": []})
-        with patch("fl_dashboard.resources.fleet.DeviceFleet", return_value=self.fleet):
+        inventory = Mock()
+        inventory.snapshot.return_value = {"enabled": False}
+        with patch("fl_dashboard.resources.fleet.DeviceFleet", return_value=self.fleet), \
+                patch("fl_dashboard.resources.jumpserver.JumpServerInventory", return_value=inventory), \
+                patch("fl_dashboard.resources.jumpserver_profiles.JumpServerProfiles"), \
+                patch("fl_dashboard.tasks.ssh_profile_sync.SSHProfileSync"):
             self.server = flflow.make_server(None, "127.0.0.1", 0, sessions=self.sessions)
         self.thread = threading.Thread(target=self.server.serve_forever, daemon=True)
         self.thread.start()

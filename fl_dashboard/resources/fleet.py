@@ -19,14 +19,18 @@ from fl_dashboard.monitoring.branch_monitor import LABELS
 from fl_dashboard.tasks.automatic_tasks import _ssh_argv
 from fl_dashboard.resources.telemetry import parse_telemetry, probe_script
 
-MAX_HOSTS = 128
+MAX_HOSTS = 512
 MAX_OUTPUT = 128 * 1024
 PROBE_TIMEOUT = 35
-STALE_SECONDS = 120
-REFRESH_INTERVAL = 60
+STALE_SECONDS = 600
+REFRESH_INTERVAL = 300
 MIN_REFRESH_SECONDS = 5
 _ACTIVE = {"starting", "running", "waiting_input", "waiting_approval", "interrupting"}
 _ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.-]{0,99}\Z")
+
+
+class _InventoryLimit(ValueError):
+    pass
 
 
 def _iso(value):
@@ -51,9 +55,14 @@ class DeviceFleet:
     """One collector per control server; no network activity in snapshot()."""
 
     def __init__(self, registry, ssh_syncs, *, runner=None, ssh_executable=None,
-                 clock=time.time, monotonic=time.monotonic, max_workers=4):
+                 clock=time.time, monotonic=time.monotonic, max_workers=4,
+                 inventory=None, profile_source=None, cache_path=None):
         self.registry = registry
         self.ssh_syncs = ssh_syncs
+        self.inventory = inventory
+        self.profile_source = profile_source
+        self._source_signature = None
+        self._source_epoch = 0
         self._runner = runner or self._run_probe
         self._ssh_executable = ssh_executable
         self._clock, self._monotonic = clock, monotonic
@@ -64,16 +73,154 @@ class DeviceFleet:
         self._inflight = {}
         self._states = {project.id: {"profiles": [], "refreshing": False, "pending": set(),
                                     "total": 0, "done": 0, "updated_at": None, "error": None,
-                                    "inventory_error": False, "generation": 0}
+                                    "inventory_error": False, "generation": 0, "metadata_future": None}
                         for project in registry.projects}
         self._projects = {project.id: project for project in registry.projects}
         self._metadata = ThreadPoolExecutor(max_workers=1, thread_name_prefix="device-inventory")
         self._workers = ThreadPoolExecutor(max_workers=max(1, min(4, max_workers)), thread_name_prefix="device-probe")
+        self._disk_cache = None
+        self._cache_writer = None
+        self._cache_write_future = None
+        self._cache_dirty = False
+        self._cache_guard = threading.Lock()
+        self._cache_stop = threading.Event()
+        if cache_path is not None:
+            from fl_dashboard.resources.device_cache import DeviceTelemetryCache
+            self._disk_cache = DeviceTelemetryCache(cache_path)
+            self._cache_writer = ThreadPoolExecutor(max_workers=1, thread_name_prefix="device-cache")
+            self._restore_cache()
+
+    def _restore_cache(self):
+        source = self._reconcile_source()
+        source_type = "jumpserver" if source["enabled"] else "ssh"
+        try:
+            records = self._disk_cache.load()
+        except Exception:
+            return
+        seen = set()
+        for record in records.values():
+            state = self._states.get(record["project_id"])
+            identity = record["project_id"], record["id"]
+            if state is None or record["source_type"] != source_type or identity in seen:
+                continue
+            seen.add(identity)
+            view = copy.deepcopy(record["view"])
+            view["accel"] = _unknown_counts(view.get("accel") or _blank_accel())
+            view.update(verdict="unknown", reachable=None, stale=True)
+            age = STALE_SECONDS + 1
+            updated_at = record.get("updated_at")
+            try:
+                observed = datetime.fromisoformat(updated_at)
+                if observed.tzinfo is None:
+                    observed = observed.replace(tzinfo=timezone.utc)
+                age = max(0, self._clock() - observed.timestamp())
+            except (ValueError, TypeError):
+                pass
+            key = record["fingerprint"]
+            self._cache[key] = {"view": view, "sample": None, "observed": self._monotonic() - age,
+                                "attempted": float("-inf"), "updated_at": updated_at,
+                                "error": True, "retained": True}
+            state["profiles"].append({"id": record["id"], "alias": record["ssh_alias"],
+                                       "label": record["label"], "backend": record["backend"],
+                                       "backend_label": record.get("backend_label") or record["backend"],
+                                       "task_count": 0, "key": key, "source_epoch": source["epoch"]})
+            state["inventory_error"] = True
+            state["updated_at"] = updated_at or state["updated_at"]
+        for state in self._states.values():
+            if len(state["profiles"]) > MAX_HOSTS:
+                state.update(profiles=[], error="历史设备快照超过监控上限，请重新刷新设备列表。")
+
+    def _cache_records(self):
+        records = {}
+        source_type = "jumpserver" if self._source_signature and self._source_signature[0] else "ssh"
+        for project_id, state in self._states.items():
+            for profile in state["profiles"]:
+                entry = self._cache.get(profile["key"])
+                if entry is None:
+                    continue
+                identity = hashlib.sha256((project_id + ":" + profile["key"]).encode("utf-8")).hexdigest()
+                records[identity] = {"fingerprint": profile["key"], "project_id": project_id,
+                                     "source_type": source_type, "id": profile["id"],
+                                     "ssh_alias": profile["alias"], "label": profile["label"],
+                                     "backend": profile["backend"], "backend_label": profile["backend_label"],
+                                     "updated_at": entry.get("updated_at"), "view": copy.deepcopy(entry["view"])}
+        return records
+
+    def _queue_cache(self):
+        if self._cache_writer is None or self._closed:
+            return
+        self._cache_dirty = True
+        if self._cache_write_future is None or self._cache_write_future.done():
+            self._cache_write_future = self._cache_writer.submit(self._write_cache)
+
+    def _write_cache(self):
+        # Coalesce a completed batch so a large fleet does not rewrite the snapshot
+        # once per device. Only display metadata and readings reach the cache helper.
+        while not self._cache_stop.wait(.15):
+            with self._cache_guard:
+                with self._lock:
+                    if self._closed:
+                        return
+                    records = self._cache_records()
+                    self._cache_dirty = False
+                try:
+                    self._disk_cache.save(records)
+                except Exception:
+                    pass  # Persistence is optional; live telemetry stays available.
+            with self._lock:
+                if not self._cache_dirty:
+                    self._cache_write_future = None
+                    return
+
+    def _source_state(self):
+        # catalog is a pure cached view; never discover, read SSH config, or probe here.
+        if self.inventory is None:
+            return {"enabled": False, "generation": 0, "valid": True}
+        try:
+            catalog = self.inventory.catalog()
+            enabled = bool(catalog.get("enabled"))
+            generation = catalog.get("generation", 0)
+            if not isinstance(generation, int):
+                raise ValueError("Invalid inventory generation")
+            valid = not enabled or bool(catalog.get("authenticated") and not catalog.get("error"))
+            return {"enabled": enabled, "generation": generation, "valid": valid}
+        except Exception:
+            # An unreadable configured source must never fall back to local aliases.
+            return {"enabled": True, "generation": -1, "valid": False}
+
+    def _reconcile_source(self):
+        source = self._source_state()
+        signature = source["enabled"], source["generation"], source["valid"]
+        previous = self._source_signature
+        if signature != previous:
+            self._source_signature = signature
+            if previous is not None:
+                self._source_epoch += 1
+                switched = previous[0] != signature[0]
+                for state in self._states.values():
+                    state["generation"] += 1
+                    state.update(refreshing=False, pending=set(), total=0, done=0,
+                                 inventory_error=True, error=None)
+                    if switched:
+                        state.update(profiles=[], updated_at=None)
+                    pending = state.get("metadata_future")
+                    if pending is not None:
+                        pending.cancel()
+                # Running read-only probes finish naturally. Canceled queued jobs do
+                # not hold up a newly selected inventory behind an old large fleet.
+                for future in list(self._inflight.values()):
+                    future.cancel()
+            if not source["valid"]:
+                for state in self._states.values():
+                    state.update(inventory_error=True,
+                                 error="JumpServer 授权或资产列表已失效，请在本机重新登录或刷新。")
+        return {**source, "epoch": self._source_epoch}
 
     def snapshot(self, project_id):
         with self._lock:
             if project_id not in self._states:
                 raise ValueError("Unknown device-monitor project")
+            self._reconcile_source()
             state = self._states[project_id]
             now = self._monotonic()
             hosts = []
@@ -122,25 +269,34 @@ class DeviceFleet:
                 raise ValueError("Unknown device-monitor project")
             if self._closed:
                 raise ValueError("Device monitor has stopped")
+            source = self._reconcile_source()
             state = self._states[project_id]
             if not state["refreshing"]:
                 state.update(refreshing=True, pending=set(), total=0, done=0, error=None)
                 state["generation"] += 1
-                self._metadata.submit(self._schedule, project_id, profile_id, state["generation"])
+                state["metadata_future"] = self._metadata.submit(
+                    self._schedule, project_id, profile_id, state["generation"], source)
         return self.snapshot(project_id)
 
-    def _inventory(self, project_id):
+    def _inventory(self, project_id, source):
         project = self._projects[project_id]
         manager = project.sessions
         if manager is None:
             raise ValueError("设备列表不可用，请检查本机任务服务。")
-        snapshot = manager.snapshot(compact=True)
-        sync = self.ssh_syncs.get(project_id)
-        if sync is not None:
-            snapshot = sync.synchronize(manager, snapshot)
-        sync_status = snapshot.get("ssh_config_sync", {}).get("status")
-        sync_error = sync_status not in (None, "synced")
-        profiles = snapshot.get("machine_profiles")
+        if source["enabled"]:
+            if self.profile_source is None:
+                raise ValueError("JumpServer profile source unavailable")
+            profiles = self.profile_source.profiles(project_id, manager)
+            snapshot = manager.snapshot(compact=True)
+            sync, sync_status, sync_error = None, None, False
+        else:
+            snapshot = manager.snapshot(compact=True)
+            sync = self.ssh_syncs.get(project_id)
+            if sync is not None:
+                snapshot = sync.synchronize(manager, snapshot)
+            sync_status = snapshot.get("ssh_config_sync", {}).get("status")
+            sync_error = sync_status not in (None, "synced")
+            profiles = snapshot.get("machine_profiles")
         if not isinstance(profiles, list):
             raise ValueError("设备列表格式无效，请检查本机任务服务。")
         managers = getattr(manager, "managers", [manager])
@@ -154,19 +310,29 @@ class DeviceFleet:
         for profile in profiles:
             if not isinstance(profile, dict) or profile.get("role", "compute") != "compute":
                 continue
+            # Owner archives retain JumpServer profiles for task history. They
+            # are never active local-SSH devices after that source is disabled.
+            if not source["enabled"] and profile.get("source") == "jumpserver":
+                continue
             identity, alias = profile.get("id"), profile.get("ssh_alias")
             if (not isinstance(identity, str) or not _ID.fullmatch(identity) or identity in seen
                     or not isinstance(alias, str) or not _ID.fullmatch(alias)):
                 continue
             seen.add(identity)
             if len(result) >= MAX_HOSTS:
-                raise ValueError("计算设备超过监控上限（128 台），请缩小 SSH 配置范围。")
+                raise _InventoryLimit("计算设备超过监控上限（512 台），请缩小设备范围。")
             private = copy.deepcopy(profile)
             source_root = roots[0] if roots else Path(".").resolve()
             config_hash = ""
-            configuration_error = ("SSH 配置不可用，请同步或修复别名配置后重试。"
-                                   if sync_error and not profile.get("ssh_connection") else None)
-            if profile.get("ssh_connection"):
+            configuration_error = profile.get("configuration_error") or (
+                "SSH 配置不可用，请同步或修复别名配置后重试。"
+                if sync_error and not profile.get("ssh_connection") else None)
+            if source["enabled"]:
+                if not source["valid"]:
+                    configuration_error = "JumpServer 授权或资产列表已失效，请在本机重新登录或刷新。"
+                elif not profile.get("ssh_connection"):
+                    configuration_error = configuration_error or "JumpServer 设备尚未生成有效的独立连接配置。"
+            if profile.get("ssh_connection") and not configuration_error:
                 try:
                     path = Path(profile.get("ssh_config_path") or "").resolve()
                     owner = next((root for root in roots if path.is_relative_to(root)), None)
@@ -184,27 +350,34 @@ class DeviceFleet:
             effective = {"alias": alias, "connection": profile.get("ssh_connection"),
                          "managed_config": profile.get("ssh_config_path"), "managed_hash": config_hash,
                          "import_path": str(import_path) if import_path else None,
-                         "includes_fingerprint": fingerprint, "sync_status": sync_status}
+                         "includes_fingerprint": fingerprint, "sync_status": sync_status,
+                         "inventory_source": source, "configuration_error": configuration_error}
             key = hashlib.sha256(json.dumps(effective, sort_keys=True, ensure_ascii=False).encode()).hexdigest()
             result.append({"id": identity, "alias": alias, "label": str(profile.get("label") or alias)[:200],
                            "backend": profile.get("backend") or "", "backend_label": labels.get(profile.get("backend"), profile.get("backend") or "无法识别"),
                            "task_count": sum(1 for task in tasks if isinstance(task, dict) and task.get("ssh_alias") == alias and task.get("status") in _ACTIVE),
                            "key": key, "profile": private, "source_root": source_root,
-                           "configuration_error": configuration_error,
+                           "configuration_error": configuration_error, "source_epoch": source["epoch"],
                            "import_path": Path(import_path).resolve() if import_path else None})
         return sorted(result, key=lambda row: (row["backend"] != "cuda", row["backend_label"].split("/")[0].strip().casefold(), row["label"].casefold()))
 
-    def _schedule(self, project_id, profile_id, generation):
+    def _schedule(self, project_id, profile_id, generation, source):
         try:
-            profiles = self._inventory(project_id)
+            with self._lock:
+                current = self._reconcile_source()
+                if self._closed or generation != self._states[project_id]["generation"] or current["epoch"] != source["epoch"]:
+                    return
+            profiles = self._inventory(project_id, source)
             selected = [profile for profile in profiles if profile_id is None or profile["id"] == profile_id]
             if profile_id is not None and not selected:
                 raise ValueError("所选设备已不存在，请同步 SSH 配置后重试。")
             with self._lock:
+                current = self._reconcile_source()
                 state = self._states[project_id]
-                if self._closed or state["generation"] != generation:
+                if self._closed or state["generation"] != generation or current["epoch"] != source["epoch"]:
                     return
-                state.update(profiles=profiles, inventory_error=False, error=None)
+                state.update(profiles=profiles, inventory_error=not source["valid"],
+                             error=None if source["valid"] else "JumpServer 授权或资产列表已失效，请在本机重新登录或刷新。")
                 keys = {row["key"] for row in selected}
                 state.update(pending=set(keys), total=len(keys), done=0)
                 now = self._monotonic()
@@ -222,23 +395,28 @@ class DeviceFleet:
                         continue
                     future = self._workers.submit(self._collect, profile)
                     self._inflight[key] = future
-                    future.add_done_callback(lambda completed, target=key: self._completed(target, completed))
+                    future.add_done_callback(lambda completed, target=key, epoch=source["epoch"]:
+                                             self._completed(target, completed, epoch))
                 state["done"] = state["total"] - len(state["pending"])
                 if not state["pending"]:
                     state.update(refreshing=False, updated_at=_iso(self._clock()))
-        except Exception:
+                self._queue_cache()
+        except Exception as exc:
             with self._lock:
                 state = self._states[project_id]
                 if state["generation"] == generation:
-                    state.update(refreshing=False, pending=set(), error="无法更新设备列表，请检查 SSH 配置和本机任务服务。",
-                                 inventory_error=True)
+                    message = (str(exc) if isinstance(exc, _InventoryLimit) else
+                               "无法更新 JumpServer 设备列表，请检查资产授权和本机任务服务。" if source["enabled"] else
+                               "无法更新设备列表，请检查 SSH 配置和本机任务服务。")
+                    state.update(refreshing=False, pending=set(), error=message, inventory_error=True)
 
     def _collect(self, profile):
         attempted = self._monotonic()
         try:
             with self._lock:
-                if self._closed:
-                    raise ValueError("closed")
+                current = self._reconcile_source()
+                if self._closed or current["epoch"] != profile["source_epoch"] or not current["valid"]:
+                    raise ValueError("closed or outdated inventory")
                 previous = self._cache.get(profile["key"], {}).get("sample")
             executable = self._ssh_executable or shutil.which("ssh")
             if not executable:
@@ -278,11 +456,12 @@ class DeviceFleet:
                          "accel": _blank_accel(), "node": {}}, "sample": None, "observed": self._monotonic(),
                 "attempted": attempted, "updated_at": _iso(self._clock()), "error": True}
 
-    def _completed(self, key, future):
+    def _completed(self, key, future, source_epoch):
         with self._lock:
             if self._inflight.get(key) is future:
                 self._inflight.pop(key, None)
-            if self._closed:
+            self._reconcile_source()
+            if self._closed or source_epoch != self._source_epoch or future.cancelled():
                 return
             try:
                 entry = future.result()
@@ -309,6 +488,7 @@ class DeviceFleet:
                         self._cache.pop(old, None)
                     if len(self._cache) <= MAX_HOSTS * 4:
                         break
+            self._queue_cache()
 
     @staticmethod
     def _stop_process(process):
@@ -388,7 +568,10 @@ class DeviceFleet:
         with self._lock:
             if self._closed:
                 return
+            self._reconcile_source()
+            records = self._cache_records() if self._disk_cache is not None else None
             self._closed = True
+            self._cache_stop.set()
             processes = list(self._processes)
             for state in self._states.values():
                 state.update(refreshing=False, pending=set())
@@ -396,3 +579,11 @@ class DeviceFleet:
             self._stop_process(process)
         self._metadata.shutdown(wait=False, cancel_futures=True)
         self._workers.shutdown(wait=False, cancel_futures=True)
+        if self._cache_writer is not None:
+            self._cache_writer.shutdown(wait=False, cancel_futures=True)
+        if self._disk_cache is not None:
+            with self._cache_guard:
+                try:
+                    self._disk_cache.save(records)
+                except Exception:
+                    pass

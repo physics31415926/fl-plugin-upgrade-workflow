@@ -150,7 +150,7 @@ Grep</textarea><small class="hint">SSH 命令可显式配置 Bash(ssh *)。未�
   }
   const labels = {cuda:'NVIDIA / 英伟达',ascend:'Ascend / 昇腾',metax:'MetaX / 沐曦',corex:'iluvatar / 天数智芯',hygon:'Hygon / 海光',musa:'Moore Threads / 摩尔线程',enflame:'Enflame / 燧原',kunlunxin:'Kunlunxin / 昆仑芯',thead:'T-Head / 平头哥',tsingmicro:'Tsingmicro / 清微',sunrise:'Sunrise / 曦望'};
     const statuses = {prepared:'待启动',starting:'正在启动',running:'执行中',waiting_approval:'等待授权',waiting_input:'等待回答',interrupting:'正在中断',completed:'本轮已结束',interrupted:'已中断',failed:'本轮异常',disconnected:'连接中断'};
-    const state = {sessions:[],deletedSessions:[],view:"active",search:"",statusFilter:"",agentFilter:"",deleteTarget:null,selectionRevision:0,sessionRevision:0,refreshPromise:null,profiles:[],policies:{},selected:null,showHistory:false,available:false,fetching:false,pendingKey:'',eventsKey:'',profileKey:'',listKey:'',actionBusy:false,creating:false,checking:false,checkedKey:'',providers:{},agentSettings:null,settingsInitialized:false,settingsBusy:false,flagscaleSettingsInitialized:false,flagscaleSettingsBusy:false,readOnly:false,loadingBranches:false,branchEdited:false,sshSync:null,sshSyncBusy:false,sshSyncManual:null,profileRevision:0};
+    const state = {sessions:[],deletedSessions:[],view:"active",search:"",statusFilter:"",agentFilter:"",deleteTarget:null,selectionRevision:0,sessionRevision:0,refreshPromise:null,profiles:[],policies:{},selected:null,showHistory:false,available:false,fetching:false,pendingKey:'',eventsKey:'',profileKey:'',listKey:'',actionBusy:false,creating:false,checking:false,checkedKey:'',providers:{},agentSettings:null,settingsInitialized:false,settingsBusy:false,flagscaleSettingsInitialized:false,flagscaleSettingsBusy:false,readOnly:false,loadingBranches:false,branchEdited:false,sshSync:null,sshSyncBusy:false,sshSyncManual:null,profileRevision:0,machineSource:'ssh_config',jumpserverSettings:false,jumpserverSync:null,machineSourceRevision:0,jumpserverPoll:false};
   const sessionListCards = new Map();
   const orderedBackends=Object.keys(labels).sort((a,b)=>a==='cuda'?-1:b==='cuda'?1:labels[a].toLowerCase().localeCompare(labels[b].toLowerCase(),'en'));
   for(const backend of orderedBackends){const option=document.querySelector('#backend option[value="'+backend+'"]');if(option)$('backend').append(option);}
@@ -380,7 +380,7 @@ Grep</textarea><small class="hint">SSH 命令可显式配置 Bash(ssh *)。未�
     const response = await fetch(projectUrl(url), {credentials:'same-origin',cache:'no-store',...options,headers:{'Content-Type':'application/json',...options.headers}});
     let result;
     try { result=await response.json(); } catch (_) { throw new Error('服务返回了无法读取的响应（HTTP '+response.status+'）。'); }
-    if (!response.ok || result.error && !result.id && !Object.prototype.hasOwnProperty.call(result,'available')) {const error=new Error(errorMessage(result.error) || '请求失败（HTTP '+response.status+'）');error.result=result;throw error;}
+    if (!response.ok || result.error && !result.id && !Object.prototype.hasOwnProperty.call(result,'available')) {const error=new Error(errorMessage(result.error) || '请求失败（HTTP '+response.status+'）');error.result=result;error.status=response.status;throw error;}
     return result;
   }
   function post(url,body={}) { return request(url,{method:'POST',body:JSON.stringify(body)}); }
@@ -485,7 +485,17 @@ Grep</textarea><small class="hint">SSH 命令可显式配置 Bash(ssh *)。未�
   }
   function renderSshSync(info) {
     if (info && typeof info === 'object') state.sshSync = info;
-    $('sync-ssh').hidden = state.readOnly === true;
+    $('sync-ssh').hidden = state.readOnly === true || state.machineSource==='jumpserver'&&!state.jumpserverSettings;
+    if(state.machineSource==='jumpserver'){
+      $('sync-ssh').disabled=state.readOnly||!state.jumpserverSettings||state.sshSyncBusy||state.creating||state.checking;
+      $('sync-ssh').textContent=state.sshSyncBusy?'正在同步机器…':'刷新机器列表';
+      if(!state.jumpserverSettings){notice('ssh-sync-status','机器来自 JumpServer，请由维护者在本机设备页同步授权机器。');return;}
+      const data=state.jumpserverSync;
+      if(state.sshSyncBusy){notice('ssh-sync-status','正在从 JumpServer 读取授权机器，完成后自动更新设备列表…');return;}
+      const failure=state.sshSyncManual?.status==='error'?state.sshSyncManual.error:data?.error;
+      if(failure){notice('ssh-sync-status',errorMessage(failure)+'；保留上次机器列表。',true);return;}
+      notice('ssh-sync-status',data?.updated_at?'JumpServer 已同步 '+Math.max(0,Number(data.asset_count)||0)+' 台授权机器 · '+formatTime(data.updated_at):'设备来自 JumpServer；在设备资源页登录后即可刷新授权机器。');return;
+    }
     $('sync-ssh').disabled = state.readOnly || state.sshSyncBusy || state.creating || state.checking;
     $('sync-ssh').textContent = state.sshSyncBusy ? '正在同步…' : '同步 SSH 配置';
     if (state.sshSyncBusy) {notice('ssh-sync-status','正在读取本机 SSH 配置并更新设备列表…');return;}
@@ -502,6 +512,7 @@ Grep</textarea><small class="hint">SSH 命令可显式配置 Bash(ssh *)。未�
     ].join(' · '));
   }
   async function syncSshConfig() {
+    if(state.machineSource==='jumpserver'){await refreshJumpserverMachines();return;}
     if (state.readOnly || state.sshSyncBusy || state.creating || state.checking) return;
     state.profileRevision=(state.profileRevision||0)+1;
     state.sshSyncBusy = true;renderSshSync();
@@ -514,6 +525,43 @@ Grep</textarea><small class="hint">SSH 命令可显式配置 Bash(ssh *)。未�
     } catch (error) {state.sshSyncManual={status:'error',error:error.message};}
     finally {state.profileRevision++;state.sshSyncBusy = false;renderSshSync();checkButtons();}
   }
+  // JumpServer credentials and asset synchronization are available only on the host.
+  function applyMachineCapabilities(capabilities){
+    const source=capabilities.machine_source==='jumpserver'?'jumpserver':'ssh_config';
+    if(state.machineSource!==source){state.machineSourceRevision++;state.profileRevision++;state.sshSyncManual=null;state.jumpserverSync=null;state.sshSyncBusy=false;}
+    state.machineSource=source;state.jumpserverSettings=capabilities.jumpserver_settings===true;renderSshSync();
+  }
+  function acceptMachineSync(data){
+    if(!data||typeof data.enabled!=='boolean')throw new Error('未收到有效的机器列表同步状态，请重试。');
+    const previous=state.jumpserverSync;state.jumpserverSync=data;
+    if(!data.enabled){state.machineSource='ssh_config';state.machineSourceRevision++;state.sshSyncManual=null;state.sshSyncBusy=false;state.profileRevision++;renderSshSync();return;}
+    state.sshSyncBusy=data.refreshing===true;
+    if(!data.refreshing&&!data.error&&data.updated_at&&data.updated_at!==previous?.updated_at){state.profileRevision++;state.sshSyncManual=null;invalidateCheck();}
+    renderSshSync();checkButtons();
+  }
+  async function refreshJumpserverMachines(){
+    if(state.readOnly||!state.jumpserverSettings||state.sshSyncBusy||state.creating||state.checking)return;
+    const revision=++state.machineSourceRevision;state.profileRevision++;state.sshSyncBusy=true;state.sshSyncManual=null;renderSshSync();
+    try{const data=await post('/api/jumpserver/refresh');if(revision!==state.machineSourceRevision)return;acceptMachineSync(data);}
+    catch(error){if(revision===state.machineSourceRevision){if(error.result&&typeof error.result.enabled==='boolean')state.jumpserverSync=error.result;state.sshSyncManual={status:'error',error:error.message};state.sshSyncBusy=false;if(error.status===401||error.status===403){state.readOnly=true;state.jumpserverSettings=false;}}}
+    finally{if(revision===state.machineSourceRevision){state.profileRevision++;renderSshSync();checkButtons();}}
+  }
+  async function pollJumpserverMachines(){
+    if(document.hidden||state.readOnly||state.machineSource!=='jumpserver'||!state.jumpserverSettings||state.jumpserverPoll||!state.jumpserverSync?.refreshing)return;
+    const revision=state.machineSourceRevision;state.jumpserverPoll=true;
+    try{const data=await request('/api/jumpserver');if(revision===state.machineSourceRevision)acceptMachineSync(data);}
+    catch(error){if(revision===state.machineSourceRevision){if(error.result&&typeof error.result.enabled==='boolean')state.jumpserverSync=error.result;state.sshSyncManual={status:'error',error:error.message};state.sshSyncBusy=false;if(error.status===401||error.status===403){state.readOnly=true;state.jumpserverSettings=false;}renderSshSync();}}
+    finally{state.jumpserverPoll=false;}
+  }
+  async function syncMachineSource(){
+    if(state.readOnly||state.sshSyncBusy||state.creating||state.checking)return;
+    if(state.machineSource==='jumpserver'&&!state.jumpserverSettings)return;
+    const revision=++state.machineSourceRevision;state.sshSyncBusy=true;renderSshSync();
+    try{const capabilities=await request('/api/capabilities');if(revision!==state.machineSourceRevision)return;state.sshSyncBusy=false;state.readOnly=capabilities.read_only===true;applyMachineCapabilities(capabilities);if(!state.readOnly)await syncSshConfig();}
+    catch(error){state.sshSyncManual={status:'error',error:error.message};state.sshSyncBusy=false;renderSshSync();}
+  }
+  async function taskTick(){if(document.hidden)return;await pollJumpserverMachines();if(!document.hidden)await refresh(true);}
+
   function showProfiles() {
     const key=JSON.stringify(state.profiles);if(key===state.profileKey)return;state.profileKey=key;
     const selected=$('profile').value;if(state.checkedKey&&state.profiles.find(profile=>String(profile.id)===selected)?.ssh_config_changed)invalidateCheck();$('profile').replaceChildren(el('option','', $('custom-settings').checked?'新增验证机器':'请选择设备'));$('profile').firstChild.value='';
@@ -841,7 +889,7 @@ Grep</textarea><small class="hint">SSH 命令可显式配置 Bash(ssh *)。未�
     }catch(error){notice('form-notice',String(error.message||'设备或环境准备失败，请稍后重试。').slice(0,500),true);}finally{state.creating=false;checkButtons();}
   }
   $('custom-settings').addEventListener('change',configureTaskMode);
-  $('sync-ssh').addEventListener('click',syncSshConfig);
+  $('sync-ssh').addEventListener('click',syncMachineSource);
   // BEGIN task management controls
   for(const view of ['active','all','trash'])$('view-'+view).addEventListener('click',()=>setTaskView(view));
   for(const [id,key,event] of [['task-search','search','input'],['task-status','statusFilter','change'],['task-agent','agentFilter','change']])$(id).addEventListener(event,()=>{state[key]=$(id).value;selectVisibleTask();});
@@ -895,7 +943,8 @@ Grep</textarea><small class="hint">SSH 命令可显式配置 Bash(ssh *)。未�
   async function initialize() {
     try {
       const capabilities = await request('/api/capabilities');
-      state.readOnly = capabilities.read_only === true;renderSshSync();
+      state.readOnly = capabilities.read_only === true;applyMachineCapabilities(capabilities);
+      if(!state.readOnly&&state.machineSource==='jumpserver'&&state.jumpserverSettings){try{acceptMachineSync(await request('/api/jumpserver'));}catch(error){state.sshSyncManual={status:'error',error:error.message};renderSshSync();}}
       $('access-shares-link').hidden=capabilities.access_shares!==true;
       $('devices-link').hidden=capabilities.devices!==true;
       $('shared-access-mode').hidden=capabilities.shared_access!==true;
@@ -941,7 +990,7 @@ Grep</textarea><small class="hint">SSH 命令可显式配置 Bash(ssh *)。未�
     catch(error){notice('global-notice',error.message,true);button.disabled=false;}
   }
   $('share-logout').addEventListener('click',logoutShare);
-  initialize();setInterval(()=>{if(!document.hidden)refresh(true);},3000);document.addEventListener('visibilitychange',()=>{if(!document.hidden)refresh(true);});
+  initialize();setInterval(taskTick,3000);document.addEventListener('visibilitychange',taskTick);
 })();
 </script>
 </body>

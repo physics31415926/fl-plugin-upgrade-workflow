@@ -7,7 +7,7 @@
 | fl_dashboard/monitoring/ | 分支、PR、CI、验收记录与采集器注册 |
 | fl_dashboard/projects/ | 项目配置、项目状态隔离、原有任务服务转接 |
 | fl_dashboard/agents/ | Codex、Claude、FlagScale 执行与配置 |
-| fl_dashboard/resources/ | SSH 设备资源采集、跨页面缓存与可用性状态 |
+| fl_dashboard/resources/ | JumpServer 授权资产、SSH 资源采集、本地缓存与可用性状态 |
 | fl_dashboard/vendor/jms_top/ | 固定版本的 jms-top 标准库解析与探测核心，附来源及许可证 |
 | fl_dashboard/tasks/ | 自动任务准备、SSH 同步、原生及只读任务观察 |
 | fl_dashboard/services/ | 本机控制、LAN 只读投影与授权代理、分享凭证及工作流编排 |
@@ -65,3 +65,5 @@ Windows PowerShell 可先用 Get-ChildItem tests -Filter '*.cjs' 收集路径，
 `telemetry.py` 包装固定版本的 jms-top 探测和多厂商解析，第三方原件及来源记录位于 `vendor/jms_top/`。业务层只暴露规范化指标，舍弃原始输出和完整进程命令。更新第三方核心时，应同时检查来源版本、许可证、远端脚本行为、完成标记，以及未知 / 显存残留 / 多芯片板卡的判断。
 
 设备详情不进入匿名 LAN 投影；完整权限分享通过现有网关白名单访问同一本机缓存。更改 SSH 配置或 profile 时重新识别采集目标，旧连接的数据不能继续表示新目标可用。
+
+`JumpServerInventory` 管理本机登录和完整授权资产缓存，`JumpServerProfiles` 将当前资产转为隔离的 SSH 档案；启用后不再同步用户 SSH 列表。资源采集按来源 epoch 丢弃过期结果，`DeviceTelemetryCache` 仅持久化受限的展示指标，恢复时可用容量强制为零。JumpServer 管理 API 不加入分享网关白名单。
