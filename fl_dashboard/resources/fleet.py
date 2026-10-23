@@ -106,6 +106,8 @@ class DeviceFleet:
             identity = record["project_id"], record["id"]
             if state is None or record["source_type"] != source_type or identity in seen:
                 continue
+            if source["enabled"] and (not source["scope"] or record.get("source_scope") != source["scope"]):
+                continue
             seen.add(identity)
             view = copy.deepcopy(record["view"])
             view["accel"] = _unknown_counts(view.get("accel") or _blank_accel())
@@ -143,7 +145,9 @@ class DeviceFleet:
                     continue
                 identity = hashlib.sha256((project_id + ":" + profile["key"]).encode("utf-8")).hexdigest()
                 records[identity] = {"fingerprint": profile["key"], "project_id": project_id,
-                                     "source_type": source_type, "id": profile["id"],
+                                     "source_type": source_type,
+                                     "source_scope": self._source_signature[3] if source_type == "jumpserver" else None,
+                                     "id": profile["id"],
                                      "ssh_alias": profile["alias"], "label": profile["label"],
                                      "backend": profile["backend"], "backend_label": profile["backend_label"],
                                      "updated_at": entry.get("updated_at"), "view": copy.deepcopy(entry["view"])}
@@ -178,28 +182,41 @@ class DeviceFleet:
     def _source_state(self):
         # catalog is a pure cached view; never discover, read SSH config, or probe here.
         if self.inventory is None:
-            return {"enabled": False, "generation": 0, "valid": True}
+            return {"enabled": False, "generation": 0, "valid": True, "scope": None}
         try:
             catalog = self.inventory.catalog()
+        except Exception:
+            # A temporary catalog read failure may retain this identity's display
+            # history, but never authorizes a probe or a fallback to local aliases.
+            previous = self._source_signature
+            scope = previous[3] if previous and previous[0] else None
+            return {"enabled": True, "generation": -1, "valid": False, "scope": scope}
+        try:
             enabled = bool(catalog.get("enabled"))
             generation = catalog.get("generation", 0)
-            if not isinstance(generation, int):
+            if type(generation) is not int:
                 raise ValueError("Invalid inventory generation")
-            valid = not enabled or bool(catalog.get("authenticated") and not catalog.get("error"))
-            return {"enabled": enabled, "generation": generation, "valid": valid}
+            scope = None
+            if enabled:
+                identity = [catalog.get("base_url"), catalog.get("username")]
+                if all(isinstance(value, str) and value.strip() for value in identity):
+                    scope = hashlib.sha256(json.dumps(identity, ensure_ascii=False,
+                                                       separators=(",", ":")).encode("utf-8")).hexdigest()
+            valid = not enabled or bool(scope and catalog.get("authenticated") and not catalog.get("error"))
+            return {"enabled": enabled, "generation": generation, "valid": valid, "scope": scope}
         except Exception:
-            # An unreadable configured source must never fall back to local aliases.
-            return {"enabled": True, "generation": -1, "valid": False}
+            # Malformed identity data cannot inherit another account's history.
+            return {"enabled": True, "generation": -1, "valid": False, "scope": None}
 
     def _reconcile_source(self):
         source = self._source_state()
-        signature = source["enabled"], source["generation"], source["valid"]
+        signature = source["enabled"], source["generation"], source["valid"], source["scope"]
         previous = self._source_signature
         if signature != previous:
             self._source_signature = signature
             if previous is not None:
                 self._source_epoch += 1
-                switched = previous[0] != signature[0]
+                switched = previous[0] != signature[0] or previous[3] != signature[3]
                 for state in self._states.values():
                     state["generation"] += 1
                     state.update(refreshing=False, pending=set(), total=0, done=0,
@@ -209,9 +226,16 @@ class DeviceFleet:
                     pending = state.get("metadata_future")
                     if pending is not None:
                         pending.cancel()
-                # Running read-only probes finish naturally. Canceled queued jobs do
-                # not hold up a newly selected inventory behind an old large fleet.
-                for future in list(self._inflight.values()):
+                # Keep display history across catalog revisions, but require a new
+                # observation before advertising availability under the new source.
+                for entry in self._cache.values():
+                    entry.update(retained=True, sample=None, attempted=float("-inf"))
+                # Stable connection keys can be reused by the next generation.
+                # Detach old jobs before canceling so they cannot block that refresh;
+                # epoch checks below discard any running old job's eventual result.
+                previous_jobs = list(self._inflight.values())
+                self._inflight.clear()
+                for future in previous_jobs:
                     future.cancel()
             if not source["valid"]:
                 for state in self._states.values():
@@ -361,7 +385,12 @@ class DeviceFleet:
                          "managed_config": profile.get("ssh_config_path"), "managed_hash": config_hash,
                          "import_path": str(import_path) if import_path else None,
                          "includes_fingerprint": fingerprint, "sync_status": sync_status,
-                         "inventory_source": source, "configuration_error": configuration_error}
+                         # Catalog generation/epoch/authentication are scheduling guards,
+                         # not device identities. Including them discards cached readings
+                         # on every inventory refresh and after a process restart.
+                         "inventory_source": ({"enabled": True, "scope": source["scope"]}
+                                              if source["enabled"] else {"enabled": False}),
+                         "configuration_error": configuration_error}
             key = hashlib.sha256(json.dumps(effective, sort_keys=True, ensure_ascii=False).encode()).hexdigest()
             result.append({"id": identity, "alias": alias, "label": str(profile.get("label") or alias)[:200],
                            "backend": profile.get("backend") or "", "backend_label": labels.get(profile.get("backend"), profile.get("backend") or "无法识别"),
@@ -378,6 +407,10 @@ class DeviceFleet:
                 current = self._reconcile_source()
                 if self._closed or generation != self._states[project_id]["generation"] or current["epoch"] != source["epoch"]:
                     return
+            if not source["valid"]:
+                # No trustworthy replacement inventory is available. Preserve the
+                # historical rows (already marked stale) until access is restored.
+                raise ValueError("Inventory authorization is unavailable")
             profiles = self._inventory(project_id, source)
             selected = [profile for profile in profiles if profile_id is None or profile["id"] == profile_id]
             if profile_id is not None and not selected:
@@ -497,9 +530,11 @@ class DeviceFleet:
             # a vendor omits per-card process ownership). Keep its fresh metrics
             # and timestamp; only failed/incomplete collection retains history.
             if (entry["error"] and not entry["view"].get("collection_complete", False)
-                    and previous and previous["view"].get("accel", {}).get("total")):
-                entry["view"]["accel"] = copy.deepcopy(previous["view"]["accel"])
-                entry["view"]["node"] = copy.deepcopy(previous["view"].get("node", {}))
+                    and previous and (previous["view"].get("accel", {}).get("total")
+                                      or previous["view"].get("node"))):
+                for field in ("accel", "node", "backend", "backend_label", "supported"):
+                    if field in previous["view"]:
+                        entry["view"][field] = copy.deepcopy(previous["view"][field])
                 entry["observed"] = previous["observed"]
                 entry["updated_at"] = previous["updated_at"]
                 entry["retained"] = True

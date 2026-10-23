@@ -15,6 +15,7 @@ def item(identity="device-1", project="vllm", source="jumpserver"):
     fingerprint = hashlib.sha256(identity.encode()).hexdigest()
     key = hashlib.sha256((project + ":" + fingerprint).encode()).hexdigest()
     row = {"fingerprint": fingerprint, "project_id": project, "source_type": source,
+           "source_scope": hashlib.sha256(b"fixture-platform-account").hexdigest() if source == "jumpserver" else None,
            "id": identity, "ssh_alias": identity, "label": "A100 测试设备", "backend": "cuda", "backend_label": "NVIDIA",
            "updated_at": "2026-10-22T01:02:03Z",
            "view": {"reachable": True, "verdict": "free", "supported": True, "stale": False,
@@ -35,6 +36,28 @@ class DeviceTelemetryCacheTests(unittest.TestCase):
         self.addCleanup(self.temp.cleanup)
         self.path = Path(self.temp.name) / "runtime" / "device-resource-cache.json"
         self.cache = DeviceTelemetryCache(self.path)
+
+    def test_jumpserver_scope_roundtrips_but_missing_or_invalid_scope_is_rejected(self):
+        key, row = item()
+        self.assertTrue(self.cache.save({key: row}))
+        self.assertEqual(row["source_scope"], self.cache.load()[key]["source_scope"])
+        saved = json.loads(self.path.read_text(encoding="utf-8"))
+        for scope in (None, "", "private-platform-account", "a" * 63, 123):
+            with self.subTest(scope=scope):
+                payload = copy.deepcopy(saved)
+                if scope is None:
+                    del payload["entries"][key]["source_scope"]
+                else:
+                    payload["entries"][key]["source_scope"] = scope
+                self.path.write_text(json.dumps(payload), encoding="utf-8")
+                self.assertEqual({}, self.cache.load())
+                self.assertFalse(self.cache.save({key: payload["entries"][key]}))
+
+    def test_legacy_ssh_history_does_not_require_jumpserver_scope(self):
+        key, row = item(source="ssh")
+        row.pop("source_scope")
+        self.assertTrue(self.cache.save({key: row}))
+        self.assertIsNone(self.cache.load()[key]["source_scope"])
 
     def test_amd_identity_survives_restart_without_restoring_availability(self):
         for profile_backend in ("", "rocm"):

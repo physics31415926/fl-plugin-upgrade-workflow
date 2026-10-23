@@ -328,7 +328,8 @@ class DeviceFleetTests(unittest.TestCase):
         self.assertEqual(8, counts["calls"])
 
     def jumpserver_fixture(self):
-        catalog = {"enabled": True, "generation": 1, "authenticated": True, "error": None}
+        catalog = {"enabled": True, "generation": 1, "authenticated": True, "error": None,
+                   "base_url": "https://jump.example.test", "username": "fixture-user"}
         inventory = SimpleNamespace(catalog=Mock(side_effect=lambda: copy.deepcopy(catalog)))
         managed = self.owner / "jumpserver.conf"
         managed.write_text("Host jms-fixture\n  HostName example.test\n", encoding="utf-8")
@@ -444,6 +445,256 @@ class DeviceFleetTests(unittest.TestCase):
         fleet._runner.assert_not_called()
         self.assertTrue(value["error"])
         self.assertEqual(0, value["summary"]["free_cards"])
+
+    def test_refresh_keeps_cached_readings_and_replaces_hosts_as_each_probe_finishes(self):
+        self.profiles.append(dict(self.profiles[0], id="second", ssh_alias="second-demo"))
+        self.collector.refresh("vllm")
+        original = self.wait()
+        self.now += 6
+        started = {alias: threading.Event() for alias in ("device-demo", "second-demo")}
+        released = {alias: threading.Event() for alias in started}
+        for event in released.values():
+            self.addCleanup(event.set)
+        def runner(argv, **kwargs):
+            alias = argv[-2]
+            started[alias].set()
+            released[alias].wait(4)
+            return subprocess.CompletedProcess([], 0, b"new", b"")
+        def parse(alias, raw, previous):
+            result = view()
+            result["node"]["mem_pct"] = 35
+            return result, None
+        self.collector._runner = runner
+        self.parse.side_effect = parse
+        self.collector.refresh("vllm")
+        self.assertTrue(all(event.wait(2) for event in started.values()))
+        during = self.collector.snapshot("vllm")
+        self.assertTrue(during["refreshing"])
+        self.assertEqual([12.5, 12.5], [row["node"]["mem_pct"] for row in during["hosts"]])
+        self.assertEqual([row["updated_at"] for row in original["hosts"]],
+                         [row["updated_at"] for row in during["hosts"]])
+        released["device-demo"].set()
+        deadline = time.monotonic() + 2
+        while time.monotonic() < deadline:
+            during = self.collector.snapshot("vllm")
+            if during["progress"]["done"] == 1:
+                break
+            time.sleep(.005)
+        self.assertEqual({"done": 1, "total": 2}, during["progress"])
+        rows = {row["id"]: row for row in during["hosts"]}
+        self.assertEqual(35, rows["first"]["node"]["mem_pct"])
+        self.assertFalse(rows["first"]["refreshing"])
+        self.assertEqual(12.5, rows["second"]["node"]["mem_pct"])
+        self.assertTrue(rows["second"]["refreshing"])
+        released["second-demo"].set()
+        self.assertEqual([35, 35], [row["node"]["mem_pct"] for row in self.wait()["hosts"]])
+
+    def test_jumpserver_restart_and_catalog_refresh_keep_disk_history_while_probing(self):
+        catalog, inventory, profiles, bridge = self.jumpserver_fixture()
+        catalog["generation"] = 9
+        cache_path = self.root / "restart-history.json"
+        fleet = self.make(inventory=inventory, profile_source=bridge, cache_path=cache_path)
+        telemetry = view()
+        telemetry.update(backend="rocm", backend_label="AMD / 超威半导体")
+        telemetry["accel"].update(family="amd", card_name="Demo GPU")
+        self.parse.side_effect = lambda *args: (copy.deepcopy(telemetry), None)
+        fleet.refresh("vllm")
+        original = self.wait(fleet)["hosts"][0]
+        fleet.close()
+        catalog.update(generation=0, authenticated=False)
+        started, released = threading.Event(), threading.Event()
+        def runner(*args, **kwargs):
+            started.set()
+            released.wait(4)
+            raise subprocess.TimeoutExpired("fixture", 1)
+        restored = self.make(runner, inventory=inventory, profile_source=bridge, cache_path=cache_path)
+        self.addCleanup(released.set)
+        # Until reauthentication, the historical display is available without SSH.
+        restored.refresh("vllm")
+        old = self.wait(restored)["hosts"][0]
+        self.assertEqual(original["updated_at"], old["updated_at"])
+        self.assertFalse(started.is_set())
+        catalog.update(generation=1, authenticated=True)
+        restored.refresh("vllm")
+        self.assertTrue(started.wait(2))
+        during = restored.snapshot("vllm")
+        old = during["hosts"][0]
+        self.assertEqual("rocm", old["backend"])
+        self.assertEqual("Demo GPU", old["accel"]["card_name"])
+        self.assertEqual(12.5, old["node"]["mem_pct"])
+        self.assertEqual(original["updated_at"], old["updated_at"])
+        self.assertTrue(old["refreshing"])
+        self.assertTrue(old["stale"])
+        self.assertEqual(0, during["summary"]["free_cards"])
+        # Saving a partially refreshed inventory must not overwrite disk history
+        # with the empty placeholders that used to appear after a key change.
+        self.assertTrue(restored._disk_cache.save(restored._cache_records()))
+        record = next(iter(restored._disk_cache.load().values()))
+        self.assertEqual(12.5, record["view"]["node"]["mem_pct"])
+        released.set()
+        failed = self.wait(restored)["hosts"][0]
+        self.assertIn("超时", failed["error"])
+        self.assertEqual("rocm", failed["backend"])
+        self.assertEqual("Demo GPU", failed["accel"]["card_name"])
+        self.assertEqual(original["updated_at"], failed["updated_at"])
+
+    def test_old_generation_probe_cannot_block_or_overwrite_new_same_connection_probe(self):
+        catalog, inventory, profiles, bridge = self.jumpserver_fixture()
+        fleet = self.make(inventory=inventory, profile_source=bridge, max_workers=2)
+        fleet.refresh("vllm")
+        original = self.wait(fleet)["hosts"][0]
+        self.now += 6
+        started = [threading.Event(), threading.Event()]
+        released = [threading.Event(), threading.Event()]
+        for event in released:
+            self.addCleanup(event.set)
+        calls = []
+        def runner(*args, **kwargs):
+            index = len(calls)
+            calls.append(index)
+            started[index].set()
+            released[index].wait(4)
+            return subprocess.CompletedProcess([], 0, str(index).encode(), b"")
+        def parse(alias, raw, previous):
+            result = view()
+            result["node"]["mem_pct"] = 99 if raw == "0" else 35
+            return result, None
+        fleet._runner = runner
+        self.parse.side_effect = parse
+        fleet.refresh("vllm")
+        self.assertTrue(started[0].wait(2))
+        old_future = next(iter(fleet._inflight.values()))
+        old_key = fleet._states["vllm"]["profiles"][0]["key"]
+        catalog["generation"] += 1
+        fleet.refresh("vllm")
+        self.assertTrue(started[1].wait(2))
+        self.assertEqual(old_key, fleet._states["vllm"]["profiles"][0]["key"])
+        callbacks_done = threading.Event()
+        old_future.add_done_callback(lambda _: callbacks_done.set())
+        released[0].set()
+        self.assertTrue(callbacks_done.wait(2))
+        during = fleet.snapshot("vllm")
+        self.assertTrue(during["refreshing"])
+        self.assertEqual({"done": 0, "total": 1}, during["progress"])
+        self.assertEqual(12.5, during["hosts"][0]["node"]["mem_pct"])
+        self.assertEqual(original["updated_at"], during["hosts"][0]["updated_at"])
+        self.assertEqual(0, during["summary"]["free_cards"])
+        released[1].set()
+        result = self.wait(fleet)
+        self.assertEqual(35, result["hosts"][0]["node"]["mem_pct"])
+        self.assertEqual(1, result["summary"]["free_cards"])
+
+    def test_jumpserver_identity_change_clears_rows_even_before_reauthentication(self):
+        for field, changed in (("base_url", "https://other.example.test"), ("username", "other-user")):
+            with self.subTest(field=field):
+                catalog, inventory, profiles, bridge = self.jumpserver_fixture()
+                fleet = self.make(inventory=inventory, profile_source=bridge)
+                fleet.refresh("vllm")
+                self.assertEqual(1, self.wait(fleet)["summary"]["total_cards"])
+                old_key = fleet._states["vllm"]["profiles"][0]["key"]
+                catalog.update(authenticated=False, error="Login required")
+                catalog[field] = changed  # Scope is enforced even without generation changing.
+                self.assertEqual([], fleet.snapshot("vllm")["hosts"])
+                fleet._runner = Mock()
+                bridge.profiles.reset_mock()
+                fleet.refresh("vllm")
+                self.assertEqual([], self.wait(fleet)["hosts"])
+                fleet._runner.assert_not_called()
+                bridge.profiles.assert_not_called()
+                catalog.update(authenticated=True, error=None)
+                fleet._runner = self.runner
+                fleet.refresh("vllm")
+                self.wait(fleet)
+                self.assertNotEqual(old_key, fleet._states["vllm"]["profiles"][0]["key"],
+                                    "Even identical bridge connection data belongs to a different source identity")
+                fleet.close()
+
+    def test_disk_history_is_bound_to_platform_and_user_not_only_source_type(self):
+        catalog, inventory, profiles, bridge = self.jumpserver_fixture()
+        cache_path = self.root / "scoped-history.json"
+        fleet = self.make(inventory=inventory, profile_source=bridge, cache_path=cache_path)
+        fleet.refresh("vllm")
+        self.wait(fleet)
+        fleet.close()
+        original = cache_path.read_bytes()
+        self.assertNotIn(catalog["base_url"].encode(), original)
+        self.assertNotIn(catalog["username"].encode(), original)
+        for field, changed in (("base_url", "https://other.example.test"), ("username", "other-user")):
+            with self.subTest(field=field):
+                switched = dict(catalog, authenticated=False, generation=0, **{field: changed})
+                other = SimpleNamespace(catalog=lambda: copy.deepcopy(switched))
+                cache_path.write_bytes(original)  # Model an abrupt restart with an older disk file.
+                restored = self.make(inventory=other, profile_source=bridge, cache_path=cache_path)
+                self.assertEqual([], restored.snapshot("vllm")["hosts"])
+                restored.close()
+        cache_path.write_bytes(original)
+        catalog.update(authenticated=False, generation=0)
+        same = self.make(inventory=inventory, profile_source=bridge, cache_path=cache_path)
+        self.assertEqual(1, same.snapshot("vllm")["summary"]["total_cards"])
+        self.assertEqual(0, same.snapshot("vllm")["summary"]["free_cards"])
+
+    def test_catalog_read_failure_keeps_known_scope_history_without_probing(self):
+        catalog, inventory, profiles, bridge = self.jumpserver_fixture()
+        fleet = self.make(inventory=inventory, profile_source=bridge)
+        fleet.refresh("vllm")
+        original = self.wait(fleet)["hosts"][0]
+        scope = fleet._source_signature[3]
+        inventory.catalog.side_effect = RuntimeError("private catalog error")
+        fleet._runner = Mock()
+        bridge.profiles.reset_mock()
+        fleet.refresh("vllm")
+        during = self.wait(fleet)
+        self.assertEqual(scope, fleet._source_signature[3])
+        self.assertEqual(original["updated_at"], during["hosts"][0]["updated_at"])
+        self.assertEqual(12.5, during["hosts"][0]["node"]["mem_pct"])
+        self.assertTrue(during["hosts"][0]["stale"])
+        self.assertEqual(0, during["summary"]["free_cards"])
+        self.assertNotIn("private catalog error", str(during))
+        fleet._runner.assert_not_called()
+        bridge.profiles.assert_not_called()
+        # An explicit malformed identity is not a transient catalog read error.
+        inventory.catalog.side_effect = lambda: dict(catalog, username=None)
+        self.assertEqual([], fleet.snapshot("vllm")["hosts"])
+
+    def test_jumpserver_changed_connection_and_removed_asset_do_not_inherit_cache(self):
+        catalog, inventory, profiles, bridge = self.jumpserver_fixture()
+        fleet = self.make(inventory=inventory, profile_source=bridge)
+        fleet.refresh("vllm")
+        self.wait(fleet)
+        catalog["generation"] += 1
+        profiles[0]["ssh_connection"]["host"] = "different.example.test"
+        started, released = threading.Event(), threading.Event()
+        self.addCleanup(released.set)
+        def runner(*args, **kwargs):
+            started.set()
+            released.wait(4)
+            return subprocess.CompletedProcess([], 0, b"fixture", b"")
+        fleet._runner = runner
+        fleet.refresh("vllm")
+        self.assertTrue(started.wait(2))
+        during = fleet.snapshot("vllm")
+        self.assertIsNone(during["hosts"][0]["updated_at"])
+        self.assertEqual({}, during["hosts"][0]["node"])
+        released.set()
+        self.wait(fleet)
+        catalog["generation"] += 1
+        profiles.clear()
+        fleet.refresh("vllm")
+        self.assertEqual([], self.wait(fleet)["hosts"])
+
+    def test_failed_cpu_only_probe_retains_previous_node_metrics(self):
+        telemetry = view()
+        telemetry["accel"].update(total=0, cards=[], free=0)
+        self.parse.side_effect = lambda *args: (copy.deepcopy(telemetry), None)
+        self.collector.refresh("vllm")
+        original = self.wait()["hosts"][0]
+        self.now += 6
+        self.collector._runner = Mock(side_effect=subprocess.TimeoutExpired("fixture", 1))
+        self.collector.refresh("vllm")
+        failed = self.wait()["hosts"][0]
+        self.assertEqual(12.5, failed["node"]["mem_pct"])
+        self.assertEqual(original["updated_at"], failed["updated_at"])
+        self.assertTrue(failed["stale"])
 
     def test_ssh_source_excludes_retained_jumpserver_owner_profiles(self):
         catalog, inventory, profiles, bridge = self.jumpserver_fixture()

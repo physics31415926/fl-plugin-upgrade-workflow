@@ -119,12 +119,18 @@ def _entry(key, value):
             or not isinstance(fingerprint, str) or not _HASH.fullmatch(fingerprint)
             or value.get("source_type") not in ("jumpserver", "ssh")):
         return None
+    scope = value.get("source_scope") if value["source_type"] == "jumpserver" else None
+    # Legacy JumpServer records have no account/platform boundary. Do not replay
+    # them under the current identity; the next live observation replaces them.
+    if value["source_type"] == "jumpserver" and (not isinstance(scope, str) or not _HASH.fullmatch(scope)):
+        return None
     expected = hashlib.sha256((project + ":" + fingerprint).encode("utf-8")).hexdigest()
     if key != expected:
         return None
     if any(not isinstance(value.get(field), str) or not _ID.fullmatch(value[field]) for field in ("id", "ssh_alias")):
         return None
     row = {"fingerprint": fingerprint, "project_id": project, "source_type": value["source_type"],
+           "source_scope": scope,
            "id": value["id"], "ssh_alias": value["ssh_alias"], "label": _text(value.get("label"), 200),
            "backend": _backend(value.get("backend")), "backend_label": _text(value.get("backend_label")),
            "updated_at": _timestamp(value.get("updated_at"))}

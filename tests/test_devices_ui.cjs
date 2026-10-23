@@ -288,3 +288,48 @@ test('AMD resources are named and filterable without enabling task creation',asy
  const existing=ui.api.renderHost(fresh('cuda'));assert.equal(existing.children[7].children[0].tag,'a');assert.match(existing.children[7].textContent,/新建任务/);
  ui.api.state.allowed=false;const readonly=ui.api.renderHost(amd);assert.equal(readonly.children[7].children.length,0);
 });
+
+
+test('resource refresh retains cached metrics and selected details until each host completes',async()=>{
+ const oldA=fresh('a'),oldB=fresh('b');oldA.accel.cards[0].mem_used=1024;oldB.accel.cards[0].mem_used=2048;
+ const newA=JSON.parse(JSON.stringify(oldA)),newB=JSON.parse(JSON.stringify(oldB));newA.accel.cards[0].mem_used=3072;newB.accel.cards[0].mem_used=4096;
+ const replies=[snapshot([newA,oldB],{refreshing:true,progress:{done:1,total:2}}),snapshot([newA,newB],{progress:{done:2,total:2}})];
+ let finish;const ui=harness((_url,options)=>options.method==='POST'?new Promise(resolve=>finish=resolve):replies.shift());
+ put(ui,snapshot([oldA,oldB]));ui.api.state.selected='a';ui.api.render();
+ const refresh=ui.api.refreshResources();await settle();
+ assert.equal(ui.api.state.data.hosts[0].accel.cards[0].mem_used,1024);assert.match(ui.node('card-details').textContent,/1 GiB/);
+ assert.equal(ui.node('device-detail').hidden,false);assert.equal(ui.api.state.selected,'a');assert.match(ui.node('refresh-status').textContent,/显示上次读数.*后台更新/);
+ finish(snapshot([oldA,oldB],{refreshing:true,progress:{done:0,total:2}}));await refresh;
+ assert.equal(ui.api.state.data.hosts.length,2);assert.match(ui.node('refresh-status').textContent,/后台更新 0 \/ 2/);
+ await ui.api.readSnapshot();
+ assert.deepEqual(ui.api.state.data.hosts.map(host=>host.accel.cards[0].mem_used),[3072,2048]);assert.equal(ui.api.state.selected,'a');
+ assert.match(ui.node('card-details').textContent,/3 GiB/);assert.match(ui.node('hosts').textContent,/Host b/);assert.match(ui.node('refresh-status').textContent,/后台更新 1 \/ 2/);
+ await ui.api.readSnapshot();
+ assert.deepEqual(ui.api.state.data.hosts.map(host=>host.accel.cards[0].mem_used),[3072,4096]);assert.equal(ui.api.state.selected,'a');
+ assert.equal(ui.node('refresh-devices').disabled,false);assert.doesNotMatch(ui.node('refresh-status').textContent,/后台更新/);
+});
+
+test('first collection distinguishes loading cache and waiting for initial readings from empty inventory',async()=>{
+ const ui=harness(()=>snapshot([],{refreshing:true,updated_at:null,progress:{done:0,total:2}}));
+ ui.api.state.switching=true;ui.api.render();assert.match(ui.node('empty').textContent,/读取设备缓存/);assert.match(ui.node('refresh-status').textContent,/读取设备缓存/);
+ ui.api.state.switching=false;put(ui,snapshot([],{refreshing:true,updated_at:null,progress:{done:0,total:2}}));ui.api.render();
+ assert.match(ui.node('empty').textContent,/正在采集设备资源/);assert.match(ui.node('refresh-status').textContent,/采集中.*0 \/ 2/);assert.doesNotMatch(ui.node('refresh-status').textContent,/显示上次读数/);
+ assert.equal(ui.node('stat-free').textContent,'—');assert.doesNotMatch(ui.node('empty').textContent,/登录|同步 SSH/);
+ ui.api.state.data.refreshing=false;ui.api.render();assert.match(ui.node('empty').textContent,/暂无计算设备/);
+});
+
+test('authoritative snapshot removals are not merged back from historical hosts',async()=>{
+ const ui=harness(()=>snapshot([fresh('retained')],{refreshing:true,progress:{done:1,total:1}}));
+ put(ui,snapshot([fresh('removed'),fresh('retained')]));ui.api.state.selected='removed';ui.api.render();
+ await ui.api.readSnapshot();assert.equal(ui.api.state.data.hosts.length,1);assert.equal(ui.api.state.data.hosts[0].id,'retained');
+ assert.doesNotMatch(ui.node('hosts').textContent,/Host removed/);assert.match(ui.node('hosts').textContent,/Host retained/);assert.equal(ui.node('device-detail').hidden,true);
+});
+
+test('ordinary read and refresh failures keep historical metrics and selected details visible',async()=>{
+ const old=fresh('cached');old.age_seconds=700;old.accel.cards[0].mem_used=2048;
+ const ui=harness(()=>({code:503,data:{error:'资源服务暂不可用'}}));put(ui,snapshot([old]));ui.api.state.selected='cached';ui.api.render();
+ await ui.api.readSnapshot();assert.equal(ui.api.state.data.hosts[0].id,'cached');assert.match(ui.node('card-details').textContent,/2 GiB/);assert.equal(ui.node('device-detail').hidden,false);
+ await ui.api.refreshResources();assert.equal(ui.api.state.data.hosts[0].accel.cards[0].mem_used,2048);assert.equal(ui.api.state.selected,'cached');
+ assert.match(ui.node('hosts').textContent,/Host cached/);assert.match(ui.node('detail-note').textContent,/上次读数/);assert.match(ui.node('error').textContent,/资源服务暂不可用/);
+ assert.equal(ui.api.summarize().free,0);assert.equal(ui.node('refresh-devices').disabled,false);
+});
