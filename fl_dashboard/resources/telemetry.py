@@ -11,6 +11,7 @@ import math
 import re
 
 from fl_dashboard.monitoring.branch_monitor import LABELS
+from fl_dashboard.resources.ascend import adapt_ascend_probe
 from fl_dashboard.resources.metax import adapt_metax_probe, metax_metrics_complete
 from fl_dashboard.resources.vendor_metrics import augment_vendor_metrics, probe_vendor_metrics, vendor_sections
 from fl_dashboard.resources.sunrise import probe_sunrise
@@ -34,6 +35,7 @@ FAMILY_BACKENDS = {
 def probe_script() -> str:
     """A fixed Linux shell probe: counters only, no installation or job control."""
     body = adapt_metax_probe(build_script(limits=ProbeLimits(top_n=0, tile_n=260, half=90)))
+    body = adapt_ascend_probe(body)
     # Upstream emits `T=timeout 6`, which executes a command named `6`.
     # T is a fixed command and integer here; word splitting yields timeout argv.
     body = body.replace("T=timeout 6;", "T='timeout 6';")
@@ -271,6 +273,13 @@ def parse_telemetry(alias: str, raw: str, previous_sample: CpuSample | None = No
             error = "SMI 输出超过采集上限，本轮数据不完整"
         elif metax_incomplete:
             error = "mx-smi 返回的卡数或指标不完整"
+        elif view.family == "ascend" and any(family == "ascend" for family, _ in relevant):
+            details = {detail for family, detail in relevant if family == "ascend"}
+            error = ("npu-smi 初始化失败，请检查采集账号的驱动访问权限和昇腾驱动状态"
+                     if "initialization-failed" in details else
+                     "npu-smi 查询超时，请检查昇腾驱动与运行时状态"
+                     if "tool-timeout" in details else
+                     "npu-smi info 查询失败，请检查采集账号的驱动访问权限和昇腾驱动状态")
         elif stalled:
             error = "厂商 SMI 查询失败或超时，本轮可用性待确认"
         elif malformed:

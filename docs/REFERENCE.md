@@ -277,6 +277,8 @@ SGLang 与 vLLM 使用相同的 backend CI 判定：只汇总关联 PR 提交上
 | T-Head（平头哥） | `ppu-smi` |
 | Tsingmicro（清微智能） | `tsm_smi` |
 
+Ascend 使用 `npu-smi info`，SSH 环境的 `PATH` 未包含命令时补查 `/usr/local/bin/npu-smi` 和 `/usr/local/sbin/npu-smi`。初始化失败、查询失败和超时分别提示；沿用所选采集账号，不会自动切换为 root。
+
 MetaX 校验返回卡数及每卡指标，避免详细输出截断后漏卡；Enflame 从 JSON 明确区分已用显存和总容量；T-Head 支持进程名称为空的记录；Hygon 按 `HCU Index` 归属进程；有显存占用却没有卡号的进程会保留为未归属记录，相应卡仍待确认。其他厂商残留工具的失败不会覆盖实际识别设备的有效读数，整轮超时或截断仍判定为不完整。
 
 Sunrise 的 `pt_smi` 若超时，页面会明确提示检查驱动与运行时；没有取得有效输出前不推测可用卡数。Ascend / Tsingmicro 同时保留芯片与板卡编号，数量按管理工具的设备单位计数。完整采集但证据不足的结果仍更新采集时间；历史缓存只在采集失败时保留，并明确标为历史读数。

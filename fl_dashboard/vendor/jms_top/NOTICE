@@ -9,7 +9,7 @@ source changes from this commit. TUI, authentication, inventory discovery,
 notifications and AI integration are not included.
 
 FL dashboard integration changes live in fl_dashboard/resources/telemetry.py
-and its metax.py, vendor_metrics.py and sunrise.py adapters:
+and its ascend.py, metax.py, vendor_metrics.py and sunrise.py adapters:
 - Use existing dashboard SSH profiles instead of separate JumpServer credentials.
 - Correct timeout shell assignment, require timeout, and cap the entire probe.
 - Correct node uptime ordering and CPU idle+iowait fields in the generated probe.
@@ -20,6 +20,8 @@ and its metax.py, vendor_metrics.py and sunrise.py adapters:
 - Preserve complete MetaX counters and card count, and accept T-Head process rows
   whose process name is blank.
 - Discover Sunrise pt_smi and report query failures; its metrics remain unparsed.
+- Discover Ascend npu-smi outside PATH and distinguish initialization failures,
+  query failures and timeouts without returning raw tool error messages.
 - Omit login/top-process collection and command-line reads; Hygon uses comm.
 - Add completion checking and reject incomplete, malformed or stalled availability.
 - Bound and sanitize UI fields, preserve chip/board counts, and compute CPU deltas.
