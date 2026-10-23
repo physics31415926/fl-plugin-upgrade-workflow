@@ -23,8 +23,8 @@ MAX_CARDS = 256
 _SCHEMA = 1
 _ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.-]{0,99}\Z")
 _HASH = re.compile(r"[0-9a-f]{64}\Z")
-_BACKENDS = {"cuda", "ascend", "kunlunxin", "metax", "enflame", "musa", "tsingmicro", "thead", "corex", "hygon", "sunrise"}
-_FAMILIES = {"nvidia", "ascend", "kunlunxin", "metax", "enflame", "mthreads", "tsingmicro", "thead", "iluvatar", "hygon", "sunrise"}
+_BACKENDS = {"cuda", "ascend", "kunlunxin", "metax", "enflame", "musa", "tsingmicro", "thead", "corex", "hygon", "sunrise", "rocm"}
+_FAMILIES = {"nvidia", "ascend", "kunlunxin", "metax", "enflame", "mthreads", "tsingmicro", "thead", "iluvatar", "hygon", "sunrise", "amd"}
 _HISTORY = "本地缓存记录，等待重新采集"
 _SECRET = re.compile(r"(?i)(?:sk-[a-z0-9_-]{12,}|gh[pousr]_[a-z0-9_]{12,}|github_pat_[a-z0-9_]+)")
 

@@ -266,6 +266,7 @@ SGLang 与 vLLM 使用相同的 backend CI 判定：只汇总关联 PR 提交上
 | 设备 | 采集命令 |
 | --- | --- |
 | NVIDIA | `nvidia-smi --query-gpu=...`、`--query-compute-apps=...` |
+| AMD（超威半导体） | `amd-smi static --asic --json`、`amd-smi metric --usage --mem-usage --temperature --power --json`、`amd-smi process --general --json` |
 | Ascend（昇腾） | `npu-smi info` |
 | Enflame（燧原） | `efsmi`、`efsmi pmon -c 1`、`efsmi -q -d MEMORY --json-format` |
 | Hygon（海光） | `hy-smi`、`hy-smi --showpids`，补充读取系统显存计数器 |
@@ -276,6 +277,8 @@ SGLang 与 vLLM 使用相同的 backend CI 判定：只汇总关联 PR 提交上
 | Sunrise（曦望） | `pt_smi`；目前提供工具探测和超时诊断，指标解析尚未验证 |
 | T-Head（平头哥） | `ppu-smi` |
 | Tsingmicro（清微智能） | `tsm_smi` |
+
+AMD 使用机器上已有的 `amd-smi`（包含 `/opt/rocm/bin/amd-smi` 路径兜底）及 Python 3。兼容数组和 `gpu_data` 两种 JSON 格式，远端只传回必要指标和进程名称，避免繁忙设备的详细输出超限。按 GPU ID 对齐三项查询，缺卡、进程查询失败或数据不完整时不计为空闲。AMD 当前提供设备资源监控，任务创建仍遵循各项目已支持的 backend。命令说明见 [AMD SMI 官方文档](https://rocmdocs.amd.com/projects/amdsmi/en/latest/how-to/amdsmi-cli-tool.html)。
 
 Ascend 使用 `npu-smi info`，SSH 环境的 `PATH` 未包含命令时补查 `/usr/local/bin/npu-smi` 和 `/usr/local/sbin/npu-smi`。初始化失败、查询失败和超时分别提示；沿用所选采集账号，不会自动切换为 root。
 

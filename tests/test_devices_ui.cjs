@@ -277,3 +277,14 @@ test('inactive asset records never affect account coverage, pending choices or m
  assert.doesNotMatch(ui.node('jumpserver-account-hint').textContent,/未授权|尚未获得|未返回可自动连接账号/);
  assert.equal(ui.node('jumpserver-login-fields').hidden,true);
 });
+
+test('AMD resources are named and filterable without enabling task creation',async()=>{
+ const amd={...fresh('amd'),backend:'rocm',backend_label:''};amd.accel.card_name='AMD Radeon PRO W7900D';amd.accel.family='amd';
+ const ui=harness(url=>{const route=new URL(url).pathname;if(route==='/api/projects')return{projects:[{id:'vllm',label:'vLLM'}]};if(route==='/api/capabilities')return{devices:true,read_only:false,jumpserver_settings:false};return snapshot([fresh('cuda'),amd]);});
+ await ui.api.initialize();
+ const options=ui.node('backend-filter').children;assert.deepEqual(options.slice(0,3).map(option=>option.value),['cuda','rocm','ascend']);assert.equal(options.find(option=>option.value==='rocm').textContent,'AMD / 超威半导体');
+ ui.api.state.backend='rocm';ui.api.state.search='超威';assert.deepEqual(ui.api.shownHosts().map(host=>host.id),['amd']);ui.api.render();
+ const row=ui.node('hosts').children[0];assert.match(row.children[1].textContent,/AMD \/ 超威半导体.*W7900D/);assert.equal(row.children[7].textContent,'仅资源监控');assert.equal(row.children[7].children[0].tag,'span');assert.equal(row.children[7].children[0].href,undefined);
+ const existing=ui.api.renderHost(fresh('cuda'));assert.equal(existing.children[7].children[0].tag,'a');assert.match(existing.children[7].textContent,/新建任务/);
+ ui.api.state.allowed=false;const readonly=ui.api.renderHost(amd);assert.equal(readonly.children[7].children.length,0);
+});

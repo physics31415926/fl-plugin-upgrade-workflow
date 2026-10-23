@@ -11,6 +11,7 @@ import math
 import re
 
 from fl_dashboard.monitoring.branch_monitor import LABELS
+from fl_dashboard.resources.amd import parse_amd, probe_amd
 from fl_dashboard.resources.ascend import adapt_ascend_probe
 from fl_dashboard.resources.metax import adapt_metax_probe, metax_metrics_complete
 from fl_dashboard.resources.vendor_metrics import augment_vendor_metrics, probe_vendor_metrics, vendor_sections
@@ -24,11 +25,12 @@ from fl_dashboard.vendor.jms_top.scan import parse_reply, reached
 COMPLETE = "fl-dashboard-probe-complete"
 MAX_REPLY_BYTES = 128 * 1024
 MAX_CARDS = 256
+DEVICE_LABELS = {**LABELS, "rocm": "AMD / 超威半导体"}
 FAMILY_BACKENDS = {
     "nvidia": "cuda", "ascend": "ascend", "kunlunxin": "kunlunxin",
     "metax": "metax", "enflame": "enflame", "mthreads": "musa",
     "tsingmicro": "tsingmicro", "thead": "thead", "iluvatar": "corex", "hygon": "hygon",
-    "sunrise": "sunrise",
+    "sunrise": "sunrise", "amd": "rocm",
 }
 
 
@@ -93,7 +95,7 @@ def probe_script() -> str:
     cpu_line = next(i for i, line in enumerate(lines) if line.startswith("awk '/^cpu /"))
     uptime_line = next(i for i, line in enumerate(lines) if line.startswith("cut -d. -f1 /proc/uptime"))
     lines[cpu_line], lines[uptime_line] = lines[uptime_line], lines[cpu_line]
-    body = bounded_head + "\n".join(lines) + "\n" + probe_vendor_metrics() + probe_sunrise()
+    body = bounded_head + "\n".join(lines) + "\n" + probe_vendor_metrics() + probe_sunrise() + probe_amd()
     # A wedged SMI may ignore TERM; stop only our bounded query after one second.
     body = body.replace("timeout 6", "timeout -k 1s 6").replace("timeout 12", "timeout -k 1s 12")
     return (f"echo '{SENTINEL}'\n"
@@ -225,6 +227,7 @@ def parse_telemetry(alias: str, raw: str, previous_sample: CpuSample | None = No
     reachable = valid_size and reached(raw)
     view = HostView(name=alias, reachable=reachable)
     malformed = False
+    amd_incomplete = False
     if reachable:
         try:
             parse_reply(view, raw)
@@ -232,6 +235,11 @@ def parse_telemetry(alias: str, raw: str, previous_sample: CpuSample | None = No
                 _ascend_owners(view, vendor_sections(raw, "ascend"))
             _process_evidence(view, raw)
             augment_vendor_metrics(view, raw)
+            if not view.cards:
+                amd, amd_complete = parse_amd(raw)
+                if amd is not None:
+                    view.accel = amd
+                amd_incomplete = not amd_complete
             if not view.cards and re.search(r"(?m)^##SUNRISE$", raw):
                 view.accel = AccelResult(family="sunrise", label=LABELS["sunrise"])
         except (ValueError, TypeError, IndexError, OverflowError, AttributeError):
@@ -244,7 +252,7 @@ def parse_telemetry(alias: str, raw: str, previous_sample: CpuSample | None = No
                 if not family or family == "generic" or family == view.family or view.family == "generic"]
     stalled = bool(relevant)
     metax_incomplete = view.family == "metax" and not metax_metrics_complete(view, vendor_sections(raw, "metax"))
-    invalidated = not complete or malformed or stalled or not valid_size or len(view.cards) > MAX_CARDS or metax_incomplete
+    invalidated = not complete or malformed or stalled or not valid_size or len(view.cards) > MAX_CARDS or metax_incomplete or amd_incomplete
     cards = [_card(card, invalidated=invalidated) for card in view.cards[:MAX_CARDS]]
     if not invalidated and view.family == "hygon" and any(card.procs_shared for card in view.cards):
         for card in cards:
@@ -271,6 +279,10 @@ def parse_telemetry(alias: str, raw: str, previous_sample: CpuSample | None = No
             error = "pt_smi 查询超时，请检查曦望驱动与运行时状态"
         elif any("output-truncated" in detail for _, detail in relevant):
             error = "SMI 输出超过采集上限，本轮数据不完整"
+        elif amd_incomplete or view.family == "amd" and any(family == "amd" for family, _ in relevant):
+            error = ("amd-smi 查询超时，请检查 AMD 驱动与运行时状态"
+                     if any(family == "amd" and detail == "tool-timeout" for family, detail in relevant) else
+                     "amd-smi 未返回完整的逐卡指标或进程信息，请检查工具与驱动状态")
         elif metax_incomplete:
             error = "mx-smi 返回的卡数或指标不完整"
         elif view.family == "ascend" and any(family == "ascend" for family, _ in relevant):
@@ -306,8 +318,8 @@ def parse_telemetry(alias: str, raw: str, previous_sample: CpuSample | None = No
     return {"host": _text(alias, 120), "reachable": reachable, "verdict": verdict,
             "error": error, "collection_complete": bool(reachable and not invalidated),
             "updated_at": datetime.now(timezone.utc).isoformat(),
-            "backend": backend, "backend_label": LABELS.get(backend, "无法识别"), "supported": backend is not None and family != "sunrise",
-            "accel": {"family": family, "label": LABELS.get(backend, "无法识别"),
+            "backend": backend, "backend_label": DEVICE_LABELS.get(backend, "无法识别"), "supported": backend is not None and family != "sunrise",
+            "accel": {"family": family, "label": DEVICE_LABELS.get(backend, "无法识别"),
                       "card_name": _text(view.card_name), "total": total, "free": free, "busy": busy,
                       "unknown": unknown, "residual": residual, "physical_cards": physical,
                       "chips_per_card": total // physical if physical else 1, "cards": cards}, "node": node}, sample

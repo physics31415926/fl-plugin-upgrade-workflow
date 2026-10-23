@@ -9,7 +9,9 @@ source changes from this commit. TUI, authentication, inventory discovery,
 notifications and AI integration are not included.
 
 FL dashboard integration changes live in fl_dashboard/resources/telemetry.py
-and its ascend.py, metax.py, vendor_metrics.py and sunrise.py adapters:
+and its amd.py, ascend.py, metax.py, vendor_metrics.py and sunrise.py adapters:
+- Add AMD SMI JSON queries, compact allowlisted fields before transport, validate
+  matching GPU sets and retain unknown availability on incomplete readings.
 - Use existing dashboard SSH profiles instead of separate JumpServer credentials.
 - Correct timeout shell assignment, require timeout, and cap the entire probe.
 - Correct node uptime ordering and CPU idle+iowait fields in the generated probe.

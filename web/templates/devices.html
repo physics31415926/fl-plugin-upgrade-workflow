@@ -45,7 +45,7 @@
 (() => {
 'use strict';
 const $=id=>document.getElementById(id);
-const labels={cuda:'NVIDIA / 英伟达',ascend:'Ascend / 昇腾',enflame:'Enflame / 燧原',hygon:'Hygon / 海光',corex:'iluvatar / 天数智芯',kunlunxin:'Kunlunxin / 昆仑芯',metax:'MetaX / 沐曦',musa:'Moore Threads / 摩尔线程',sunrise:'Sunrise / 曦望',thead:'T-Head / 平头哥',tsingmicro:'Tsingmicro / 清微'};
+const labels={cuda:'NVIDIA / 英伟达',rocm:'AMD / 超威半导体',ascend:'Ascend / 昇腾',enflame:'Enflame / 燧原',hygon:'Hygon / 海光',corex:'iluvatar / 天数智芯',kunlunxin:'Kunlunxin / 昆仑芯',metax:'MetaX / 沐曦',musa:'Moore Threads / 摩尔线程',sunrise:'Sunrise / 曦望',thead:'T-Head / 平头哥',tsingmicro:'Tsingmicro / 清微'};
 const statusNames={pending:'等待采集',free:'整机空闲',partial:'部分可用',busy:'占用中',residual:'显存残留',unknown:'可用性待确认',down:'连接失败',cpu:'未识别加速设备',stale:'读数已过期'};
 const cardStatusNames={free:'空闲',busy:'占用',residual:'显存残留',unknown:'可用性待确认',stale:'过期'};
 const state={project:new URLSearchParams(location.search).get('project')||'',generation:0,revision:0,readable:false,allowed:false,authExpired:false,loading:false,requesting:false,switching:false,auto:true,data:null,receivedAt:0,lastRefreshAttempt:0,selected:null,search:'',backend:'',status:'',machineSource:'ssh_config',jumpserverSettings:false};
@@ -86,7 +86,7 @@ function renderHost(host){
  const capacity=el('td'),chips=el('div','cards'),old=stale(host);for(const card of (host.accel?.cards||[])){const chip=el('span','card-chip '+cardState(card,old),cardSymbol(card,old));chip.title=['设备 '+card.index,cardStatusNames[cardState(card,old)]||'可用性待确认',reasonText(card.reason)].filter(Boolean).join(' · ');chips.append(chip);}if(!chips.children.length)chips.append(el('span','muted','—'));capacity.append(chips);const accel=host.accel||{};let count=old?'可用数待确认':finite(accel.total)&&accel.total>0?number(accel.free)+' / '+number(accel.total)+' 可用':'未报告卡数';if(accel.chips_per_card>1)count+=' · '+number(accel.physical_cards)+' 板 × '+number(accel.chips_per_card)+' 芯片';capacity.append(el('span','sub',count));
  const mem=el('td','mono',memoryText(host)),node=el('td','',percent(host.node?.cpu_pct)+' / '+percent(host.node?.mem_pct));node.append(el('span','sub','每核负载 '+number(host.node?.load_per_cpu,2)));
  const observed=el('td','',ageText(host));if(old)observed.append(el('span','sub','历史读数 · 不计入可用资源'));
- const action=el('td');if(state.allowed&&host.id){const link=el('a','small-action','新建任务 →');link.href=taskUrl(host);link.title='选择此设备，创建前仍需确认资源可用';action.append(link);}row.append(nameCell,type,status,capacity,mem,node,observed,action);return row;
+ const action=el('td');if(state.allowed&&host.id){if(host.backend==='rocm'){action.append(el('span','muted small-action','仅资源监控'));}else{const link=el('a','small-action','新建任务 →');link.href=taskUrl(host);link.title='选择此设备，创建前仍需确认资源可用';action.append(link);}}row.append(nameCell,type,status,capacity,mem,node,observed,action);return row;
 }
 function renderTable(){const hosts=shownHosts(),fragment=document.createDocumentFragment();for(const host of hosts)fragment.append(renderHost(host));$('hosts').replaceChildren(fragment);$('empty').hidden=hosts.length>0;$('empty').textContent=currentHosts().length?'没有符合条件的设备。':state.allowed?(state.machineSource==='jumpserver'?'暂无可采集的计算设备。请登录 JumpServer 并刷新机器列表。':'暂无计算设备。请连接 JumpServer，或在任务工作台同步 SSH 配置。'):'暂无设备记录，请等待管理员采集。';}
 function renderDetail(){

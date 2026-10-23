@@ -13,6 +13,25 @@ from test_share_server import FakeMonitor
 
 
 class PublicDeviceTests(unittest.TestCase):
+    def test_amd_metrics_are_visible_without_exposing_control_or_connection_data(self):
+        result = public_snapshot({"project_id": "vllm", "hosts": [{
+            "id": "amd-fixture", "backend": "rocm", "backend_label": "AMD / 超威半导体",
+            "supported": True, "ssh_connection": {"key": "private"}, "task_count": 2,
+            "accel": {"family": "amd", "label": "AMD / 超威半导体", "card_name": "AMD Radeon PRO W7900D",
+                      "total": 1, "free": 0, "busy": 1, "unknown": 0,
+                      "cards": [{"index": 0, "name": "AMD Radeon PRO W7900D", "mem_used": 2048,
+                                 "mem_total": 49152, "busy": True, "state": "busy", "procs": []}]}}]}, "vllm")
+        self.assertTrue(result["read_only"])
+        row = result["hosts"][0]
+        self.assertEqual("rocm", row["backend"])
+        self.assertEqual("AMD / 超威半导体", row["backend_label"])
+        self.assertEqual("amd", row["accel"]["family"])
+        self.assertEqual(49152, row["accel"]["cards"][0]["mem_total"])
+        self.assertTrue(row["supported"])
+        self.assertNotIn("ssh_connection", row)
+        self.assertNotIn("task_count", row)
+        self.assertNotIn("private", json.dumps(result))
+
     def test_projection_only_preserves_display_metrics_at_every_level(self):
         result = public_snapshot({"project_id": "vllm", "ssh_profiles": "private", "summary": {"free_cards": 1, "config": "private"},
             "hosts": [{"id": "device", "label": "GPU", "ssh_connection": "private", "source_root": "private",

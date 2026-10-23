@@ -36,6 +36,26 @@ class DeviceTelemetryCacheTests(unittest.TestCase):
         self.path = Path(self.temp.name) / "runtime" / "device-resource-cache.json"
         self.cache = DeviceTelemetryCache(self.path)
 
+    def test_amd_identity_survives_restart_without_restoring_availability(self):
+        for profile_backend in ("", "rocm"):
+            with self.subTest(profile_backend=profile_backend):
+                key, row = item()
+                row.update(backend=profile_backend, backend_label="AMD / 超威半导体")
+                row["view"].update(backend="rocm", backend_label="AMD / 超威半导体")
+                row["view"]["accel"].update(family="amd", label="AMD / 超威半导体", card_name="AMD Radeon PRO W7900D")
+                row["view"]["accel"]["cards"][0]["name"] = "AMD Radeon PRO W7900D"
+                self.assertTrue(self.cache.save({key: row}))
+                view = DeviceTelemetryCache(self.path).load()[key]["view"]
+                self.assertEqual("rocm", view["backend"])
+                self.assertEqual("AMD / 超威半导体", view["backend_label"])
+                self.assertEqual("amd", view["accel"]["family"])
+                self.assertEqual("AMD / 超威半导体", view["accel"]["label"])
+                self.assertEqual("AMD Radeon PRO W7900D", view["accel"]["card_name"])
+                self.assertTrue(view["supported"])
+                self.assertTrue(view["stale"])
+                self.assertEqual((0, 1), (view["accel"]["free"], view["accel"]["unknown"]))
+                self.assertIsNone(view["accel"]["cards"][0]["busy"])
+
     def test_round_trip_keeps_metrics_and_marks_every_availability_unknown(self):
         key, row = item()
         self.assertTrue(self.cache.save({key: row}))
