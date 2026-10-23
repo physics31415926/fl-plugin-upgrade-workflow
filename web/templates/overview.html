@@ -84,6 +84,14 @@
   function badge(status,text){status=normalize(status);return el('span','pill '+(Object.hasOwn(labels,status)?status:'unknown'),text||labels[status]||'未知');}
   function githubLink(url,text){try{const target=new URL(url);if(target.protocol!=='https:'||target.hostname!=='github.com'||target.username||target.password)return null;const anchor=el('a','',text);anchor.href=target.href;anchor.target='_blank';anchor.rel='noopener noreferrer';return anchor;}catch(_){return null;}}
   function timeText(value){if(!value)return '尚未采集';const date=new Date(value);return Number.isFinite(date.getTime())?date.toLocaleString('zh-CN',{hour12:false}):'时间未知';}
+  function collectionMessage(data){
+    const state=data.collection;if(!state)return '每 15 秒读取 · 每分钟采集';
+    if(state.has_snapshot===false)return state.error?'首次采集未完成，可重试':'首次采集中…';
+    if(state.refreshing)return '显示上次采集结果 · 后台更新中';
+    if(state.error)return '后台更新未完成 · 保留上次采集结果';
+    if(state.stale)return '显示上次采集结果 · 等待后台更新';
+    return state.cached?'已显示缓存结果 · 每 15 秒读取':'每 15 秒读取 · 每分钟采集';
+  }
   async function request(url,options={}){const response=await fetch(url,{cache:'no-store',credentials:'same-origin',signal:AbortSignal.timeout(90000),...options});const value=await response.json();if(!response.ok)throw new Error(value.error||'读取失败（HTTP '+response.status+'）');return value;}
   function makeCard(project){
     const root=el('article','project '+project.engine),header=el('div','project-head'),title=el('div','project-title'),heading=el('h2','',project.label),engine=el('span','engine',({sglang:'SGLang',vllm:'vLLM'}[project.engine]||project.engine||'Monitor'));title.append(heading,engine);
@@ -92,8 +100,9 @@
     const collection=el('div','collection'),notice=el('div','notice');notice.hidden=true;notice.setAttribute('role','status');const tableWrap=el('div','table-wrap'),table=el('table'),thead=el('thead'),tr=el('tr');for(const text of ['Backend / PR','代码合入','适配 CI','验收结果']){const th=el('th','',text);th.scope='col';tr.append(th);}thead.append(tr);const tbody=el('tbody');table.append(thead,tbody);tableWrap.append(table);
     const tasks=el('div','tasks'),footer=el('div','project-footer'),detail=el('a','button','查看分支进展'),taskLink=el('a','','查看任务 →');footer.append(detail,taskLink);root.append(header,metrics,collection,notice,tableWrap,tasks,footer);
     const card={root,heading,engine,select,refresh,meta,feedback,counts,collection,notice,tbody,tasks,detail,taskLink,createLink,project,branch:project.default_branch,snapshot:null,busy:false,generation:0};
-    select.addEventListener('change',async()=>{if(card.busy)return;card.generation++;card.branch=select.value;clearSelectedBranch(card);setCardBusy(card,true,'正在读取分支…');try{feedback.textContent=await loadCard(card)?'每 15 秒读取 · 每分钟采集':'分支读取失败，可重试';}finally{setCardBusy(card,false);}});
-    refresh.addEventListener('click',async()=>{if(card.busy)return;card.generation++;setCardBusy(card,true,'正在采集最新状态…');try{const data=await request(appUrl('api/branch-refresh',project.id),{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({branch:card.branch})});if(data.branch&&data.branch!==card.branch)throw new Error('返回的分支与所选分支不一致，请重试');renderSnapshot(card,data);await loadSessions(card);feedback.textContent='已刷新 · '+new Date().toLocaleTimeString('zh-CN',{hour12:false});}catch(error){showError(card,error.message);feedback.textContent='刷新未完成，可重试';}finally{setCardBusy(card,false);}});
+    select.addEventListener('change',async()=>{if(card.busy)return;card.generation++;card.branch=select.value;clearSelectedBranch(card);setCardBusy(card,true,'正在读取分支…');try{if(!await loadCard(card))feedback.textContent='分支读取失败，可重试';}finally{setCardBusy(card,false);}});
+    refresh.addEventListener('click',async()=>{if(card.busy)return;card.generation++;setCardBusy(card,true,'正在采集最新状态…');try{const data=await request(appUrl('api/branch-refresh',project.id),{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({branch:card.branch})});if(data.branch&&data.branch!==card.branch)throw new Error('返回的分支与所选分支不一致，请重试');renderSnapshot(card,data);await loadSessions(card);if(!data.collection)feedback.textContent='已刷新 · '+new Date().toLocaleTimeString('zh-CN',{hour12:false});}catch(error){showError(card,error.message);feedback.textContent='刷新未完成，可重试';}finally{setCardBusy(card,false);}});
+    clearSelectedBranch(card);
     return card;
   }
   function setCardBusy(card,busy,message){card.busy=busy;card.refresh.disabled=busy;card.select.disabled=busy;card.refresh.setAttribute('aria-busy',String(busy));card.root.setAttribute('aria-busy',String(busy));card.refresh.textContent=busy?'刷新中…':'刷新状态';if(message)card.feedback.textContent=message;}
@@ -187,12 +196,25 @@
   }
 
   function renderSnapshot(card,data){
-    card.snapshot=data;card.branch=data.branch||card.branch;const options=[...new Set([card.branch,...(data.branches||[])].filter(Boolean))],prior=JSON.stringify([...card.select.options].map(option=>option.value));if(prior!==JSON.stringify(options)){card.select.replaceChildren();for(const branch of options){const option=el('option','',branch);option.value=branch;card.select.append(option);}}card.select.value=card.branch;
+    if(data.collection?.has_snapshot===false&&card.snapshot&&card.snapshot.branch===(data.branch||card.branch)){
+      return renderSnapshot(card,{...card.snapshot,collection:{...data.collection,has_snapshot:true,cached:true,stale:true}});
+    }
+    card.branch=data.branch||card.branch;const options=[...new Set([card.branch,...(data.collection?.has_snapshot===false?[...card.select.options].map(option=>option.value):[]),...(data.branches||[])].filter(Boolean))],prior=JSON.stringify([...card.select.options].map(option=>option.value));if(prior!==JSON.stringify(options)){card.select.replaceChildren();for(const branch of options){const option=el('option','',branch);option.value=branch;card.select.append(option);}}card.select.value=card.branch;
+    if(card.feedback)card.feedback.textContent=collectionMessage(data);
+    if(data.collection?.has_snapshot===false){
+      card.snapshot=null;card.engine.textContent=engineName(data.engine||card.project.engine)+(data.collection.error?' · 等待采集':' · 采集中');
+      card.meta.replaceChildren(el('span','','尚无历史采集结果'));card.collection.replaceChildren();
+      for(const value of Object.values(card.counts))value.textContent='—';
+      card.notice.hidden=!data.collection.error;card.notice.textContent=data.collection.error||'';
+      const row=el('tr'),cell=el('td','empty',data.collection.error?'首次采集未完成，请稍后重试。':'首次采集中，完成后自动显示适配进展。');cell.colSpan=4;row.append(cell);card.tbody.replaceChildren(row);
+      updateCardLinks(card);scheduleAlignment();return;
+    }
+    card.snapshot=data;
     card.engine.textContent=engineName(data.engine||card.project.engine)+(data.upstream_version||data.vllm_version?' '+(data.upstream_version||data.vllm_version):' · 版本未识别');card.engine.title='升级目标版本来自所选分支 pyproject.toml 的依赖声明';card.meta.replaceChildren();const head=githubLink(data.head_url,'HEAD '+String(data.head||'').slice(0,10))||el('span','mono','HEAD '+String(data.head||'未知').slice(0,10));head.title=data.head||'';card.meta.append(head,el('span','','采集于 '+timeText(data.observed_at)));
     const backends=[...(data.backends||[])].sort((a,b)=>(a.id!=="cuda")-(b.id!=="cuda")||String(a.label||a.id).localeCompare(String(b.label||b.id),"en",{sensitivity:"base"})),total=backends.length;card.counts.merged.textContent=backends.filter(item=>item.integration?.status==='merged').length+' / '+total;card.counts.ci.textContent=backends.filter(item=>effectiveCi(item,data.head)==='passed').length+' / '+total;card.counts.gate.textContent=backends.filter(item=>['passed','recorded_pass'].includes(effectiveGate(item,data.head))).length+' / '+total;
     const coverage = backends.find(item => item.gate?.total)?.gate;
     card.collection.replaceChildren();if(coverage)card.collection.append(el('span','','逐项覆盖 '+coverage.total+' 场景 · '+coverage.requests_total+' 请求 / backend'));
-    const messages=[...(data.errors||[])];for(const warning of data.case_discovery?.warnings||[])messages.push('逐项场景来源提示（不影响 PR 验收记录）：'+(warning.detail||warning.source||warning.model||'待核对'));card.notice.hidden=!messages.length;card.notice.textContent=messages.join('；');
+    const messages=[...(data.errors||[])];if(data.collection?.error)messages.push(data.collection.error);for(const warning of data.case_discovery?.warnings||[])messages.push('逐项场景来源提示（不影响 PR 验收记录）：'+(warning.detail||warning.source||warning.model||'待核对'));card.notice.hidden=!messages.length;card.notice.textContent=messages.join('；');
     card.tbody.replaceChildren();
     for(const backend of backends){
       const row=el('tr'),name=el('td');row.setAttribute('data-backend',backend.id);name.append(el('strong','',backend.label||backend.id));
@@ -247,7 +269,7 @@
     catch(error){if(generation===card.generation&&branch===card.branch)showError(card,error.message);return false;}
   }
   async function update(){
-    if(loading)return;loading=true;const generations=new Map([...cards].map(([id,card])=>[id,card.generation]));try{const data=await request(appUrl('api/projects-status'));for(const entry of data.projects||[]){const card=cards.get(entry.id);if(!card||card.busy||card.generation!==generations.get(entry.id))continue;if(card.branch!==card.project.default_branch){await loadCard(card);continue;}if(entry.status){renderSnapshot(card,entry.status);renderTasks(card,entry.adaptation_tasks||entry.sessions);}if(entry.error)showError(card,entry.error);} $('sync').textContent='已连接 · 页面读取于 '+new Date().toLocaleTimeString('zh-CN',{hour12:false});$('error').hidden=true;}catch(error){$('sync').textContent='连接中断 · 正在等待重试';$('error').textContent=error.message+'；已有采集结果保留。';$('error').hidden=false;}finally{loading=false;}
+    if(loading)return;loading=true;const generations=new Map([...cards].map(([id,card])=>[id,card.generation]));try{const data=await request(appUrl('api/projects-status'));for(const entry of data.projects||[]){const card=cards.get(entry.id);if(!card||card.busy||card.generation!==generations.get(entry.id))continue;if(card.branch!==card.project.default_branch){await loadCard(card);continue;}if(entry.status){if(entry.status.branch&&entry.status.branch!==card.branch){showError(card,'返回的分支与所选分支不一致，请重试');continue;}renderSnapshot(card,entry.status);renderTasks(card,entry.adaptation_tasks||entry.sessions);}if(entry.error)showError(card,entry.error);} $('sync').textContent='已连接 · 页面读取于 '+new Date().toLocaleTimeString('zh-CN',{hour12:false});$('error').hidden=true;}catch(error){$('sync').textContent='连接中断 · 正在等待重试';$('error').textContent=error.message+'；已有采集结果保留。';$('error').hidden=false;}finally{loading=false;}
   }
   async function loadAccessNavigation(){try{const capabilities=await request(appUrl('api/capabilities'));$('access-shares-link').hidden=capabilities.access_shares!==true;$('devices-link').hidden=capabilities.devices!==true;if(capabilities.shared_access===true){$('access-mode').textContent='分享管理权限';$('access-mode').hidden=false;}}catch(_){$('access-shares-link').hidden=true;}}
   async function initialize(){try{const data=await request(appUrl('api/projects'));readOnly=data.read_only===true;$('access-mode').hidden=!readOnly;loadAccessNavigation();$('projects').replaceChildren();for(const project of data.projects||[]){const card=makeCard(project);cards.set(project.id,card);$('projects').append(card.root);}if(!cards.size)throw new Error('尚未配置监控仓库');if(readOnly)$('footnote').textContent='团队只读看板每 15 秒读取状态，后台定期重新采集。可分别刷新各个仓库；原生子任务状态只读展示；机器配置、任务控制与原始私有存档由维护者在本机管理。';await update();setInterval(()=>{if(!document.hidden)update();},15000);document.addEventListener('visibilitychange',()=>{if(!document.hidden)update();});}catch(error){$('error').textContent=error.message;$('error').hidden=false;$('sync').textContent='监控服务需要处理';}}

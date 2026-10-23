@@ -1023,7 +1023,7 @@ def make_server(engine: Engine | None, host: str, port: int, monitor: object | N
                     return
                 branch = parse_qs(target.query).get("branch", [None])[0]
                 try:
-                    self._json(200, monitor.status(branch=branch))
+                    self._json(200, project.cached_status(branch=branch))
                 except (ValueError, MonitorError) as exc:
                     self._json(HTTPStatus.BAD_REQUEST, {"error": str(exc)})
                 except Exception as exc:
@@ -1286,7 +1286,7 @@ def make_server(engine: Engine | None, host: str, port: int, monitor: object | N
                         branch = body.get("branch")
                         if branch is not None and not isinstance(branch, str):
                             raise WorkflowError("branch must be a string")
-                        self._json(200, monitor.refresh_branch(branch=branch))
+                        self._json(200, project.refresh_status(branch=branch))
                 elif target == "/api/start":
                     engine.launch(dry_run=body.get("dry_run", False) is True)
                     self._json(HTTPStatus.ACCEPTED, {"accepted": True})
@@ -1304,6 +1304,7 @@ def make_server(engine: Engine | None, host: str, port: int, monitor: object | N
 
     class DashboardServer(ThreadingHTTPServer):
         def server_close(self):
+            registry.close_caches()
             device_fleet.close()
             jumpserver.close()
             super().server_close()

@@ -287,16 +287,24 @@ class FlflowTests(unittest.TestCase):
 
         class FakeMonitor:
             def status(self, branch=None):
-                return {"branch": branch or "0.4.0-dev", "head": "a" * 40}
+                return {"branch": branch or "0.4.0-dev", "head": "a" * 40, "backends": []}
 
             def refresh_branch(self, branch=None):
-                return {"branch": branch or "0.4.0-dev", "refreshed": True}
+                return {"branch": branch or "0.4.0-dev", "refreshed": True, "backends": []}
 
             def read_evidence(self, branch, backend, model, mode, scenario):
                 return {"branch": branch, "backend": backend, "model": model,
                         "mode": mode, "scenario": scenario, "summary": {"passed": True}}
 
-        server = flflow.make_server(flflow.Engine(self.config_path), "127.0.0.1", 0, FakeMonitor())
+        from fl_dashboard.projects.project_registry import ProjectRegistry
+        registry = ProjectRegistry.single(flflow.Engine(self.config_path), FakeMonitor())
+        registry.projects[0].cached_status("0.4.0-dev")
+        cache = registry.projects[0].snapshot_cache()
+        with cache._lock:
+            flight = cache._entries["0.4.0-dev"].flight
+        if flight:
+            self.assertTrue(flight.wait(3))
+        server = flflow.make_server(None, "127.0.0.1", 0, registry=registry)
         worker = threading.Thread(target=server.serve_forever, daemon=True)
         worker.start()
         port = server.server_port

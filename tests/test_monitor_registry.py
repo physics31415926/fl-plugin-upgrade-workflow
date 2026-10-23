@@ -35,7 +35,10 @@ class MonitorRegistryTests(unittest.TestCase):
                 settings_factory=lambda path:None,flagscale_settings_factory=lambda path:None)
             try:
                 self.assertIsInstance(registry.projects[0].monitor,ExampleMonitor)
-                self.assertEqual(registry.statuses()["projects"][0]["status"]["engine"],"example")
+                registry.projects[0].refresh_status()
+                snapshot = registry.statuses()["projects"][0]["status"]
+                self.assertEqual(snapshot["engine"],"example")
+                self.assertTrue(snapshot["collection"]["has_snapshot"])
                 self.assertFalse(registry.projects[0].metadata()["sessions"])
                 forbidden.assert_not_called()
             finally:
@@ -55,7 +58,8 @@ class MonitorRegistryTests(unittest.TestCase):
         monitor=ExampleMonitor({"engine":"example","branch":"main"})
         cache=SnapshotCache(monitor,refresh_interval=0)
         try:
-            self.assertEqual(cache.get()["engine"],"example")
             self.assertEqual(cache.refresh()["branch"],"main")
+            self.assertEqual(cache.get()["engine"],"example")
+            self.assertTrue(cache.get()["collection"]["has_snapshot"])
         finally:
             cache.close()

@@ -8,6 +8,7 @@ from pathlib import Path
 import ssl
 import tempfile
 import threading
+import time
 import unittest
 from unittest.mock import patch
 
@@ -103,6 +104,18 @@ class FakeMonitor:
         return self.status(branch)
 
 
+def wait_for_snapshot(cache, branch=None):
+    """Explicitly collect fixtures without relying on constructor-side I/O."""
+    deadline = time.monotonic() + 3
+    while time.monotonic() < deadline:
+        snapshot = cache.get(branch)
+        collection = snapshot.get("collection", {})
+        if not collection.get("refreshing") and (collection.get("has_snapshot") or collection.get("error")):
+            return snapshot
+        time.sleep(0.005)
+    raise AssertionError("Snapshot collection did not finish")
+
+
 class TLSConfigurationTests(unittest.TestCase):
     def test_tls_parameters_must_be_paired_before_monitors_or_workers_start(self):
         self.assertIsNone(load_tls_context())
@@ -172,6 +185,7 @@ class ShareServerTests(unittest.TestCase):
         self.index.write_text("<html>readonly</html>", encoding="utf-8")
         self.monitor = FakeMonitor()
         self.cache = SnapshotCache(self.monitor, refresh_interval=0)
+        wait_for_snapshot(self.cache)
         self.server = None
         self.worker = None
 
@@ -256,7 +270,7 @@ class ShareServerTests(unittest.TestCase):
         self.assertEqual(self.request("/api/codex-sessions", method="POST", tls_context=client_context)[0], 405)
         self.assertEqual(self.request("/api/branch-refresh", method="POST", tls_context=client_context,
                                       extra_headers={"Origin": "https://other.example"})[0], 403)
-        self.assertEqual(self.monitor.calls, [("status", None)])
+        self.assertEqual(self.monitor.calls, [("status", self.monitor.branch)])
 
     def test_direct_https_handshake_authentication_and_read_only_routes(self):
         cert_path = Path(self.temp.name) / "explicit_dummy-cert.pem"
@@ -285,7 +299,7 @@ class ShareServerTests(unittest.TestCase):
         self.assertEqual(self.request("/", authorization=self.auth(), tls_context=client_context)[0], 200)
         self.assertEqual(self.request("/api/logs", authorization=self.auth(), tls_context=client_context)[0], 404)
         self.assertEqual(self.request("/api/codex-sessions", method="POST", authorization=self.auth(), tls_context=client_context)[0], 405)
-        self.assertEqual(self.monitor.calls, [("status", None)])
+        self.assertEqual(self.monitor.calls, [("status", self.monitor.branch)])
 
     def test_public_projection_keeps_results_but_removes_private_metadata_recursively(self):
         original = source_snapshot()
@@ -455,7 +469,7 @@ class ShareServerTests(unittest.TestCase):
             status, headers, _ = self.request("/api/codex-sessions", method=method, authorization=self.auth())
             self.assertEqual(status, 405)
             self.assertEqual(headers["Allow"], "GET, HEAD")
-        self.assertEqual(self.monitor.calls, [("status", None)])
+        self.assertEqual(self.monitor.calls, [("status", self.monitor.branch)])
 
     def test_agent_settings_and_provider_routes_are_absent_from_share(self):
         self.serve(base_path="/fl/dashboard", password="test-long-password")
@@ -468,7 +482,7 @@ class ShareServerTests(unittest.TestCase):
                                                       body={"api_key": "explicit_dummy_unaccepted_key"})
                     self.assertEqual(status, 405)
                     self.assertEqual(headers["Allow"], "GET, HEAD")
-        self.assertEqual(self.monitor.calls, [("status", None)])
+        self.assertEqual(self.monitor.calls, [("status", self.monitor.branch)])
 
     def test_share_acceptance_records_link_pr_without_exporting_private_archive(self):
         source = source_snapshot()
@@ -496,6 +510,7 @@ class ShareServerTests(unittest.TestCase):
         self.cache.close()
         self.monitor.status = lambda branch=None: source
         self.cache = SnapshotCache(self.monitor, refresh_interval=0)
+        wait_for_snapshot(self.cache)
         self.serve(password="test-long-password")
         for path in ("/api/branch-status", "/api/projects-status"):
             status, _, data = self.request(path, authorization=self.auth())
@@ -558,6 +573,7 @@ class ShareServerTests(unittest.TestCase):
         registry = ProjectRegistry([project])
         self.cache.close()
         self.cache = ProjectSnapshotCache(registry, refresh_interval=0)
+        wait_for_snapshot(self.cache)
         self.serve(password="test-long-password")
         for path in ("/api/adaptation-tasks?project=vllm", "/api/projects-status"):
             status, _, data = self.request(path, authorization=self.auth())
@@ -618,6 +634,7 @@ class ShareServerTests(unittest.TestCase):
                                  agent_settings=owner, readonly_sessions=readonly)
         self.cache.close()
         self.cache = ProjectSnapshotCache(ProjectRegistry([project]), refresh_interval=0)
+        wait_for_snapshot(self.cache)
         self.serve(password="test-long-password")
 
         def observations(path):
@@ -670,6 +687,7 @@ class ShareServerTests(unittest.TestCase):
         self.assertTrue(project.metadata(read_only=True)["adaptation_tasks"])
         self.cache.close()
         self.cache = ProjectSnapshotCache(ProjectRegistry([project]), refresh_interval=0)
+        wait_for_snapshot(self.cache)
         self.serve(password="test-long-password")
         status, _, data = self.request("/api/capabilities?project=vllm", authorization=self.auth())
         self.assertEqual(status, 200)
@@ -725,14 +743,15 @@ class ShareServerTests(unittest.TestCase):
                                      extra_headers={"Origin":"https://other.example"})[0], 403)
         self.assertEqual(self.request("/api/branch-refresh", method="POST", body={"branch":"other"})[0], 400)
         self.assertEqual(self.request("/api/branch-refresh", method="POST")[0], 415)
-        self.assertEqual(self.monitor.calls, [("status", None)])
+        self.assertEqual(self.monitor.calls, [("status", self.monitor.branch)])
 
     def test_cached_status_rejects_arbitrary_refs_without_git_fetch(self):
         self.serve()
         self.assertEqual(self.request("/api/branch-status?branch=../../private")[0], 400)
         self.assertEqual(self.request("/api/branch-status?branch=main")[0], 200)
         self.assertEqual(self.request("/api/branch-status?branch=main")[0], 200)
-        self.assertEqual(self.monitor.calls, [("status", None), ("status", "main")])
+        wait_for_snapshot(self.cache, "main")
+        self.assertEqual(self.monitor.calls, [("status", self.monitor.branch), ("status", "main")])
 
     def test_non_loopback_requires_password_or_explicit_trusted_ingress(self):
         with self.assertRaises(ValueError):
@@ -748,30 +767,23 @@ class ShareServerTests(unittest.TestCase):
         def failing_status(branch=None):
             raise RuntimeError("secret /home/private C:\\Users\\operator 192.168.1.20")
         self.monitor.status = failing_status
+        self.assertEqual(self.request("/api/branch-status?branch=bad")[0], 200)
+        wait_for_snapshot(self.cache, "bad")
         status, _, data = self.request("/api/branch-status?branch=bad")
-        self.assertEqual(status, 503)
+        self.assertEqual(status, 200)
+        self.assertTrue(json.loads(data)["collection"]["error"])
         self.assertNotIn(b"private", data)
         self.assertNotIn(b"Users", data)
+        self.assertNotIn(b"192.168.1.20", data)
 
-    def test_background_refresh_replaces_cache_with_sanitized_data(self):
-        class OneCycle:
-            def __init__(self):
-                self.cycles = 0
-
-            def wait(self, _interval):
-                self.cycles += 1
-                return self.cycles > 1
-
-            def is_set(self):
-                return False
-
-            def set(self):
-                pass
-
-        self.cache._stop = OneCycle()
-        self.cache._refresh()
-        self.assertIn(("refresh", "0.4.0-dev"), self.monitor.calls)
-        self.assertNotIn("source_thread", json.dumps(self.cache.get()))
+    def test_disabled_background_refresh_keeps_the_cached_public_snapshot(self):
+        calls = list(self.monitor.calls)
+        first = self.cache.get()
+        second = self.cache.get()
+        self.assertEqual(first["observed_at"], second["observed_at"])
+        self.assertFalse(second["collection"]["refreshing"])
+        self.assertEqual(self.monitor.calls, calls)
+        self.assertNotIn("source_thread", json.dumps(second))
 
 
 if __name__ == "__main__":

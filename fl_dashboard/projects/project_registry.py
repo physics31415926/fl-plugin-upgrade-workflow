@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 from concurrent.futures import ThreadPoolExecutor
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from http.client import HTTPConnection, HTTPException
 import json
 from pathlib import Path
@@ -34,6 +34,28 @@ class ProjectContext:
     agent_settings: object | None = None
     readonly_sessions: object | None = None
     flagscale_settings: object | None = None
+    _snapshot_cache: object | None = field(default=None, init=False, repr=False)
+    _snapshot_lock: object = field(default_factory=threading.Lock, init=False, repr=False)
+
+    def snapshot_cache(self):
+        with self._snapshot_lock:
+            if self._snapshot_cache is None:
+                if self.monitor is None:
+                    raise ProjectError("Branch monitor is not configured")
+                from fl_dashboard.monitoring.snapshot_cache import MonitorSnapshotCache
+                self._snapshot_cache = MonitorSnapshotCache(self.monitor, namespace="local-" + self.id)
+            return self._snapshot_cache
+
+    def cached_status(self, branch=None):
+        return self.snapshot_cache().get(branch)
+
+    def refresh_status(self, branch=None):
+        return self.snapshot_cache().refresh(branch)
+
+    def close_cache(self):
+        with self._snapshot_lock:
+            if self._snapshot_cache is not None:
+                self._snapshot_cache.close()
 
     def metadata(self, *, read_only=False):
         return {"id": self.id, "label": self.label, "engine": self.engine_name,
@@ -65,12 +87,12 @@ class ProjectContext:
         historical = [task for task in dashboard if task["historical"]]
         return native + current + historical
 
-    def status(self):
+    def status(self, *, cached=False):
         result = {"id": self.id, "label": self.label, "engine": self.engine_name,
                   "status": None, "error": self.monitor_error, "sessions": []}
         if self.monitor is not None:
             try:
-                result["status"] = self.monitor.status()
+                result["status"] = self.cached_status() if cached else self.monitor.status()
             except Exception as exc:
                 result["error"] = str(exc)
         if self.sessions is not None:
@@ -492,9 +514,14 @@ class ProjectRegistry:
 
     def statuses(self):
         with ThreadPoolExecutor(max_workers=min(8, len(self.projects))) as pool:
-            return {"projects": list(pool.map(lambda project: project.status(), self.projects))}
+            return {"projects": list(pool.map(lambda project: project.status(cached=True), self.projects))}
+
+    def close_caches(self):
+        for project in self.projects:
+            project.close_cache()
 
     def close(self):
+        self.close_caches()
         for project in self.projects:
             if project.sessions is not None:
                 project.sessions.close()

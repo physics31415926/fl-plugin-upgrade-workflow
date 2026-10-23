@@ -518,7 +518,7 @@
   function branchOptions(data) {
     const select = byId("branch-select");
     const selected = data.branch || select.value || "0.4.0-dev";
-    const names = Array.isArray(data.branches) ? data.branches : [];
+    const names = [...(data.collection?.has_snapshot===false?[...select.options].map(option=>option.value):[]),...(Array.isArray(data.branches) ? data.branches : [])];
     const unique = [...new Set([selected, ...names].filter(Boolean))];
     select.replaceChildren();
     for (const name of unique) {
@@ -528,7 +528,17 @@
     }
     select.value = selected;
   }
+  function collectionMessage(data) {
+    const state=data.collection;
+    if(!state)return "每 15 秒自动更新 · 可手动刷新最新状态";
+    if(state.has_snapshot===false)return state.error?"首次采集未完成，可重试":"首次采集中，完成后自动显示适配进展…";
+    if(state.refreshing)return "显示上次采集结果 · 后台更新中";
+    if(state.error)return "后台更新未完成 · 保留上次采集结果";
+    if(state.stale)return "显示上次采集结果 · 等待后台更新";
+    return state.cached?"已显示缓存结果 · 每 15 秒读取":"每 15 秒自动更新 · 可手动刷新最新状态";
+  }
   function renderSummary(data) {
+    if(data.collection?.has_snapshot===false){for(const id of ["merged-count","ci-count","gate-count","case-count"])put(id,"—");return;}
     const backends = [...(Array.isArray(data.backends) ? data.backends : [])].sort(backendOrder);
     put("merged-count", backends.filter((b) => b.integration && b.integration.status === "merged").length + " / " + backends.length);
     put("ci-count", backends.filter((b) => effectiveCi(b, data.head) === "passed").length + " / " + backends.length);
@@ -575,6 +585,7 @@
     repoLink.hidden = !headLink;
     if (headLink) repoLink.href = headLink.href;
     byId("refresh-stamp").textContent = "页面更新 " + new Date().toLocaleTimeString("zh-CN", {hour12:false});
+    put("monitor-status",collectionMessage(data));
   }
   function infoBox(label, detail, url, linkLabel) {
     const box = el("div");
@@ -825,6 +836,12 @@
     return card;
   }
   function render(data) {
+    if(data.collection?.has_snapshot===false){
+      clearSelectedBranch(data.branch||byId("branch-select").value);branchOptions(data);
+      put("vllm-version",data.collection.error?"等待采集":"采集中…");put("observed-at","尚无历史采集结果");put("monitor-status",collectionMessage(data));
+      byId("backend-list").replaceChildren(el("div","empty",data.collection.error?"首次采集未完成，请稍后重试。":"首次采集中，完成后自动显示适配进展。"));
+      showNotice(data.collection.error||"");return;
+    }
     branchOptions(data);
     renderHeader(data);
     renderSummary(data);
@@ -834,6 +851,7 @@
     if (!backends.length) box.append(el("div", "empty", "没有发现 backend。请检查目标分支和监控服务配置。"));
     backends.forEach((backend, index) => box.append(renderBackend(data, backend, index)));
     const errors = Array.isArray(data.errors) ? data.errors.filter(Boolean) : [];
+    if(data.collection?.error)errors.push(data.collection.error);
     for (const warning of data.case_discovery?.warnings || []) errors.push("逐项场景来源提示（不影响 PR 验收记录）：" + (warning.detail || warning.source || warning.model || "待核对"));
     showNotice(errors.map(errorMessage).join("\n"));
   }
@@ -855,7 +873,10 @@
     const url = new URL(window.location.href);url.searchParams.set("branch", branch);window.history.replaceState(null, "", url);
   }
   function applySnapshot(data, branch) {
-    latestBranchSnapshot = data;
+    if(data.collection?.has_snapshot===false&&latestBranchSnapshot?.branch===branch){
+      data={...latestBranchSnapshot,collection:{...data.collection,has_snapshot:true,cached:true,stale:true}};
+    }
+    latestBranchSnapshot = data.collection?.has_snapshot===false?null:data;
     render(data);
     const url = new URL(window.location.href);
     url.searchParams.set("branch", data.branch || branch);
@@ -906,7 +927,7 @@
       if (!response.ok) throw new Error(errorMessage(result.error) || "刷新接口返回 " + response.status);
       if (result.branch && result.branch !== branch) throw new Error("返回的分支与所选分支不一致，请重试");
       applySnapshot(result, branch);
-      byId("monitor-status").textContent = "已刷新 · " + new Date().toLocaleTimeString("zh-CN", {hour12:false});
+      if(!result.collection)byId("monitor-status").textContent = "已刷新 · " + new Date().toLocaleTimeString("zh-CN", {hour12:false});
     } catch (error) {
       showNotice("读取最新状态失败：" + error.message + (latestBranchSnapshot ? "。保留此分支上次采集结果。" : "。此分支尚无可显示的采集结果，请重试。"));
       byId("monitor-status").textContent = "刷新未完成，可重试";

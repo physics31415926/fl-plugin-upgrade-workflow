@@ -150,3 +150,64 @@ for(const failure of [false,true])test(`overview ignores a late task ${failure?'
   if(failure)pending.reject(new Error('obsolete failure'));else pending.resolve(response({tasks:[]}));
   await loading;assert.equal(card.tasks.childNodes[0],selected);
 });
+
+const cachedProgress=(extra={})=>({branch:'next',branches:['next','older'],engine:'vllm',upstream_version:'0.28.0',head:'cached-head',observed_at:'2024-01-02T03:04:05Z',backends:[{id:'cuda',label:'NVIDIA',pr:{number:123,url:'https://github.com/example/plugin/pull/123'},integration:{status:'merged'},ci:{status:'passed'},acceptance:{status:'passed'}}],collection:{has_snapshot:true,cached:true,refreshing:true,stale:true,error:null},...extra});
+const collecting=(branch='next')=>({branch,engine:'vllm',head:null,observed_at:null,backends:[],collection:{has_snapshot:false,cached:false,refreshing:true,stale:true,error:null}});
+
+test('overview first collection shows pending counts and keeps the selected branch separate',async()=>{
+ const {context,card,pending}=overview();card.select.value='older';const switching=card.select.listeners.change();
+ pending[0].resolve(response(collecting('older')));await switching;
+ assert.equal(card.snapshot,null);assert.equal(card.branch,'older');assert.match(card.feedback.textContent,/首次采集中/);assert.ok(card.select.options.some(option=>option.value==='next'),'a pending branch keeps known choices available');
+ assert.match(textOf(card.tbody),/首次采集中/);assert.doesNotMatch(textOf(card.tbody),/没有发现|0 \/ 0/);
+ for(const value of Object.values(card.counts))assert.equal(value.textContent,'—');
+ assert.doesNotMatch(card.engine.textContent,/0\.28/);
+});
+
+test('overview cached rows and original collection time remain visible during background work and failure',()=>{
+ const {context,card}=overview(),saved=cachedProgress();context.ui.renderSnapshot(card,saved);
+ assert.match(textOf(card.tbody),/PR #123/);assert.equal(card.counts.ci.textContent,'1 / 1');
+ assert.match(textOf(card.meta),/2024/);assert.match(card.feedback.textContent,/后台更新中/);
+ context.ui.renderSnapshot(card,{...saved,collection:{...saved.collection,refreshing:false,error:'上游暂不可用'}});
+ assert.match(textOf(card.tbody),/PR #123/);assert.equal(card.snapshot.observed_at,saved.observed_at);
+ assert.match(card.feedback.textContent,/保留上次采集结果/);assert.match(card.notice.textContent,/上游暂不可用/);
+ context.ui.renderSnapshot(card,collecting());
+ assert.match(textOf(card.tbody),/PR #123/);assert.equal(card.snapshot.observed_at,saved.observed_at);
+ assert.match(card.feedback.textContent,/后台更新中/);
+});
+
+test('overview manual background refresh keeps the cache message and aggregate responses cannot change selected branches',async()=>{
+ const {context,card,pending}=overview();const refresh=card.refresh.listeners.click();
+ pending[0].resolve(response(cachedProgress()));await refresh;assert.match(card.feedback.textContent,/后台更新中/);
+ const update=context.ui.update();pending[1].resolve(response({projects:[{id:'vllm',status:cachedProgress({branch:'other'})}]}));await update;
+ assert.equal(card.branch,'next');assert.match(card.notice.textContent,/分支不一致/);assert.match(textOf(card.tbody),/PR #123/);
+});
+
+function cachedDetail(){
+ const state=detail(),{context}=state;
+ Object.assign(context,{effectiveCi:backend=>backend.ci?.status,effectiveGate:backend=>backend.acceptance?.status,rawGateStatus:backend=>backend.gate?.status,isPassed:status=>status==='passed',backendOrder:()=>0,shortSha:value=>String(value||'').slice(0,10),safe:value=>String(value||''),dateText:value=>value||'—',labels:{passed:'通过'},link:()=>null,badge:status=>{const node=new Element('badge');node.textContent=status;return node;},renderBackend:(_data,backend)=>{const node=new Element('backend');node.textContent='PR #'+backend.pr.number;return node;}});
+ context.document.createTextNode=text=>{const node=new Element('text');node.textContent=text;return node;};
+ vm.runInContext(between(source('index.html'),'  function branchOptions(', '  function infoBox(')+between(source('index.html'),'  function render(data) {','  let fetching = false;'),context);
+ return state;
+}
+
+test('detail first collection does not show empty results as zero passes',async()=>{
+ const {context,pending,byId}=cachedDetail();context.latestBranchSnapshot=null;
+ const loading=context.load('next');pending[0].resolve(response(collecting()));await loading;
+ assert.equal(context.latestBranchSnapshot,null);assert.match(byId('monitor-status').textContent,/首次采集中/);
+ assert.match(textOf(byId('backend-list')),/首次采集中/);assert.doesNotMatch(textOf(byId('backend-list')),/没有发现 backend/);
+ for(const id of ['merged-count','ci-count','gate-count','case-count'])assert.equal(byId(id).textContent,'—');
+});
+
+test('detail renders cached progress immediately and preserves real timestamps through background failure',async()=>{
+ const {context,pending,byId,notices}=cachedDetail(),saved=cachedProgress();
+ let loading=context.load('next');pending[0].resolve(response(saved));await loading;
+ assert.match(textOf(byId('backend-list')),/PR #123/);assert.equal(byId('ci-count').textContent,'1 / 1');
+ assert.equal(byId('observed-at').textContent,saved.observed_at);assert.match(byId('monitor-status').textContent,/后台更新中/);
+ loading=context.load('next');pending[1].resolve(response({...saved,collection:{...saved.collection,refreshing:false,error:'上游暂不可用'}}));await loading;
+ assert.match(textOf(byId('backend-list')),/PR #123/);assert.equal(byId('observed-at').textContent,saved.observed_at);
+ assert.match(byId('monitor-status').textContent,/保留上次采集结果/);assert.match(notices.at(-1),/上游暂不可用/);
+ const refresh=byId('refresh-remote').listeners.click();pending[2].resolve(response(saved));await refresh;
+ assert.match(byId('monitor-status').textContent,/后台更新中/);
+ loading=context.load('next');pending[3].resolve(response(collecting()));await loading;
+ assert.match(textOf(byId('backend-list')),/PR #123/);assert.equal(context.latestBranchSnapshot.observed_at,saved.observed_at);
+});

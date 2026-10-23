@@ -72,7 +72,9 @@ python -B <tools>/sglang_evidence.py --repo <clean-candidate> --branch <baseline
 
 将 `examples/branch-monitor.example.json` 复制为 `branch-monitor.json`，核对插件仓库路径、remote、分支、模型和 backend PR 编号。启动 `python scripts/flflow.py serve --config workflow.json --monitor-config branch-monitor.json` 后，首页 `/` 显示分支监控；原工作流控制页在 `/workflow`。页面可切换本地 remote-tracking 分支，并用“读取最新状态”更新目标分支 Git ref 与 GitHub CI。`branch-monitor.json` 是本机配置，已被 Git 忽略。
 
-监控服务优先通过已登录的 `gh api` 读取 GitHub 状态；若未安装或不可用，则用 GitHub HTTP API（可通过 `GH_TOKEN` 或 `GITHUB_TOKEN` 提高配额）。远端数据缓存 5 分钟；页面每 15 秒读取服务状态，点击“读取最新状态”会触发一次采集并直接显示返回结果。网络故障会明确显示错误，页面保留上次采集时间。
+监控服务优先通过已登录的 `gh api` 读取 GitHub 状态；若未安装或不可用，则用 GitHub HTTP API（可通过 `GH_TOKEN` 或 `GITHUB_TOKEN` 提高配额）。远端接口数据缓存 5 分钟。完整监控结果按仓库配置和分支分别缓存并落盘；重新打开页面或重启服务时，先显示最近一次完整结果，再按原有周期在后台采集。页面每 15 秒读取状态，明确标注缓存、后台更新及上次采集时间；首次尚无记录时显示采集中。点击刷新会立即请求采集；网络故障或结果不完整时保留上次完整结果，不把旧记录的时间改成当前时间。
+
+监控缓存存放在 `resource_state_dir` 下的 `monitor-snapshots/`；未配置时使用 `sessions_dir`，再回退到验收目录的上级目录。无需额外设置。本机与局域网公开快照分别保存，公开快照经过字段筛选；缓存不包含任务会话或登录凭证。每个监控最多缓存 12 个分支，配置变化会隔离旧缓存，损坏的缓存不会阻止服务启动。
 
 默认根据 PR 标题和正文的 Summary / Description / 概述等目的段落识别 backend 适配。接受明确的适配、升级标题，或明确说明将插件、vLLM、SGLang 适配到某 backend 的正文。分支名称仅用于冲突检查，不能单独证明适配；测试表格、代码块、引用和 HTML 注释不作为适配目标。普通算子修复、CI 调整及仅提及某设备的 PR 不自动关联。规则采用保守文本匹配，描述不明确时由维护者指定 PR 编号。
 

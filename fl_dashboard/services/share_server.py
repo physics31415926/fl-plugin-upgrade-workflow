@@ -21,11 +21,11 @@ import re
 import secrets
 import ssl
 import threading
-import time
 from urllib.parse import parse_qs, urlsplit
 
 from fl_dashboard.paths import TEMPLATES
 from fl_dashboard.monitoring.branch_monitor import BranchMonitor
+from fl_dashboard.monitoring.snapshot_cache import MonitorSnapshotCache
 from fl_dashboard.projects.project_registry import ProjectRegistry
 from fl_dashboard.monitoring.pr_acceptance import public_acceptance_tables, detail_text
 from fl_dashboard.services.public_devices import read_public_devices
@@ -172,72 +172,57 @@ paths, machine aliases, private IPs, source task IDs, or commands.
 
 
 class SnapshotCache:
-    def __init__(self, monitor, refresh_interval=60):
+    """Public projection of the persistent, non-blocking monitor cache."""
+    def __init__(self, monitor, refresh_interval=60, *, namespace="public"):
         if refresh_interval != 0 and refresh_interval < 30:
             raise ValueError("refresh_interval must be 0 (disabled) or at least 30 seconds")
         self.monitor = monitor
         self.refresh_interval = refresh_interval
-        self._lock = threading.Lock()
-        self._refresh_lock = threading.Lock()
-        self._last_refresh = {}
-        self._stop = threading.Event()
-        self._snapshots = {}
         self.default_branch = monitor.branch
-        initial = sanitize_snapshot(monitor.status())
-        self.allowed_branches = set(initial.get("branches", [])) | {self.default_branch}
-        self._snapshots[self.default_branch] = initial
-        self._worker = None
-        if refresh_interval:
-            self._worker = threading.Thread(target=self._refresh, daemon=True)
-            self._worker.start()
+        self._cache = MonitorSnapshotCache(monitor, refresh_interval=refresh_interval,
+                                           namespace=namespace, transform=sanitize_snapshot)
+        self._lock = threading.Lock()
+        self.allowed_branches = self._cache.known_branches | {self.default_branch}
+        branch_options = getattr(monitor, "branch_options", None)
+        if callable(branch_options):
+            try:
+                # Only local tracking refs; collecting PRs/CI is left to workers.
+                options = branch_options()
+                self.allowed_branches.update(branch for branch in options.get("branches", [])
+                                             if isinstance(branch, str) and _scalar(branch))
+            except Exception:
+                # Saved branches and the configured default remain usable offline.
+                pass
 
-    def get(self, branch=None):
-        branch = branch or self.default_branch
-        with self._lock:
-            if branch not in self.allowed_branches:
-                raise ValueError("Branch is not configured for this shared dashboard")
-            if branch not in self._snapshots:
-                if len(self._snapshots) >= 12:
-                    raise ValueError("Shared dashboard branch cache is full")
-                self._snapshots[branch] = sanitize_snapshot(self.monitor.status(branch=branch))
-            return json.loads(json.dumps(self._snapshots[branch]))
-
-    def _refresh(self):
-        while not self._stop.wait(self.refresh_interval):
-            with self._lock:
-                branches = list(self._snapshots)
-            for branch in branches:
-                if self._stop.is_set():
-                    return
-                try:
-                    self.refresh(branch)
-                except Exception:
-                    with self._lock:
-                        self._snapshots[branch]["errors"] = ["上游刷新暂不可用；当前显示上次记录。"]
-
-    def refresh(self, branch=None):
+    def _branch(self, branch):
         if branch is not None and not isinstance(branch, str):
             raise ValueError("branch must be a string")
         branch = branch or self.default_branch
-        # One Git fetch at a time; repeated clicks share the latest collection.
-        with self._refresh_lock:
+        with self._lock:
+            self.allowed_branches.update(self._cache.known_branches)
+            if branch not in self.allowed_branches:
+                raise ValueError("Branch is not configured for this shared dashboard")
+        return branch
+
+    def _public_view(self, value):
+        if not value["collection"]["has_snapshot"]:
+            # Empty placeholders also cross the public projection boundary.
+            collection = value["collection"]
+            value = sanitize_snapshot(value)
+            value["collection"] = collection
             with self._lock:
-                if branch not in self.allowed_branches:
-                    raise ValueError("Branch is not configured for this shared dashboard")
-                if branch not in self._snapshots and len(self._snapshots) >= 12:
-                    raise ValueError("Shared dashboard branch cache is full")
-                recent = self._last_refresh.get(branch)
-                if recent is not None and time.monotonic() - recent < 30:
-                    return json.loads(json.dumps(self._snapshots[branch]))
-            value = sanitize_snapshot(self.monitor.refresh_branch(branch=branch))
-            with self._lock:
-                self._snapshots[branch] = value
-                self._last_refresh[branch] = time.monotonic()
-                self.allowed_branches.update(value.get("branches", []))
-            return json.loads(json.dumps(value))
+                value["branches"] = sorted(self.allowed_branches)[:100]
+        return value
+
+    def get(self, branch=None):
+        return self._public_view(self._cache.get(self._branch(branch)))
+
+    def refresh(self, branch=None):
+        # The shared cache deduplicates concurrent and repeated manual refreshes.
+        return self._public_view(self._cache.refresh(self._branch(branch)))
 
     def close(self):
-        self._stop.set()
+        self._cache.close()
 
 
 class ProjectSnapshotCache:
@@ -264,7 +249,8 @@ class ProjectSnapshotCache:
             if project_id not in self._caches:
                 if project.monitor is None:
                     raise RuntimeError("Project monitor is unavailable")
-                self._caches[project_id] = SnapshotCache(project.monitor, self.refresh_interval)
+                self._caches[project_id] = SnapshotCache(project.monitor, self.refresh_interval,
+                                                        namespace="public-" + project.id)
             return self._caches[project_id]
 
     def get(self, branch=None, *, project=None):

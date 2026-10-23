@@ -93,6 +93,7 @@ class BranchMonitor:
         else:
             raw = config
             base = Path.cwd()
+        self.base = base
         if not isinstance(raw, dict):
             raise MonitorError("Monitor config must be an object")
         self.config = raw.get("monitor", raw)

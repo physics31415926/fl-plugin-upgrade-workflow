@@ -3,6 +3,7 @@ import json
 from pathlib import Path
 import tempfile
 import threading
+import time
 import unittest
 from unittest.mock import Mock, patch
 
@@ -126,6 +127,11 @@ class ProjectRegistryTests(unittest.TestCase):
     def serve(self, *, shared=False):
         if shared:
             self.cache = ProjectSnapshotCache(self.registry, refresh_interval=0)
+            # Read-route assertions below use a ready observation. Cold-loading
+            # behavior is covered independently with a blocked monitor.
+            for project in self.registry.projects:
+                self.cache.refresh(project=project.id)
+                project.monitor.calls.clear()
             self.index = self.root / "index.html"
             self.index.write_text("<html>test</html>", encoding="utf-8")
             self.server = make_share_server(self.cache, "127.0.0.1", 0, index_path=self.index, base_path="/fl")
@@ -178,10 +184,13 @@ class ProjectRegistryTests(unittest.TestCase):
     def test_missing_monitor_and_runtime_failure_do_not_hide_peer(self):
         registry = self.load()
         registry.projects[1].monitor.config["broken"] = True
+        for project in registry.projects:
+            project.refresh_status()
         rows = registry.statuses()["projects"]
-        self.assertIsNotNone(rows[0]["status"])
-        self.assertIsNone(rows[1]["status"])
-        self.assertIn("private", rows[1]["error"])
+        self.assertTrue(rows[0]["status"]["collection"]["has_snapshot"])
+        self.assertFalse(rows[1]["status"]["collection"]["has_snapshot"])
+        self.assertTrue(rows[1]["status"]["collection"]["error"])
+        self.assertNotIn("private", json.dumps(rows[1]))
         registry.close()
         self.config["projects"][1]["monitor_config"] = "absent.json"
         registry = self.load()
@@ -203,6 +212,47 @@ class ProjectRegistryTests(unittest.TestCase):
         self.assertEqual(self.request("/api/start?project=vllm", body={})[0], 202)
         self.assertEqual(self.request("/api/start?project=sglang", body={})[0], 503)
         self.assertEqual(self.request("/api/status?project=sglang")[0], 503)
+
+    def test_status_routes_return_saved_snapshot_while_monitor_is_blocked(self):
+        self.load()
+        for project in self.registry.projects:
+            project.refresh_status()
+        monitor = self.registry.projects[0].monitor
+        entered, release = threading.Event(), threading.Event()
+        original = monitor.status
+        def slow(branch=None):
+            entered.set()
+            if not release.wait(5):
+                raise RuntimeError("test monitor was not released")
+            return original(branch)
+        self.serve()
+        project = self.registry.projects[0]
+        cache = project.snapshot_cache()
+        with cache._lock:
+            entry = cache._entries[monitor.branch]
+            entry.last_attempt = time.monotonic() - 120
+            entry.last_success = time.monotonic() - 120
+        try:
+            with patch.object(monitor, "status", side_effect=slow):
+                started = time.monotonic()
+                code, value = self.request("/api/branch-status?project=vllm")
+                self.assertEqual(code, 200)
+                self.assertLess(time.monotonic() - started, 1)
+                self.assertEqual(value["head"], "a" * 40)
+                self.assertTrue(value["collection"]["refreshing"])
+                self.assertTrue(entered.wait(1))
+                started = time.monotonic()
+                code, value = self.request("/api/projects-status")
+                self.assertEqual(code, 200)
+                self.assertLess(time.monotonic() - started, 1)
+                self.assertEqual(value["projects"][0]["status"]["head"], "a" * 40)
+                self.assertTrue(value["projects"][0]["status"]["collection"]["refreshing"])
+        finally:
+            release.set()
+            with cache._lock:
+                flight = cache._entries[monitor.branch].flight
+            if flight:
+                self.assertTrue(flight.wait(3))
 
     def test_unknown_or_duplicate_project_never_falls_back(self):
         self.load()
@@ -371,10 +421,11 @@ class ProjectRegistryTests(unittest.TestCase):
         code, value = self.request("/api/projects-status")
         self.assertEqual(code, 200)
         self.assertIsNotNone(value["projects"][0]["status"])
-        self.assertIsNone(value["projects"][1]["status"])
+        self.assertFalse(value["projects"][1]["status"]["collection"]["has_snapshot"])
+        self.assertTrue(value["projects"][1]["status"]["collection"]["error"])
         self.assertNotIn("private", json.dumps(value))
         self.assertNotIn("192.168", json.dumps(value))
-        self.assertEqual(self.request("/api/branch-status?project=sglang")[0], 503)
+        self.assertEqual(self.request("/api/branch-status?project=sglang")[0], 200)
         self.assertEqual(self.request("/api/branch-status?project=vllm")[0], 200)
 
 
