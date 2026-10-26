@@ -28,6 +28,8 @@ PROBE_TIMEOUT = 35
 STALE_SECONDS = 600
 REFRESH_INTERVAL = 300
 MIN_REFRESH_SECONDS = 5
+DEFAULT_PROBE_WORKERS = 12
+MAX_PROBE_WORKERS = 32
 _ACTIVE = {"starting", "running", "waiting_input", "waiting_approval", "interrupting"}
 _ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.-]{0,99}\Z")
 
@@ -58,8 +60,17 @@ class DeviceFleet:
     """One collector per control server; no network activity in snapshot()."""
 
     def __init__(self, registry, ssh_syncs, *, runner=None, ssh_executable=None,
-                 clock=time.time, monotonic=time.monotonic, max_workers=4,
+                 clock=time.time, monotonic=time.monotonic, max_workers=None,
                  inventory=None, profile_source=None, cache_path=None):
+        limits = ([max_workers] if max_workers is not None else [
+            getattr(project.monitor, "config", {})["device_probe_workers"]
+            for project in registry.projects
+            if "device_probe_workers" in getattr(project.monitor, "config", {})])
+        if any(type(limit) is not int or not 1 <= limit <= MAX_PROBE_WORKERS for limit in limits):
+            raise ValueError(f"device_probe_workers must be an integer from 1 to {MAX_PROBE_WORKERS}")
+        # All projects use one pool. Respect the smallest explicitly configured
+        # gateway limit instead of multiplying connections by project count.
+        self.max_workers = min(limits) if limits else DEFAULT_PROBE_WORKERS
         self.registry = registry
         self.ssh_syncs = ssh_syncs
         self.inventory = inventory
@@ -76,11 +87,12 @@ class DeviceFleet:
         self._inflight = {}
         self._states = {project.id: {"profiles": [], "refreshing": False, "pending": set(),
                                     "total": 0, "done": 0, "updated_at": None, "error": None,
-                                    "inventory_error": False, "generation": 0, "metadata_future": None}
+                                    "inventory_error": False, "generation": 0, "metadata_future": None,
+                                    "requested_at": float("-inf")}
                         for project in registry.projects}
         self._projects = {project.id: project for project in registry.projects}
         self._metadata = ThreadPoolExecutor(max_workers=1, thread_name_prefix="device-inventory")
-        self._workers = ThreadPoolExecutor(max_workers=max(1, min(4, max_workers)), thread_name_prefix="device-probe")
+        self._workers = ThreadPoolExecutor(max_workers=self.max_workers, thread_name_prefix="device-probe")
         self._disk_cache = None
         self._cache_writer = None
         self._cache_write_future = None
@@ -229,7 +241,7 @@ class DeviceFleet:
                 # Keep display history across catalog revisions, but require a new
                 # observation before advertising availability under the new source.
                 for entry in self._cache.values():
-                    entry.update(retained=True, sample=None, attempted=float("-inf"))
+                    entry.update(retained=True, sample=None, attempted=float("-inf"), completed=float("-inf"))
                 # Stable connection keys can be reused by the next generation.
                 # Detach old jobs before canceling so they cannot block that refresh;
                 # epoch checks below discard any running old job's eventual result.
@@ -283,8 +295,12 @@ class DeviceFleet:
                 for source, target in (("total", "total_cards"), ("free", "free_cards"),
                                        ("busy", "busy_cards"), ("unknown", "unknown_cards"), ("residual", "residual_cards")):
                     summary[target] += max(0, int(host["accel"].get(source) or 0))
+            running = sum(1 for key in state["pending"]
+                          if key in self._inflight and self._inflight[key].running())
             return {"project_id": project_id, "refreshing": state["refreshing"],
                     "progress": {"done": state["done"], "total": state["total"]},
+                    "concurrency": {"limit": self.max_workers, "running": running,
+                                    "queued": len(state["pending"]) - running},
                     "updated_at": state["updated_at"], "refresh_interval": REFRESH_INTERVAL,
                     "error": state["error"], "summary": summary, "hosts": hosts}
 
@@ -299,7 +315,8 @@ class DeviceFleet:
             source = self._reconcile_source()
             state = self._states[project_id]
             if not state["refreshing"]:
-                state.update(refreshing=True, pending=set(), total=0, done=0, error=None)
+                state.update(refreshing=True, pending=set(), total=0, done=0, error=None,
+                             requested_at=self._monotonic())
                 state["generation"] += 1
                 state["metadata_future"] = self._metadata.submit(
                     self._schedule, project_id, profile_id, state["generation"], source)
@@ -432,7 +449,12 @@ class DeviceFleet:
                         state["pending"].discard(key)
                         continue
                     cached = self._cache.get(key)
-                    if cached and now - cached["attempted"] < MIN_REFRESH_SECONDS:
+                    # A second project's metadata may arrive after a slow shared
+                    # probe finished. Reuse results completed since this request,
+                    # plus a short cooldown measured from completion, not SSH start.
+                    completed = cached.get("completed", float("-inf")) if cached else float("-inf")
+                    if cached and (now - completed < MIN_REFRESH_SECONDS
+                                   or completed >= state["requested_at"]):
                         state["pending"].discard(key)
                         continue
                     if key in self._inflight:
@@ -538,6 +560,7 @@ class DeviceFleet:
                 entry["observed"] = previous["observed"]
                 entry["updated_at"] = previous["updated_at"]
                 entry["retained"] = True
+            entry["completed"] = self._monotonic()
             self._cache[key] = entry
             for state in self._states.values():
                 if key in state["pending"]:

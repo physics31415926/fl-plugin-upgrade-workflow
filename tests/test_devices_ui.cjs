@@ -333,3 +333,18 @@ test('ordinary read and refresh failures keep historical metrics and selected de
  assert.match(ui.node('hosts').textContent,/Host cached/);assert.match(ui.node('detail-note').textContent,/上次读数/);assert.match(ui.node('error').textContent,/资源服务暂不可用/);
  assert.equal(ui.api.summarize().free,0);assert.equal(ui.node('refresh-devices').disabled,false);
 });
+
+
+test('collection status shows actual running and queued probes instead of the concurrency limit',()=>{
+ const ui=harness();put(ui,snapshot([fresh('cached')],{refreshing:true,progress:{done:2,total:20},concurrency:{limit:12,running:3,queued:15}}));ui.api.render();
+ assert.match(ui.node('refresh-status').textContent,/显示上次读数.*后台更新 2 \/ 20 · 3 台采集中 · 15 台排队/);assert.doesNotMatch(ui.node('refresh-status').textContent,/12 台采集中/);
+ ui.api.state.data.concurrency={limit:12,running:0,queued:18};ui.api.render();assert.match(ui.node('refresh-status').textContent,/0 台采集中 · 18 台排队/);
+});
+test('initial metadata preparation explains the work instead of displaying zero-of-zero progress',()=>{
+ const ui=harness();put(ui,snapshot([],{refreshing:true,updated_at:null,progress:{done:0,total:0},concurrency:{limit:12,running:0,queued:0}}));ui.api.render();
+ assert.match(ui.node('refresh-status').textContent,/正在准备设备列表/);assert.doesNotMatch(ui.node('refresh-status').textContent,/0 \/ 0|12 台采集中|显示上次读数/);assert.equal(ui.node('refresh-devices').disabled,true);
+});
+test('legacy snapshots keep collection progress without fabricated concurrency counts',()=>{
+ const ui=harness();put(ui,snapshot([],{refreshing:true,progress:{done:2,total:8}}));ui.api.render();assert.match(ui.node('refresh-status').textContent,/采集中.*2 \/ 8.*逐步显示/);assert.doesNotMatch(ui.node('refresh-status').textContent,/台采集中|台排队/);
+ ui.api.state.data.concurrency={limit:12};ui.api.render();assert.doesNotMatch(ui.node('refresh-status').textContent,/台采集中|台排队|NaN/);
+});

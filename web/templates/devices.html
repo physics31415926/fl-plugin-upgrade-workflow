@@ -99,7 +99,23 @@ function renderDetail(){
  }
  $('card-details').replaceChildren(cards);$('process-details').replaceChildren(processes);$('process-note').textContent=(count?'只显示资源工具返回的进程名，不读取完整命令行。':'未列出进程；可用性综合显存、利用率及采集完整性判断。')+(shared?' 整机进程无法确认归属到哪张卡。':'');
 }
-function renderStatus(){$('collection-actions').hidden=!state.allowed;const busy=state.requesting||state.data?.refreshing||resourceRequests.has(state.project);$('refresh-devices').disabled=!state.allowed||state.switching||busy||!!jumpserver.mutating||jumpserver.data?.refreshing===true;$('refresh-devices').textContent=busy?'正在采集…':'立即刷新资源';const progress=state.data?.refreshing?state.data.progress:null,hasReadings=currentHosts().some(host=>!!host.updated_at);if(busy)$('refresh-status').textContent=hasReadings?'显示上次读数 · 后台更新'+(progress?' '+number(progress.done)+' / '+number(progress.total):''):'采集中'+(progress?' · '+number(progress.done)+' / '+number(progress.total):'')+'，已返回的结果会逐步显示';else if(state.switching&&!state.data)$('refresh-status').textContent='正在读取设备缓存…';else if(!state.allowed)$('refresh-status').textContent=state.readable?'只读查看 · 自动同步已采集结果':state.authExpired?'授权已失效':'设备资源尚未配置';else if(!state.auto)$('refresh-status').textContent='自动采集已暂停';else $('refresh-status').textContent='每 '+number(interval()/60000)+' 分钟自动采集 · 隐藏页面时暂停';}
+function renderStatus(){
+ $('collection-actions').hidden=!state.allowed;
+ const busy=state.requesting||state.data?.refreshing||resourceRequests.has(state.project);
+ $('refresh-devices').disabled=!state.allowed||state.switching||busy||!!jumpserver.mutating||jumpserver.data?.refreshing===true;
+ $('refresh-devices').textContent=busy?'正在采集…':'立即刷新资源';
+ const progress=state.data?.refreshing?state.data.progress:null,hasReadings=currentHosts().some(host=>!!host.updated_at);
+ if(busy){
+  const preparing=progress?.total===0,concurrency=state.data?.refreshing?state.data.concurrency:null;
+  let message=preparing?(hasReadings?'显示上次读数 · ':'')+'正在准备设备列表':hasReadings?'显示上次读数 · 后台更新'+(progress?' '+number(progress.done)+' / '+number(progress.total):''):'采集中'+(progress?' · '+number(progress.done)+' / '+number(progress.total):'')+'，已返回的结果会逐步显示';
+  if(finite(concurrency?.running)&&concurrency.running>=0)message+=' · '+number(concurrency.running)+' 台采集中';
+  if(finite(concurrency?.queued)&&concurrency.queued>=0)message+=' · '+number(concurrency.queued)+' 台排队';
+  $('refresh-status').textContent=message;
+ }else if(state.switching&&!state.data)$('refresh-status').textContent='正在读取设备缓存…';
+ else if(!state.allowed)$('refresh-status').textContent=state.readable?'只读查看 · 自动同步已采集结果':state.authExpired?'授权已失效':'设备资源尚未配置';
+ else if(!state.auto)$('refresh-status').textContent='自动采集已暂停';
+ else $('refresh-status').textContent='每 '+number(interval()/60000)+' 分钟自动采集 · 隐藏页面时暂停';
+}
 function render(){renderSummary();renderTable();renderDetail();renderStatus();renderJumpserver();}
 async function request(path,body,project=state.project){const options={credentials:'same-origin',cache:'no-store',redirect:'error',headers:{'Content-Type':'application/json'}};if(body!==undefined)Object.assign(options,{method:'POST',body:JSON.stringify(body)});const response=await fetch(route(path,project),options);let data;try{data=await response.json();}catch(_){throw new Error('服务返回了无法读取的响应。');}if(!response.ok){const error=new Error(typeof data.error==='string'?data.error:'资源采集暂不可用');error.status=response.status;throw error;}return data;}
 function failure(error){if(error.status===401||error.status===403){state.allowed=false;state.jumpserverSettings=false;state.authExpired=true;state.auto=false;$('auto-refresh').checked=false;state.data=null;state.selected=null;jumpserver.data=null;jumpserver.resourceQueued=false;jumpserver.waitingResources=false;$('jumpserver-password').value='';$('sessions-link').hidden=true;$('shared-mode').textContent='只读访问';$('shared-mode').hidden=false;notify('管理授权已失效，正在切换为只读查看；管理操作需重新打开有效分享链接。');}else notify(error.message||'设备资源暂不可用，请稍后重试。');render();}

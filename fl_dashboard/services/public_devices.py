@@ -52,6 +52,7 @@ def public_snapshot(value, project):
         raise ValueError("Invalid cached device response")
     result = _fields(value, {"project_id", "refreshing", "updated_at", "refresh_interval", "error"})
     result.update(read_only=True, progress=_fields(value.get("progress"), {"done", "total"}),
+                  concurrency=_fields(value.get("concurrency"), {"limit", "running", "queued"}),
                   summary=_fields(value.get("summary"), _SUMMARY), hosts=[])
     for host in _rows(value["hosts"], 512):
         row = _fields(host, _HOST)

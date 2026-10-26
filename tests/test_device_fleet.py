@@ -299,9 +299,9 @@ class DeviceFleetTests(unittest.TestCase):
         self.assertEqual(1, self.wait(fleet)["progress"]["done"])
         self.assertEqual(1, self.wait(fleet, "sglang")["progress"]["done"])
 
-    def test_global_workers_are_bounded_and_repeated_refresh_does_not_duplicate(self):
-        self.profiles = [dict(self.profiles[0], id="host" + str(i), ssh_alias="host" + str(i)) for i in range(8)]
-        release, four = threading.Event(), threading.Event()
+    def test_default_parallel_pool_is_shared_across_projects_without_duplicate_probes(self):
+        self.profiles = [dict(self.profiles[0], id="host" + str(i), ssh_alias="host" + str(i)) for i in range(17)]
+        release, full = threading.Event(), threading.Event()
         guard = threading.Lock()
         counts = {"running": 0, "maximum": 0, "calls": 0}
         def runner(*args, **kwargs):
@@ -309,23 +309,106 @@ class DeviceFleetTests(unittest.TestCase):
                 counts["running"] += 1
                 counts["calls"] += 1
                 counts["maximum"] = max(counts["maximum"], counts["running"])
-                if counts["running"] == 4:
-                    four.set()
-            release.wait(3)
+                if counts["running"] == 12:
+                    full.set()
+            release.wait(4)
             with guard:
                 counts["running"] -= 1
             return subprocess.CompletedProcess([], 0, b"fixture", b"")
-        fleet = self.make(runner)
+        projects = self.projects + [SimpleNamespace(id="sglang", sessions=self.manager, monitor=None)]
+        fleet = self.make(runner, projects)
+        self.addCleanup(release.set)
         fleet.refresh("vllm")
-        self.assertTrue(four.wait(3))
+        self.assertTrue(full.wait(2))
         fleet.refresh("vllm")
-        self.assertEqual(4, counts["calls"])
+        fleet.refresh("sglang")
+        deadline = time.monotonic() + 2
+        while fleet.snapshot("sglang")["progress"]["total"] == 0 and time.monotonic() < deadline:
+            time.sleep(.005)
+        self.assertEqual(12, counts["calls"])
+        for project in ("vllm", "sglang"):
+            self.assertEqual({"limit": 12, "running": 12, "queued": 5}, fleet.snapshot(project)["concurrency"])
         release.set()
-        self.assertEqual(8, self.wait(fleet)["progress"]["done"])
-        self.assertEqual(4, counts["maximum"])
+        for project in ("vllm", "sglang"):
+            result = self.wait(fleet, project)
+            self.assertEqual(17, result["progress"]["done"])
+            self.assertEqual({"limit": 12, "running": 0, "queued": 0}, result["concurrency"])
+        self.assertEqual(12, counts["maximum"])
+        self.assertEqual(17, counts["calls"])
         fleet.refresh("vllm")
         self.wait(fleet)
-        self.assertEqual(8, counts["calls"])
+        self.assertEqual(17, counts["calls"])
+
+    def test_probe_worker_configuration_is_bounded_and_shared(self):
+        for configured in (1, 8, 32):
+            with self.subTest(configured=configured):
+                self.projects[0].monitor.config = {"device_probe_workers": configured}
+                fleet = self.make()
+                self.assertEqual(configured, fleet.snapshot("vllm")["concurrency"]["limit"])
+        peer = SimpleNamespace(id="sglang", sessions=self.manager, monitor=SimpleNamespace(config={}))
+        self.projects[0].monitor.config = {"device_probe_workers": 24}
+        fleet = self.make(projects=self.projects + [peer])
+        self.assertEqual(24, fleet.max_workers)
+        peer.monitor.config["device_probe_workers"] = 8
+        fleet = self.make(projects=self.projects + [peer])
+        self.assertEqual(8, fleet.max_workers)
+        for invalid in (0, -1, 33, True, 4.5, "12", None):
+            with self.subTest(invalid=invalid):
+                self.projects[0].monitor.config = {"device_probe_workers": invalid}
+                with self.assertRaisesRegex(ValueError, "device_probe_workers"):
+                    self.make()
+
+    def test_slow_shared_result_is_reused_after_delayed_metadata(self):
+        started, release, metadata, metadata_release = (threading.Event() for _ in range(4))
+        calls = []
+        def runner(*args, **kwargs):
+            calls.append(1)
+            started.set()
+            release.wait(4)
+            return subprocess.CompletedProcess([], 0, b"fixture", b"")
+        projects = self.projects + [SimpleNamespace(id="sglang", sessions=self.manager, monitor=None)]
+        fleet = self.make(runner, projects)
+        self.addCleanup(release.set)
+        self.addCleanup(metadata_release.set)
+        original_inventory = fleet._inventory
+        def inventory(project_id, source):
+            if project_id == "sglang":
+                metadata.set()
+                metadata_release.wait(4)
+            return original_inventory(project_id, source)
+        fleet._inventory = inventory
+        fleet.refresh("vllm")
+        self.assertTrue(started.wait(2))
+        self.now += 1
+        fleet.refresh("sglang")
+        self.assertTrue(metadata.wait(2))
+        self.now += 9  # A long probe that outlasts the five-second start cooldown.
+        release.set()
+        self.wait(fleet)
+        self.now += 11  # Metadata arrives after even the completion cooldown.
+        metadata_release.set()
+        self.wait(fleet, "sglang")
+        self.assertEqual(1, len(calls))
+        self.now += 6
+        fleet.refresh("vllm")
+        self.wait(fleet)
+        self.assertEqual(2, len(calls))
+
+    def test_long_probe_cooldown_starts_at_completion(self):
+        def runner(*args, **kwargs):
+            self.now += 10
+            return self.runner(*args, **kwargs)
+        fleet = self.make(runner)
+        fleet.refresh("vllm")
+        self.wait(fleet)
+        self.now += 1
+        fleet.refresh("vllm")
+        self.wait(fleet)
+        self.assertEqual(1, len(self.calls))
+        self.now += 5
+        fleet.refresh("vllm")
+        self.wait(fleet)
+        self.assertEqual(2, len(self.calls))
 
     def jumpserver_fixture(self):
         catalog = {"enabled": True, "generation": 1, "authenticated": True, "error": None,
