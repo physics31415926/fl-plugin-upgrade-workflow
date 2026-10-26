@@ -47,7 +47,7 @@ test('new task fields send provider but never include the settings key',()=>{
   for(const [id,value]of Object.entries(values))context.$(id).value=value;
   context.$('claude-api-key').value='explicit-dummy-key';
   context.$('custom-settings').checked=true;context.state.profiles=[];context.labels={cuda:'NVIDIA / CUDA'};
-  vm.runInContext(between('  function fields(', '  function connectionMode('),context);
+  vm.runInContext(between('  function pickerProfiles(', '  function profileBackendLabel(')+between('  function fields(', '  function connectionMode('),context);
   const body=context.fields();assert.equal(body.provider,'claude');assert.equal(body.backend,'cuda');
   assert.equal(JSON.stringify(body).includes('explicit-dummy-key'),false);assert.equal(Object.hasOwn(body,'api_key'),false);
 });
@@ -113,6 +113,6 @@ test('FlagScale new-task payload includes provider and never copies either setti
   const {context}=ui();const values={'agent-provider':'flagscale','profile':'','backend':'cuda','branch':'main','ssh-alias':'gpu_demo','remote-workspace':'/work/plugin','connection-mode':'alias','model-paths':'','goal':'test'};
   for(const [id,value]of Object.entries(values))context.$(id).value=value;
   context.$('flagscale-api-key').value='explicit-dummy-flagscale-key';context.$('claude-api-key').value='explicit-dummy-claude-key';context.$('custom-settings').checked=true;context.state.profiles=[];context.labels={cuda:'NVIDIA / CUDA'};
-  vm.runInContext(between('  function fields(', '  function connectionMode('),context);
+  vm.runInContext(between('  function pickerProfiles(', '  function profileBackendLabel(')+between('  function fields(', '  function connectionMode('),context);
   const body=context.fields();assert.equal(body.provider,'flagscale');assert.equal(Object.hasOwn(body,'api_key'),false);assert.doesNotMatch(JSON.stringify(body),/explicit-dummy/);
 });

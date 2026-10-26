@@ -22,6 +22,7 @@ import time
 
 from fl_dashboard.agents.codex_sessions import CodexSessionManager, SessionError
 from fl_dashboard.tasks.device_recognition import ALIAS_BACKEND_SOURCE, hardware_backend
+from fl_dashboard.resources.jumpserver_profiles import BACKEND_SOURCE as JUMPSERVER_BACKEND_SOURCE
 
 _RESERVED = {"_automatic_proof", "automatic_context"}
 _FIELDS = ("profile_id", "backend", "branch", "ssh_alias", "remote_workspace",
@@ -267,7 +268,7 @@ def _goal(project, backend, branch, workspace, probe, ssh_argv, user_goal, *, le
     )
 
 
-def normalize_automatic_task(project, payload, *, runner=None, ssh_executable=None):
+def normalize_automatic_task(project, payload, *, runner=None, ssh_executable=None, backend_lookup=None):
     """Return a JSON create payload; legacy/manual requests never invoke SSH."""
     if not isinstance(payload, dict):
         raise SessionError("Task payload must be an object")
@@ -302,26 +303,31 @@ def normalize_automatic_task(project, payload, *, runner=None, ssh_executable=No
         raise SessionError("Invalid branch")
     user_goal = CodexSessionManager._text(payload.get("goal", ""), "goal", 2500)
     configured_backend = profile.get("backend") or ""
-    if profile.get("backend_source") == ALIAS_BACKEND_SOURCE:
-        # SSH names group the device picker but cannot establish its hardware.
+    if profile.get("backend_source") in (ALIAS_BACKEND_SOURCE, JUMPSERVER_BACKEND_SOURCE):
+        # Names group devices but cannot establish their actual hardware.
         configured_backend = ""
     if configured_backend == "nvidia":
         configured_backend = "cuda"
     available = getattr(target, "backends", set(target.config.get("session_backends", CodexSessionManager.BACKENDS)))
     if not isinstance(configured_backend, str):
         raise SessionError("The saved device backend must be a string")
-    if configured_backend and configured_backend not in available:
+    # The server may reuse recent, connection-matched hardware observations.
+    # This callable is never supplied by the browser. Still probe SSH/HOME for
+    # the task account before preparing its independent workspace.
+    observed_backend = backend_lookup(profile) if backend_lookup is not None else None
+    if observed_backend is not None and (not isinstance(observed_backend, str) or observed_backend not in available):
+        raise SessionError("The collected device backend is unsupported by this project")
+    known_backend = observed_backend or configured_backend
+    if known_backend and known_backend not in available:
         raise SessionError("The saved device backend is unsupported by this project")
-    # Names and aliases may be stale or misleading. Every unconfigured
-    # backend is resolved from hardware observed in this same selected SSH probe.
-    probe, hardware, ssh_argv = _probe(source, profile, project.engine_name, not configured_backend,
+    probe, hardware, ssh_argv = _probe(source, profile, project.engine_name, not known_backend,
                                      runner=runner or subprocess.run, ssh_executable=ssh_executable)
-    backend_source = "configured" if configured_backend else "ssh_hardware"
-    backend = configured_backend or _hint(hardware)
+    backend_source = "device_collection" if observed_backend else "configured" if configured_backend else "ssh_hardware"
+    backend = known_backend or _hint(hardware)
     if not backend:
         raise SessionError("无法从所选设备实际硬件可靠识别 backend；请为该设备配置明确的 backend")
     hardware_hint = _hint(profile.get("hardware") or "")
-    if not configured_backend and hardware_hint and hardware_hint != backend:
+    if not known_backend and hardware_hint and hardware_hint != backend:
         raise SessionError("所选设备实际硬件与已保存的 hardware 信息冲突；请核对设备配置")
     if backend not in available:
         raise SessionError("The detected device backend is unsupported by this project")

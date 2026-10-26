@@ -38,7 +38,7 @@ function machineUi(){
   const nodes=new Map(),context={state:{readOnly:false,profiles:[],profileKey:'',checkedKey:'prior-check'},labels:{cuda:'NVIDIA'},orderedBackends:['cuda'],document:{createDocumentFragment:()=>new Element('#fragment')},
     $:id=>{if(!nodes.has(id))nodes.set(id,new Element('div'));return nodes.get(id);},
     el:(tag,cls,value)=>{const node=new Element(tag);node.className=cls;if(value!==undefined)node.textContent=value;return node;},
-    formatTime:value=>value,errorMessage:value=>typeof value==='string'?value:value?.message||'',invalidateCheck:()=>{context.state.checkedKey='';context.invalidated=(context.invalidated||0)+1;}};
+    projectUrl:path=>path,formatTime:value=>value,errorMessage:value=>typeof value==='string'?value:value?.message||'',invalidateCheck:()=>{context.state.checkedKey='';context.invalidated=(context.invalidated||0)+1;}};
   const a=source.indexOf('  function sshConfigText('),b=source.indexOf('  function renderSshSync(',a),c=source.indexOf('  function showProfiles('),d=source.indexOf('  function renderList(',c);assert(a>=0&&b>a&&d>c);
   vm.createContext(context);vm.runInContext(source.slice(a,b)+source.slice(c,d),context);return{context,nodes};
 }
@@ -80,7 +80,7 @@ test('late polling cannot overwrite machine profiles returned by manual SSH sync
 
 test('unknown SSH devices are grouped and marked as unable to identify',()=>{
   const {context}=machineUi();context.state.profiles=[{id:'unknown',ssh_alias:'gpu_demo',backend:''}];context.$('profile').value='unknown';context.showProfiles();
-  assert.equal(context.$('profile').children[1].label,'无法识别');assert.match(context.$('machine-inventory').textContent,/无法识别设备类型/);assert.match(context.$('profile-guidance').textContent,/无法识别：SSH 名称/);
+  assert.equal(context.$('profile').children[1].label,'无法识别');assert.match(context.$('machine-inventory').textContent,/无法识别设备类型/);assert.match(context.$('profile-guidance').textContent,/无法识别：设备类型/);
 });
 
 
@@ -91,4 +91,15 @@ test('explicitly saving an inferred backend records the manual choice even when 
   let saved;context.post=async(url,body)=>{saved=body;return {profile:{...prior,...body}};};
   const a=source.indexOf('  async function saveConnection('),b=source.indexOf('  function renderCheck(',a);vm.runInContext(source.slice(a,b),context);
   await context.saveConnection();assert.equal(saved.backend_source,'manual');assert.equal(saved.backend,'cuda');
+});
+
+
+test('manual synchronization replaces the collected task-device list and an old poll cannot restore archived devices',async()=>{
+  const {context}=ui();context.state.taskDevices=[{id:'previous'}];Object.assign(context.state,{sessionRevision:0,selectionRevision:0});
+  Object.assign(context,{API:'/api/codex-sessions',selectionTarget:{},prioritizedSessions:rows=>rows,selectSessionId:()=>null});
+  for(const name of ['renderProviderSettings','renderFlagscaleSettings','renderHealth','renderList','renderDetail','applyRequestedProfile'])context[name]=()=>{};
+  let finish;context.request=()=>new Promise(resolve=>finish=resolve);context.post=async()=>({profiles:[{id:'new-profile'}],task_devices:[],ssh_config_sync:{status:'synced',changed:true}});
+  const a=source.indexOf('  async function refresh('),b=source.indexOf('  async function act(',a);vm.runInContext(source.slice(a,b),context);
+  const pending=context.refresh(true);await context.syncSshConfig();assert.deepEqual(context.state.taskDevices,[]);
+  finish({sessions:[],machine_profiles:[{id:'old-profile'}],task_devices:[{id:'old-device'}]});await pending;assert.deepEqual(context.state.taskDevices,[]);assert.equal(context.state.profiles[0].id,'new-profile');
 });

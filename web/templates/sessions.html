@@ -72,8 +72,9 @@
       </section>
       <details class="panel create-panel" id="new-task" aria-labelledby="create-title"><summary class="panel-head create-toggle"><span id="create-title">新建任务</span></summary><form id="create-form" class="form"><p class="create-intro">选择设备和 Agent，确认基线分支；补充说明可选。</p>
         <div class="field"><label for="branch-choice">基线分支</label><div class="profile-row"><select id="branch-choice" required aria-describedby="branch-hint"><option value="">请选择基线分支</option><option value="__custom__">输入其他分支…</option></select><button id="reload-branches" type="button" class="button small">读取分支列表</button></div><div id="custom-branch-field" hidden><label for="branch">自定义基线分支</label><input id="branch" type="hidden" required autocomplete="off" spellcheck="false" placeholder="例如：dev/next" aria-describedby="branch-hint"></div><small id="branch-hint" class="hint" role="status">默认沿用监控页的分支；可从列表选择，或选择“输入其他分支…”。</small></div>
-        <div class="field"><label for="profile">验证设备</label><select id="profile" required><option value="">请选择设备</option></select><small id="profile-guidance" class="hint profile-guidance"></small></div><div class="actions"><button id="sync-ssh" type="button" class="button small">同步 SSH 配置</button></div><small id="ssh-sync-status" class="hint" role="status" aria-live="polite">读取本机 SSH 别名；同步后保留正在编辑的连接。</small>
-        <details class="subtle-details machine-inventory"><summary>已导入机器 <span id="machine-count">0</span></summary><div id="machine-inventory"></div><small class="hint">开发机用于承载看板，跳板机用于连接入口。选择计算节点后，系统会自动识别设备并准备任务目录。</small></details>
+        <div class="field"><label for="profile">验证设备</label><select id="profile" required><option value="">请选择设备</option></select><small id="profile-guidance" class="hint profile-guidance"></small></div>
+        <div class="field" id="profile-backend-summary" aria-live="polite"><span class="hint">设备 Backend · 自动匹配</span><strong id="profile-backend">请先选择设备</strong><small id="profile-observation" class="hint"></small><a id="profile-resources-link" class="hint" href="/devices">缺少设备？前往设备资源页刷新采集</a></div><div class="actions"><button id="sync-ssh" type="button" class="button small">同步 SSH 配置</button></div><small id="ssh-sync-status" class="hint" role="status" aria-live="polite">读取本机 SSH 别名；同步后保留正在编辑的连接。</small>
+        <details class="subtle-details machine-inventory"><summary>当前设备列表 <span id="machine-count">0</span></summary><div id="machine-inventory"></div><small class="hint">开发机用于承载看板，跳板机用于连接入口。选择计算节点后，系统会自动识别设备并准备任务目录。</small></details>
 <div class="health"><strong id="health-status">正在检查本机 agent…</strong><button class="button small" id="health-check" type="button">检查 agent 连接</button><small id="health-note">任务保存在本机，可在此页面继续。</small></div>
         <div class="field"><label for="agent-provider">执行 Agent</label><select id="agent-provider"><option value="codex">Codex（默认）</option><option value="claude">Claude Code · API</option><option value="flagscale">FlagScale Agent · API</option></select><small id="provider-hint" class="hint">已有任务继续使用创建时选择的 agent。</small></div><div class="agent-toolbar"><small id="agent-config-state" class="hint"></small><button id="configure-agent" class="button small" type="button" hidden>配置 Agent</button></div>
         <details id="claude-settings-panel" class="subtle-details" hidden><summary>Claude 本机 API 配置</summary>
@@ -109,7 +110,7 @@ Grep</textarea><small class="hint">SSH 命令可显式配置 Bash(ssh *)。未�
         <div class="field"><label for="goal">补充说明（可选）</label><textarea id="goal" placeholder="例如：优先处理 graph 模式的问题。留空时按默认适配与验收流程执行。"></textarea></div>
         <div id="create-policy" class="notice" role="status" hidden></div>
         <small id="automatic-hint" class="hint">将自动识别所选设备，准备远端工作目录和验收环境。无需填写 backend、远端目录或模型路径。</small>
-        <details id="advanced-settings" class="subtle-details" style="margin:16px 0"><summary>高级设置（可选）</summary><label class="return-option" for="custom-settings"><input id="custom-settings" type="checkbox">使用自定义连接与验收配置</label><small class="hint">仅展开不改变自动配置。启用自定义模式后，可填写连接、backend 和模型路径，并手动预检。</small><fieldset id="custom-fields" disabled style="border:0;margin:12px 0 0;padding:0">
+        <details id="advanced-settings" class="subtle-details" style="margin:16px 0"><summary>高级设置（可选）</summary><label class="return-option" for="custom-settings"><input id="custom-settings" type="checkbox">使用自定义连接与验收配置</label><small class="hint">仅展开不改变自动配置。启用自定义模式后，可填写连接、backend 和模型路径，并手动预检。</small><fieldset id="custom-fields" disabled hidden style="border:0;margin:12px 0 0;padding:0">
         <div class="field"><label for="connection-mode">SSH 连接方式</label><select id="connection-mode"><option value="alias">已有 SSH 别名</option><option value="direct">填写新连接</option></select></div>
         <div id="alias-connection" class="connection-box"><div class="field"><label for="ssh-alias">SSH 别名</label><input id="ssh-alias" placeholder="例如：gpu_demo" autocomplete="off" spellcheck="false"><small class="hint">使用本机 SSH 配置中的别名；认证由 SSH 配置提供。</small></div></div>
         <div id="direct-connection" class="connection-box" hidden>
@@ -150,7 +151,7 @@ Grep</textarea><small class="hint">SSH 命令可显式配置 Bash(ssh *)。未�
   }
   const labels = {cuda:'NVIDIA / 英伟达',ascend:'Ascend / 昇腾',metax:'MetaX / 沐曦',corex:'iluvatar / 天数智芯',hygon:'Hygon / 海光',musa:'Moore Threads / 摩尔线程',enflame:'Enflame / 燧原',kunlunxin:'Kunlunxin / 昆仑芯',thead:'T-Head / 平头哥',tsingmicro:'Tsingmicro / 清微',sunrise:'Sunrise / 曦望'};
     const statuses = {prepared:'待启动',starting:'正在启动',running:'执行中',waiting_approval:'等待授权',waiting_input:'等待回答',interrupting:'正在中断',completed:'本轮已结束',interrupted:'已中断',failed:'本轮异常',disconnected:'连接中断'};
-    const state = {sessions:[],deletedSessions:[],view:"active",search:"",statusFilter:"",agentFilter:"",deleteTarget:null,selectionRevision:0,sessionRevision:0,refreshPromise:null,profiles:[],policies:{},selected:null,showHistory:false,available:false,fetching:false,pendingKey:'',eventsKey:'',profileKey:'',listKey:'',actionBusy:false,creating:false,checking:false,checkedKey:'',providers:{},agentSettings:null,settingsInitialized:false,settingsBusy:false,flagscaleSettingsInitialized:false,flagscaleSettingsBusy:false,readOnly:false,loadingBranches:false,branchEdited:false,sshSync:null,sshSyncBusy:false,sshSyncManual:null,profileRevision:0,machineSource:'ssh_config',jumpserverSettings:false,jumpserverSync:null,machineSourceRevision:0,jumpserverPoll:false};
+    const state = {sessions:[],deletedSessions:[],view:"active",search:"",statusFilter:"",agentFilter:"",deleteTarget:null,selectionRevision:0,sessionRevision:0,refreshPromise:null,profiles:[],taskDevices:null,profileRenderPending:false,policies:{},selected:null,showHistory:false,available:false,fetching:false,pendingKey:'',eventsKey:'',profileKey:'',listKey:'',actionBusy:false,creating:false,checking:false,checkedKey:'',providers:{},agentSettings:null,settingsInitialized:false,settingsBusy:false,flagscaleSettingsInitialized:false,flagscaleSettingsBusy:false,readOnly:false,loadingBranches:false,branchEdited:false,sshSync:null,sshSyncBusy:false,sshSyncManual:null,profileRevision:0,machineSource:'ssh_config',jumpserverSettings:false,jumpserverSync:null,machineSourceRevision:0,jumpserverPoll:false};
   const sessionListCards = new Map();
   const orderedBackends=Object.keys(labels).sort((a,b)=>a==='cuda'?-1:b==='cuda'?1:labels[a].toLowerCase().localeCompare(labels[b].toLowerCase(),'en'));
   for(const backend of orderedBackends){const option=document.querySelector('#backend option[value="'+backend+'"]');if(option)$('backend').append(option);}
@@ -417,9 +418,10 @@ Grep</textarea><small class="hint">SSH 命令可显式配置 Bash(ssh *)。未�
   }
   function fields(requireReady=true) {
     if (!$('custom-settings').checked) {
-      const profile = state.profiles.find(item=>String(item.id)===$('profile').value);
+      const profile = selectedTaskProfile();
       if (!profile) throw new Error('请选择验证设备。');
       if (!isCompute(profile)) throw new Error('请选择计算设备；开发机和跳板机不用于适配任务。');
+      if (!taskDeviceSupported(profile)) throw new Error('这台设备仅支持资源监控，暂不支持创建适配任务。');
       const body = {provider:$('agent-provider').value,profile_id:String(profile.id),automatic:true,branch:$('branch').value.trim()};
       if (!body.branch) throw new Error('请选择或输入基线分支。');
       const goal = $('goal').value.trim();if(goal)body.goal=goal;return body;
@@ -428,7 +430,7 @@ Grep</textarea><small class="hint">SSH 命令可显式配置 Bash(ssh *)。未�
     let connection;
     if(direct){const port=Number($('ssh-port').value);if(!$('ssh-host').value.trim()||!$('ssh-user').value.trim())throw new Error('请填写新连接的主机地址和登录用户。');if(!Number.isInteger(port)||port<1||port>65535)throw new Error('SSH 端口应为 1 到 65535 的整数。');connection={host:$('ssh-host').value.trim(),user:$('ssh-user').value.trim(),port,identity_file:$('identity-file').value.trim(),jump_alias:$('jump-alias').value.trim()};}
     else if (!ssh) throw new Error('请填写 SSH 别名。');
-    if(requireReady){if(!labels[$('backend').value])throw new Error('请选择这台机器对应的 backend。');if(!workspace.startsWith('/'))throw new Error('请填写远端工作目录的绝对路径，例如 /workspace/vllm-plugin-FL。');const selected=state.profiles.find(x=>String(x.id)===$('profile').value);if(selected&&!isCompute(selected))throw new Error('请选择计算节点；开发机和跳板机不用于 backend 升级任务。');}
+    if(requireReady){if(!labels[$('backend').value])throw new Error('请选择这台机器对应的 backend。');if(!workspace.startsWith('/'))throw new Error('请填写远端工作目录的绝对路径，例如 /workspace/vllm-plugin-FL。');const selected=selectedTaskProfile();if(selected&&!taskDeviceSupported(selected))throw new Error('请选择支持适配任务的计算节点；此设备仅用于资源监控或连接。');}
     let paths={};
     if ($('model-paths').value.trim()) { try { paths=JSON.parse($('model-paths').value); } catch (_) { throw new Error('模型路径需要有效的 JSON，例如 {"Qwen3.6-27B":"/models/Qwen3.6-27B"}。'); } }
     if (!paths || Array.isArray(paths) || typeof paths!=='object' || Object.values(paths).some(value=>typeof value!=='string')) throw new Error('模型路径应为「模型名称: 路径字符串」的 JSON 对象。');
@@ -439,16 +441,16 @@ Grep</textarea><small class="hint">SSH 命令可显式配置 Bash(ssh *)。未�
   function checkKey(){const body=fields();delete body.goal;return JSON.stringify(body);}
   function invalidateCheck(){state.checkedKey='';$('connection-check').hidden=true;$('monitor-after-start').hidden=true;checkButtons();}
   function checkButtons(){
-    const busy=state.readOnly||state.creating||state.checking,manual=$('custom-settings').checked,profile=state.profiles.find(item=>String(item.id)===$('profile').value);
-    const policy=taskPolicy(manual?$('backend').value:profile?.backend||'',$('branch').value.trim()),monitor=policy.mode==='monitor',deviceReady=manual||!!profile&&isCompute(profile);
+    const busy=state.readOnly||state.creating||state.checking,manual=$('custom-settings').checked,profile=selectedTaskProfile();
+    const policy=taskPolicy(manual?$('backend').value:profile?.backend||'',$('branch').value.trim()),monitor=policy.mode==='monitor',deviceReady=manual?(!profile||taskDeviceSupported(profile)):!!profile&&taskDeviceSupported(profile);
     renderPolicy($('create-policy'),policy);
     $('create-start').disabled=busy||!providerAvailable()||monitor||!deviceReady;
     $('create-only').disabled=busy||monitor||!deviceReady||(!manual&&!providerAvailable())||(['claude','flagscale'].includes($('agent-provider').value)&&!providerAvailable());
     $('create-start').textContent=state.creating?'正在准备设备与工作目录…':manual?(state.checkedKey?'创建并启动适配 agent':'检查连接并启动适配 agent'):'创建并启动任务';
     $('create-only').textContent='仅创建，稍后启动';$('check-machine').disabled=busy||!manual;$('save-profile').disabled=busy||!manual;
-    $('create-form').querySelectorAll('input, select, textarea').forEach(input=>{input.disabled=busy;});$('custom-fields').disabled=busy||!manual;$('automatic-hint').hidden=manual;$('reload-branches').disabled=busy||state.loadingBranches;
+    $('create-form').querySelectorAll('input, select, textarea').forEach(input=>{input.disabled=busy;});$('custom-fields').disabled=busy||!manual;$('custom-fields').hidden=!manual;$('automatic-hint').hidden=manual;$('reload-branches').disabled=busy||state.loadingBranches;
     const provider=$('agent-provider').value,info=state.providers?.[provider],api=['claude','flagscale'].includes(provider);
-    const reason=state.readOnly?'局域网仅查看任务。':state.creating?'正在准备，请等待当前操作完成。':state.checking?'正在检查连接，请稍候。':monitor?'已有适配 PR，请在分支进展中查看。':!deviceReady?'请先选择一台计算设备。':!providerAvailable()?api&&!info?.configured?'请先保存所选 Agent 的 API 配置。':'Agent 暂不可用，请检查本机连接。':'设备与 Agent 已就绪，创建后将在此页显示进展。';
+    const reason=state.readOnly?'局域网仅查看任务。':state.creating?'正在准备，请等待当前操作完成。':state.checking?'正在检查连接，请稍候。':monitor?'已有适配 PR，请在分支进展中查看。':!deviceReady?profile&&!taskDeviceSupported(profile)?'这台设备仅支持资源监控，请选择其他设备。':'请先选择一台已采集的计算设备。':!providerAvailable()?api&&!info?.configured?'请先保存所选 Agent 的 API 配置。':'Agent 暂不可用，请检查本机连接。':'设备与 Agent 已就绪，创建后将在此页显示进展。';
     $('create-readiness').textContent=reason;$('create-start').title=reason;
     $('configure-agent').hidden=state.readOnly||!api;$('configure-agent').disabled=busy;
     $('configure-agent').textContent=info?.configured?'编辑 API 配置':'配置 API';
@@ -519,7 +521,7 @@ Grep</textarea><small class="hint">SSH 命令可显式配置 Bash(ssh *)。未�
     try {
       const result = await post('/api/codex-machines/sync-ssh');
       if (result.ssh_config_sync?.status!=='synced' || !Array.isArray(result.profiles)) throw new Error(errorMessage(result.ssh_config_sync?.error)||'未收到有效的 SSH 同步结果，请重试。');
-      state.profiles = result.profiles;showProfiles();
+      state.profiles = result.profiles;if(Object.prototype.hasOwnProperty.call(result,'task_devices'))state.taskDevices=Array.isArray(result.task_devices)?result.task_devices:[];showProfiles();
       state.sshSyncManual=result.ssh_config_sync;renderSshSync(result.ssh_config_sync);
       if (result.ssh_config_sync.changed) invalidateCheck();
     } catch (error) {state.sshSyncManual={status:'error',error:error.message};}
@@ -563,14 +565,58 @@ Grep</textarea><small class="hint">SSH 命令可显式配置 Bash(ssh *)。未�
   async function taskTick(){if(document.hidden)return;await pollJumpserverMachines();if(!document.hidden)await refresh(true);}
 
   function showProfiles() {
-    const key=JSON.stringify(state.profiles);if(key===state.profileKey)return;state.profileKey=key;
-    const selected=$('profile').value;if(state.checkedKey&&state.profiles.find(profile=>String(profile.id)===selected)?.ssh_config_changed)invalidateCheck();$('profile').replaceChildren(el('option','', $('custom-settings').checked?'新增验证机器':'请选择设备'));$('profile').firstChild.value='';
-    const groups=new Map();for(const profile of state.profiles){const group=!isCompute(profile)?profile.role:labels[profile.backend]?profile.backend:'unknown';if(!groups.has(group))groups.set(group,[]);groups.get(group).push(profile);}
-    const inventory=document.createDocumentFragment();$('machine-count').textContent=String(state.profiles.length);
-    for(const group of [...orderedBackends,'unknown','development','gateway']){const profiles=groups.get(group);if(!profiles?.length)continue;const title=group==='development'?'开发机 / 看板部署节点':group==='gateway'?'跳板机（连接入口）':group==='unknown'?'无法识别':labels[group];const options=el('optgroup');options.label=title;const section=el('section','machine-group');section.append(el('h3','',title));for(const profile of profiles){const hardware=metadataText(profile.hardware),name=profile.label||profile.ssh_alias||profile.id,health=machineHealth(profile),connection=sshConfigText(profile);const option=el('option','',[name,profile.ssh_alias===name?'':profile.ssh_alias,hardware,connection,profile.ssh_config_changed?'SSH 配置已更新，请重新检查':health.ssh.label].filter(Boolean).join(' · '));option.value=String(profile.id);option.disabled=!isCompute(profile);options.append(option);const entry=el('div','machine-entry');entry.append(el('strong','',name),el('span','mono',profile.ssh_alias||'—'),el('p','','硬件：'+(hardware||'待确认')));const status=profile.role==='development'?'开发机 · 看板部署节点':profile.role==='gateway'?'跳板机 · 不用于执行升级':[!labels[profile.backend]?'无法识别设备类型':'',!profile.remote_workspace?'待补充远端目录':''].filter(Boolean).join(' · ')||'环境信息已填写';if(connection)entry.append(el('p','', 'SSH 配置：'+connection));if(profile.ssh_config_changed)entry.append(el('p','hint','SSH 配置已更新，请重新检查'));entry.append(el('span','pill',status));appendMachineHealth(entry,health);section.append(entry);}$('profile').append(options);inventory.append(section);}
-    if(!state.profiles.length)inventory.append(el('p','hint','暂无已保存的机器。'));$('machine-inventory').replaceChildren(inventory);$('profile').value=selected;showProfileGuidance();
+    const profiles=pickerProfiles(),manual=$('custom-settings').checked,key=JSON.stringify([manual,profiles]);
+    showProfileGuidance();
+    if(key===state.profileKey){state.profileRenderPending=false;return;}
+    // A polling update must not close or replace a device menu being used.
+    if(document.activeElement===$('profile')){state.profileRenderPending=true;return;}
+    state.profileRenderPending=false;state.profileKey=key;
+    const selected=$('profile').value;
+    if(state.checkedKey&&profiles.find(profile=>String(profile.id)===selected)?.ssh_config_changed)invalidateCheck();
+    $('profile').replaceChildren(el('option','',manual?'新增验证机器':profiles.length?'请选择设备':'暂无已采集设备'));
+    $('profile').firstChild.value='';
+    const groups=new Map();
+    for(const profile of profiles){const group=!isCompute(profile)?profile.role:profile.backend==='rocm'||labels[profile.backend]?profile.backend:'unknown';if(!groups.has(group))groups.set(group,[]);groups.get(group).push(profile);}
+    const inventory=document.createDocumentFragment();$('machine-count').textContent=String(profiles.length);
+    const backends=[...orderedBackends,'rocm'].sort((a,b)=>a==='cuda'?-1:b==='cuda'?1:profileBackendLabel({backend:a}).localeCompare(profileBackendLabel({backend:b}),'en'));
+    for(const group of [...backends,'unknown','development','gateway']){
+      const members=groups.get(group);if(!members?.length)continue;
+      const title=group==='development'?'开发机 / 看板部署节点':group==='gateway'?'跳板机（连接入口）':group==='unknown'?'无法识别':profileBackendLabel({backend:group});
+      const options=el('optgroup');options.label=title;const section=el('section','machine-group');section.append(el('h3','',title));
+      for(const profile of members){
+        const hardware=metadataText(profile.hardware),name=profile.label||profile.ssh_alias||profile.id,health=machineHealth(profile),connection=sshConfigText(profile),supported=taskDeviceSupported(profile);
+        const option=el('option','',[name,profile.ssh_alias===name?'':profile.ssh_alias,hardware,connection,!supported?'仅资源监控':profile.ssh_config_changed?'SSH 配置已更新，请重新检查':health.ssh.label].filter(Boolean).join(' · '));
+        option.value=String(profile.id);option.disabled=!supported;options.append(option);
+        const entry=el('div','machine-entry');entry.append(el('strong','',name),el('span','mono',profile.ssh_alias||'—'),el('p','','硬件：'+(hardware||'待确认')));
+        const status=profile.role==='development'?'开发机 · 看板部署节点':profile.role==='gateway'?'跳板机 · 不用于执行升级':!supported?'仅资源监控 · 暂不支持适配任务':!labels[profile.backend]?'无法识别设备类型':manual&&!profile.remote_workspace?'待补充远端目录':'Backend：'+profileBackendLabel(profile);
+        if(connection)entry.append(el('p','','SSH 配置：'+connection));if(profile.ssh_config_changed)entry.append(el('p','hint','SSH 配置已更新，请重新检查'));
+        entry.append(el('span','pill',status));appendMachineHealth(entry,health);section.append(entry);
+      }
+      $('profile').append(options);inventory.append(section);
+    }
+    if(!profiles.length)inventory.append(el('p','hint',manual?'暂无已保存的机器。':'暂无已采集设备，请先到设备资源页刷新采集。'));
+    $('machine-inventory').replaceChildren(inventory);$('profile').value=profiles.some(profile=>String(profile.id)===selected)?selected:'';showProfileGuidance();
   }
+  function pickerProfiles(){return !$('custom-settings').checked&&Array.isArray(state.taskDevices)?state.taskDevices:state.profiles;}
+  function selectedTaskProfile(){return pickerProfiles().find(profile=>String(profile.id)===$('profile').value);}
   function isCompute(profile){return (profile?.role||'compute')==='compute';}
+  function taskDeviceSupported(profile){return !!profile&&isCompute(profile)&&profile.backend!=='rocm'&&profile.task_supported!==false;}
+  function profileBackendLabel(profile){return profile?.backend==='rocm'?'AMD / 超威半导体':labels[profile?.backend]||profile?.backend_label||'无法识别';}
+  function renderDeviceObservation(profile){
+    const manual=$('custom-settings').checked,observation=profile?.device_observation;
+    if(!manual){const value=labels[profile?.backend]?profile.backend:'';if($('backend').value!==value){$('backend').value=value;if(state.checkedKey)invalidateCheck();}}
+    $('profile-backend').textContent=profile?profileBackendLabel(profile)+(taskDeviceSupported(profile)?'':' · 仅资源监控'):'请先选择设备';
+    const details=[];
+    if(observation?.updated_at)details.push('采集时间：'+formatTime(observation.updated_at));
+    else if(profile)details.push('暂无硬件采集时间');
+    if(observation?.stale)details.push('采集结果已过期，创建时将重新确认');
+    else if(observation&&observation.verified!==true)details.push('硬件尚未核验，创建时将重新识别');
+    else if(observation?.verified===true)details.push('已核验实际硬件');
+    else if(profile)details.push('创建时将识别实际硬件');
+    if(manual&&profile)details.push('自定义模式：以下方手动选择的 Backend 为准');
+    if(!profile)details.push(manual?'可选已有档案，或在高级设置中填写新连接。':'仅列出设备资源页已采集的机器；未找到的设备请先刷新采集。');
+    $('profile-observation').textContent=details.join(' · ');$('profile-resources-link').href=projectUrl('/devices');
+  }
   function machineHealth(profile){
     const full=profile.last_check,connection=profile.last_connection_check,time=record=>{const value=Date.parse(record?.checked_at);return Number.isNaN(value)?-Infinity:value;};
     const candidates=[connection,full].filter(record=>record&&Array.isArray(record.checks)&&record.checks.some(check=>check.name==='ssh'));
@@ -595,7 +641,7 @@ Grep</textarea><small class="hint">SSH 命令可显式配置 Bash(ssh *)。未�
     const details=[health.ssh.detail,health.environment.detail].filter(Boolean);if(details.length){const disclosure=el('details');disclosure.open=health.ssh.status==='failed'||health.environment.status==='failed';disclosure.append(el('summary','','检查详情'),el('p','check-detail',details.join('\n')));box.append(disclosure);}entry.append(box);
   }
   function metadataText(value){return typeof value==='string'?value:value==null?'':Array.isArray(value)?value.join(' · '):JSON.stringify(value);}
-  function showProfileGuidance(){const profile=state.profiles.find(x=>String(x.id)===$('profile').value);if(!profile){$('profile-guidance').textContent='';return;}const lines=[],health=machineHealth(profile),connection=sshConfigText(profile),manual=$('custom-settings').checked;if(connection)lines.push('SSH 配置：'+connection);if(profile.ssh_config_changed)lines.push('SSH 配置已更新，请重新检查');for(const result of (manual?[health.ssh,health.environment]:[health.ssh])){lines.push(result.label+(result.at?' · '+formatTime(result.at):''));if(result.status==='failed'||result.status==='stale')if(result.detail)lines.push(result.detail);}if(profile.source)lines.push('来源：'+metadataText(profile.source));if(!labels[profile.backend]&&isCompute(profile))lines.push('无法识别：SSH 名称未匹配到设备类型，创建时将尝试读取实际硬件。');if(profile.backend_source)lines.push('设备分类依据：'+metadataText(profile.backend_source));if(profile.notes)lines.push(metadataText(profile.notes));if(!isCompute(profile))lines.push(profile.role==='development'?'开发机 / 看板部署节点，不用于 backend 升级任务。':'连接入口，不用于 backend 升级任务。');else if(manual){if(!labels[profile.backend])lines.push('此机器的 backend 尚未确认，请手动选择。');if(!profile.remote_workspace)lines.push('尚未记录远端工作目录，请在下方补充。');}else lines.push('任务创建时将自动识别设备并准备工作目录与验收环境。');$('profile-guidance').textContent=lines.join('\n');}
+  function showProfileGuidance(){const profile=selectedTaskProfile();renderDeviceObservation(profile);if(!profile){$('profile-guidance').textContent='';return;}const lines=[],health=machineHealth(profile),connection=sshConfigText(profile),manual=$('custom-settings').checked;if(connection)lines.push('SSH 配置：'+connection);if(profile.ssh_config_changed)lines.push('SSH 配置已更新，请重新检查');for(const result of (manual?[health.ssh,health.environment]:[health.ssh])){lines.push(result.label+(result.at?' · '+formatTime(result.at):''));if(result.status==='failed'||result.status==='stale')if(result.detail)lines.push(result.detail);}if(profile.source)lines.push('来源：'+metadataText(profile.source));if(!labels[profile.backend]&&profile.backend!=='rocm'&&isCompute(profile))lines.push('无法识别：设备类型尚未确认，创建时将尝试读取实际硬件。');if(profile.backend_source)lines.push('设备分类依据：'+metadataText(profile.backend_source));if(profile.notes)lines.push(metadataText(profile.notes));if(!isCompute(profile))lines.push(profile.role==='development'?'开发机 / 看板部署节点，不用于 backend 升级任务。':'连接入口，不用于 backend 升级任务。');else if(!taskDeviceSupported(profile))lines.push('此设备仅支持资源监控，暂不支持创建适配任务。');else if(manual){if(!labels[profile.backend])lines.push('此机器的 backend 尚未确认，请手动选择。');if(!profile.remote_workspace)lines.push('尚未记录远端工作目录，请在下方补充。');}else lines.push('任务创建时将自动识别设备并准备工作目录与验收环境。');$('profile-guidance').textContent=lines.join('\n');}
   function renderList() {
     const sessions=visibleSessions(),trash=state.view==='trash',filtered=!!(state.search||state.agentFilter||state.statusFilter);
     for(const view of ['active','all','trash'])$('view-'+view).setAttribute('aria-pressed',String(state.view===view));
@@ -821,7 +867,7 @@ Grep</textarea><small class="hint">SSH 命令可显式配置 Bash(ssh *)。未�
     if(state.refreshPromise){if(!force)return state.refreshPromise;await state.refreshPromise;}
     const revision=state.sessionRevision,profileRevision=state.profileRevision;state.fetching=true;
     state.refreshPromise=(async()=>{
-    try{const data=await request(API);if(revision!==state.sessionRevision)return;state.sessions=Array.isArray(data.sessions)?data.sessions:[];state.deletedSessions=Array.isArray(data.deleted_sessions)?data.deleted_sessions:[];state.policies=data.backend_task_policies&&typeof data.backend_task_policies==='object'?data.backend_task_policies:{};if(profileRevision===state.profileRevision&&!state.sshSyncBusy){state.profiles=Array.isArray(data.machine_profiles)?data.machine_profiles:[];renderSshSync(data.ssh_config_sync);}state.available=!!data.available;state.providers=data.providers&&typeof data.providers==='object'?data.providers:{};renderProviderSettings(data.agent_settings);if(data.agent_settings_by_provider?.flagscale)renderFlagscaleSettings(data.agent_settings_by_provider.flagscale);if(!state.selectionRevision&&selectionTarget.session&&state.deletedSessions.some(item=>String(item.id)===selectionTarget.session)){state.view='trash';state.showHistory=false;}state.selected=selectSessionId([...prioritizedSessions(state.sessions),...state.deletedSessions],state.selected,state.selectionRevision?{}:selectionTarget);showProfiles();applyRequestedProfile();renderHealth(data.health);renderList();renderDetail();$('sync-status').textContent='已更新 '+new Date().toLocaleTimeString('zh-CN',{hour12:false});checkButtons();if(!quiet)notice('global-notice','');}
+    try{const data=await request(API);if(revision!==state.sessionRevision)return;state.sessions=Array.isArray(data.sessions)?data.sessions:[];state.deletedSessions=Array.isArray(data.deleted_sessions)?data.deleted_sessions:[];state.policies=data.backend_task_policies&&typeof data.backend_task_policies==='object'?data.backend_task_policies:{};if(profileRevision===state.profileRevision&&!state.sshSyncBusy){state.profiles=Array.isArray(data.machine_profiles)?data.machine_profiles:[];state.taskDevices=Object.prototype.hasOwnProperty.call(data,'task_devices')?(Array.isArray(data.task_devices)?data.task_devices:[]):null;renderSshSync(data.ssh_config_sync);}state.available=!!data.available;state.providers=data.providers&&typeof data.providers==='object'?data.providers:{};renderProviderSettings(data.agent_settings);if(data.agent_settings_by_provider?.flagscale)renderFlagscaleSettings(data.agent_settings_by_provider.flagscale);if(!state.selectionRevision&&selectionTarget.session&&state.deletedSessions.some(item=>String(item.id)===selectionTarget.session)){state.view='trash';state.showHistory=false;}state.selected=selectSessionId([...prioritizedSessions(state.sessions),...state.deletedSessions],state.selected,state.selectionRevision?{}:selectionTarget);showProfiles();applyRequestedProfile();renderHealth(data.health);renderList();renderDetail();$('sync-status').textContent='已更新 '+new Date().toLocaleTimeString('zh-CN',{hour12:false});checkButtons();if(!quiet)notice('global-notice','');}
     catch(error){$('sync-status').textContent='连接失败，将自动重试';notice('global-notice',error.message,true);}finally{state.fetching=false;}
     })();
     try{await state.refreshPromise;}finally{state.refreshPromise=null;}
@@ -875,7 +921,7 @@ Grep</textarea><small class="hint">SSH 命令可显式配置 Bash(ssh *)。未�
   async function create(start) {
     if(state.readOnly||state.creating||state.checking)return;
     let body;try{body=fields();if(!providerAvailable()&&(!$('custom-settings').checked||start||['claude','flagscale'].includes(body.provider)))throw new Error('请先完成所选 Agent 的本机配置。');}catch(error){notice('form-notice',error.message,true);return;}
-    const profile=state.profiles.find(item=>String(item.id)===String(body.profile_id));
+    const profile=pickerProfiles().find(item=>String(item.id)===String(body.profile_id));
     if(taskPolicy(body.backend||profile?.backend||'',body.branch).mode==='monitor'){checkButtons();notice('form-notice','已有 PR · 仅监控，无需创建新的适配任务。',true);return;}
     if(!$('create-form').reportValidity())return;state.creating=true;checkButtons();
     try{
@@ -899,17 +945,18 @@ Grep</textarea><small class="hint">SSH 命令可显式配置 Bash(ssh *)。未�
   $('confirm-delete').addEventListener('click',()=>{const id=state.deleteTarget;$('delete-dialog').close();state.deleteTarget=null;manageTask('delete',id);});
   $('restore-session').addEventListener('click',()=>manageTask('restore',current()?.id));
   // END task management controls
-  function applyProfileSelection(){const profile=state.profiles.find(x=>String(x.id)===$('profile').value),connection=profile?.ssh_connection||{};$('backend').value=labels[profile?.backend]?profile.backend:'';$('ssh-alias').value=profile?.ssh_alias||'';$('remote-workspace').value=profile?.remote_workspace||'';$('model-paths').value=Object.keys(profile?.model_paths||{}).length?JSON.stringify(profile.model_paths,null,2):'';$('profile-label').value=profile?.label||'';$('connection-mode').value=profile?.ssh_connection?'direct':'alias';$('ssh-host').value=connection.host||'';$('ssh-user').value=connection.user||'';$('ssh-port').value=connection.port||22;$('identity-file').value=connection.identity_file||'';$('jump-alias').value=connection.jump_alias||'';connectionMode();invalidateCheck();showProfileGuidance();}
+  function applyProfileSelection(){const profile=selectedTaskProfile(),connection=profile?.ssh_connection||{};$('backend').value=labels[profile?.backend]?profile.backend:'';$('ssh-alias').value=profile?.ssh_alias||'';$('remote-workspace').value=profile?.remote_workspace||'';$('model-paths').value=Object.keys(profile?.model_paths||{}).length?JSON.stringify(profile.model_paths,null,2):'';$('profile-label').value=profile?.label||'';$('connection-mode').value=profile?.ssh_connection?'direct':'alias';$('ssh-host').value=connection.host||'';$('ssh-user').value=connection.user||'';$('ssh-port').value=connection.port||22;$('identity-file').value=connection.identity_file||'';$('jump-alias').value=connection.jump_alias||'';connectionMode();invalidateCheck();showProfileGuidance();}
   function applyRequestedProfile(){
-    if(profileLinkHandled||!requestedProfile||state.readOnly)return;
+    if(profileLinkHandled||!requestedProfile||state.readOnly||state.profileRenderPending)return;
     profileLinkHandled=true;
-    const profile=state.profiles.find(item=>String(item.id)===requestedProfile&&isCompute(item));
-    if(!profile){notice('form-notice','链接中的设备已不可用，请重新选择设备。',true);return;}
+    const profile=pickerProfiles().find(item=>String(item.id)===requestedProfile&&taskDeviceSupported(item));
+    if(!profile){notice('form-notice','链接中的设备已不可用或尚未采集，请到设备资源页刷新后重新选择。',true);return;}
     $('profile').value=String(profile.id);applyProfileSelection();$('new-task').open=true;
   }
   $('profile').addEventListener('change',()=>{profileLinkHandled=true;applyProfileSelection();});
+  $('profile').addEventListener('blur',()=>{if(state.profileRenderPending){showProfiles();applyRequestedProfile();checkButtons();}});
   $('connection-mode').addEventListener('change',()=>{$('profile').value='';$('ssh-alias').value='';connectionMode();invalidateCheck();showProfileGuidance();});
-  for(const id of ['backend','branch','ssh-alias','ssh-host','ssh-user','ssh-port','identity-file','jump-alias','remote-workspace','model-paths'])$(id).addEventListener('input',invalidateCheck);
+  for(const id of ['backend','branch','ssh-alias','ssh-host','ssh-user','ssh-port','identity-file','jump-alias','remote-workspace','model-paths'])for(const event of ['input','change'])$(id).addEventListener(event,invalidateCheck);
   $('branch').addEventListener('input',()=>{state.branchEdited=true;$('monitor-link').href=monitorUrl($('branch').value);});
   $('branch-choice').addEventListener('change',branchChoiceChanged);
   $('reload-branches').addEventListener('click',loadBranchOptions);

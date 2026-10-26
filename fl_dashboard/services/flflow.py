@@ -995,6 +995,8 @@ def make_server(engine: Engine | None, host: str, port: int, monitor: object | N
                                                          "profile_count": len(result["machine_profiles"])}
                         else:
                             result = ssh_snapshot(project, result)
+                        result["task_devices"] = device_fleet.task_devices(
+                            project.id, result.get("machine_profiles", []))
                     self._json(200, result)
                 except ValueError as exc:
                     self._json(HTTPStatus.BAD_REQUEST, {"error": str(exc)})
@@ -1226,6 +1228,8 @@ def make_server(engine: Engine | None, host: str, port: int, monitor: object | N
                         raise WorkflowError("当前设备来自 JumpServer，请在本机设备资源页刷新机器列表。")
                     result = ssh_snapshot(project, sessions.snapshot(compact=True))
                     self._json(200, {"profiles": result.get("machine_profiles", []),
+                                     "task_devices": device_fleet.task_devices(
+                                         project.id, result.get("machine_profiles", [])),
                                      "ssh_config_sync": result.get("ssh_config_sync")})
                     return
                 session_action = re.fullmatch(r"/api/codex-sessions/([A-Za-z0-9_-]+)/(start|message|interrupt|respond|desktop|delete|restore)", target)
@@ -1249,7 +1253,8 @@ def make_server(engine: Engine | None, host: str, port: int, monitor: object | N
                         if not self._session_owner_rpc():
                             active_jumpserver_profile(project, body.get("profile_id"))
                         from fl_dashboard.tasks.automatic_tasks import normalize_automatic_task
-                        task_body = normalize_automatic_task(project, body)
+                        task_body = normalize_automatic_task(
+                            project, body, backend_lookup=lambda profile: device_fleet.task_backend(project.id, profile))
                         result = sessions.create(task_body)
                         if body.get("start") is True:
                             if not self._session_owner_rpc():

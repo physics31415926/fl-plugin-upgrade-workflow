@@ -21,6 +21,7 @@ from fl_dashboard.agents.codex_sessions import CodexSessionManager
 from fl_dashboard.monitoring.branch_monitor import LABELS
 from fl_dashboard.tasks.automatic_tasks import _ssh_argv
 from fl_dashboard.resources.telemetry import parse_telemetry, probe_script
+from fl_dashboard.resources.task_devices import monitor_profile, observation, profile_context, supported_backends
 
 MAX_HOSTS = 512
 MAX_OUTPUT = 128 * 1024
@@ -304,6 +305,101 @@ class DeviceFleet:
                     "updated_at": state["updated_at"], "refresh_interval": REFRESH_INTERVAL,
                     "error": state["error"], "summary": summary, "hosts": hosts}
 
+    def task_devices(self, project_id, profiles):
+        """Project current profiles onto collected hardware without changing owners."""
+        from fl_dashboard.tasks.ssh_profile_sync import SOURCE as SSH_SOURCE, read_config
+        if not isinstance(profiles, list):
+            return []
+        with self._lock:
+            if project_id not in self._states:
+                raise ValueError("Unknown device-monitor project")
+            if self._closed:
+                return []
+            source = self._reconcile_source()
+            project, state = self._projects[project_id], self._states[project_id]
+            current = {row["id"]: row for row in state["profiles"]}
+            manager = project.sessions
+            roots = [Path(item.root).resolve() for item in getattr(manager, "managers", [manager])
+                     if getattr(item, "root", None)]
+            catalog, import_path, fingerprint, sync_status, aliases = None, None, "", None, None
+            if source["enabled"]:
+                try:
+                    catalog = self.inventory.catalog()
+                except Exception:
+                    return []
+            else:
+                sync = self.ssh_syncs.get(project_id)
+                if sync is not None:
+                    import_path = getattr(sync, "path", None)
+                    try:
+                        aliases, fingerprint = read_config(import_path)
+                        sync_status = "synced"
+                    except (OSError, ValueError, TypeError, UnicodeError):
+                        return []
+            now, result, seen = self._monotonic(), [], set()
+            available = supported_backends(project)
+            for profile in profiles:
+                if (not isinstance(profile, dict) or profile.get("role", "compute") != "compute"
+                        or not isinstance(profile.get("id"), str) or profile["id"] in seen):
+                    continue
+                collected = current.get(profile["id"])
+                if collected is None:
+                    continue
+                seen.add(profile["id"])
+                entry = self._cache.get(collected["key"])
+                if not entry or not entry.get("updated_at"):
+                    continue
+                try:
+                    if source["enabled"]:
+                        candidate = monitor_profile(profile, catalog)
+                        if candidate is None:
+                            continue
+                    else:
+                        if profile.get("source") == "jumpserver":
+                            continue
+                        if (profile.get("source") == SSH_SOURCE and not profile.get("ssh_connection")
+                                and (aliases is None or profile.get("ssh_alias") not in aliases)):
+                            continue
+                        candidate = profile
+                    # Authorization affects freshness, not connection identity.
+                    # Historical display still requires an exact current fingerprint.
+                    context = profile_context(candidate, {**source, "valid": True}, roots=roots,
+                                              import_path=import_path, fingerprint=fingerprint,
+                                              sync_status=sync_status, max_output=MAX_OUTPUT)
+                except (OSError, ValueError, TypeError):
+                    continue
+                if context["key"] != collected["key"]:
+                    continue
+                stale = bool(entry.get("retained") or state["inventory_error"] or not source["valid"]
+                             or collected.get("source_epoch") != source["epoch"]
+                             or now - entry["observed"] > STALE_SECONDS)
+                view = entry.get("view") or {}
+                verified = (not stale and entry.get("completed", float("-inf")) > float("-inf")
+                            and view.get("reachable") is True and view.get("collection_complete") is True
+                            and not context["configuration_error"])
+                detail = observation(entry, stale=stale, verified=verified)
+                row = copy.deepcopy(profile)
+                row["device_observation"] = detail
+                if detail["backend"]:
+                    row.update(backend=detail["backend"], backend_label=detail["backend_label"],
+                               hardware=detail["hardware"], backend_source="设备资源采集实测")
+                backend = detail["backend"] or row.get("backend")
+                row["task_supported"] = not backend or backend in available
+                result.append(row)
+            # A catalog revision while resolving connections invalidates this view.
+            if self._reconcile_source()["epoch"] != source["epoch"]:
+                return []
+            return result
+
+    def task_backend(self, project_id, profile):
+        """A server-only hint; the caller must enforce project backend support."""
+        if not isinstance(profile, dict) or profile.get("configuration_error"):
+            return None
+        rows = self.task_devices(project_id, [profile])
+        if rows and rows[0]["device_observation"]["verified"]:
+            return rows[0]["device_observation"]["backend"]
+        return None
+
     def refresh(self, project_id, profile_id=None):
         if profile_id is not None and (not isinstance(profile_id, str) or not _ID.fullmatch(profile_id)):
             raise ValueError("Invalid device profile ID")
@@ -332,14 +428,13 @@ class DeviceFleet:
                 raise ValueError("JumpServer profile source unavailable")
             profiles = self.profile_source.profiles(project_id, manager, purpose="monitor")
             snapshot = manager.snapshot(compact=True)
-            sync, sync_status, sync_error = None, None, False
+            sync, sync_status = None, None
         else:
             snapshot = manager.snapshot(compact=True)
             sync = self.ssh_syncs.get(project_id)
             if sync is not None:
                 snapshot = sync.synchronize(manager, snapshot)
             sync_status = snapshot.get("ssh_config_sync", {}).get("status")
-            sync_error = sync_status not in (None, "synced")
             profiles = snapshot.get("machine_profiles")
         if not isinstance(profiles, list):
             raise ValueError("设备列表格式无效，请检查本机任务服务。")
@@ -365,57 +460,13 @@ class DeviceFleet:
             seen.add(identity)
             if len(result) >= MAX_HOSTS:
                 raise _InventoryLimit("计算设备超过监控上限（512 台），请缩小设备范围。")
-            private = copy.deepcopy(profile)
-            source_root = roots[0] if roots else Path(".").resolve()
-            config_hash = ""
-            configuration_error = profile.get("configuration_error") or (
-                "SSH 配置不可用，请同步或修复别名配置后重试。"
-                if sync_error and not profile.get("ssh_connection") else None)
-            if source["enabled"]:
-                if not source["valid"]:
-                    configuration_error = "JumpServer 授权或资产列表已失效，请在本机重新登录或刷新。"
-                elif not profile.get("ssh_connection"):
-                    configuration_error = configuration_error or "JumpServer 设备尚未生成有效的独立连接配置。"
-            if profile.get("ssh_connection") and not configuration_error:
-                try:
-                    if source["enabled"]:
-                        if not roots:
-                            raise ValueError("Device monitor has no owner directory")
-                        validator = object.__new__(CodexSessionManager)
-                        private["ssh_connection"] = validator._ssh_connection(profile["ssh_connection"])
-                        private["ssh_config_path"] = None
-                    else:
-                        path = Path(profile.get("ssh_config_path") or "").resolve()
-                        owner = next((root for root in roots if path.is_relative_to(root)), None)
-                        if owner is None or not path.is_file():
-                            raise ValueError("Invalid managed configuration")
-                        with path.open("rb") as stream:
-                            raw_config = stream.read(MAX_OUTPUT + 1)
-                        if len(raw_config) > MAX_OUTPUT:
-                            raise ValueError("Managed configuration is too large")
-                        source_root = owner
-                        config_hash = hashlib.sha256(raw_config).hexdigest()
-                except (OSError, ValueError, TypeError):
-                    configuration_error = "设备的已保存连接配置无效，请重新保存连接。"
-                    config_hash = "invalid-managed-configuration"
-            effective = {"alias": alias, "connection": profile.get("ssh_connection"),
-                         "managed_config": profile.get("ssh_config_path"), "managed_hash": config_hash,
-                         "import_path": str(import_path) if import_path else None,
-                         "includes_fingerprint": fingerprint, "sync_status": sync_status,
-                         # Catalog generation/epoch/authentication are scheduling guards,
-                         # not device identities. Including them discards cached readings
-                         # on every inventory refresh and after a process restart.
-                         "inventory_source": ({"enabled": True, "scope": source["scope"]}
-                                              if source["enabled"] else {"enabled": False}),
-                         "configuration_error": configuration_error}
-            key = hashlib.sha256(json.dumps(effective, sort_keys=True, ensure_ascii=False).encode()).hexdigest()
+            context = profile_context(profile, source, roots=roots, import_path=import_path,
+                                      fingerprint=fingerprint, sync_status=sync_status, max_output=MAX_OUTPUT)
             result.append({"id": identity, "alias": alias, "label": str(profile.get("label") or alias)[:200],
                            "backend": profile.get("backend") or "", "backend_label": labels.get(profile.get("backend"), profile.get("backend") or "无法识别"),
                            "task_count": sum(1 for task in tasks if isinstance(task, dict) and task.get("ssh_alias") == alias and task.get("status") in _ACTIVE),
-                           "key": key, "profile": private, "source_root": source_root,
-                           "configuration_error": configuration_error, "source_epoch": source["epoch"],
-                           "monitor_connection": source["enabled"],
-                           "import_path": Path(import_path).resolve() if import_path else None})
+                           **context, "source_epoch": source["epoch"],
+                           "monitor_connection": source["enabled"]})
         return sorted(result, key=lambda row: (row["backend"] != "cuda", row["backend_label"].split("/")[0].strip().casefold(), row["label"].casefold()))
 
     def _schedule(self, project_id, profile_id, generation, source):

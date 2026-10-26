@@ -145,6 +145,56 @@ class AutomaticTasksTests(unittest.TestCase):
         self.assertEqual(value["backend"], "cuda")
         self.assertTrue(self.runner.call_args.args[0][-1].endswith(" 0"))
 
+    def test_collected_hardware_overrides_old_profile_and_still_checks_task_connection(self):
+        self.update_profile(backend="metax", hardware="MetaX C550")
+        lookup = Mock(return_value="cuda")
+        value = automatic.normalize_automatic_task(
+            self.project, self.payload, runner=self.runner, ssh_executable="mock-ssh", backend_lookup=lookup)
+        self.assertEqual(lookup.call_args.args[0]["id"], "gpu")
+        self.assertEqual(value["backend"], "cuda")
+        self.assertEqual(value["automatic_context"]["backend_source"], "device_collection")
+        self.assertTrue(self.runner.call_args.args[0][-1].endswith(" 0"))
+        self.assertEqual(self.runner.call_args.args[0][-2], "selected-gpu")
+        self.assertTrue(value["remote_workspace"].startswith("/home/test/.flflow/tasks/"))
+        self.assertEqual(self.manager.snapshot()["machine_profiles"][0]["backend"], "metax")
+
+    def test_missing_trusted_observation_reprobes_jumpserver_name_hint(self):
+        self.update_profile(backend="metax", backend_source=automatic.JUMPSERVER_BACKEND_SOURCE)
+        self.runner.return_value = output(hardware="NVIDIA GPU: H100")
+        value = automatic.normalize_automatic_task(
+            self.project, self.payload, runner=self.runner, ssh_executable="mock-ssh",
+            backend_lookup=Mock(return_value=None))
+        self.assertEqual(value["backend"], "cuda")
+        self.assertEqual(value["automatic_context"]["backend_source"], "ssh_hardware")
+        self.assertTrue(self.runner.call_args.args[0][-1].endswith(" 1"))
+
+    def test_unsupported_collected_hardware_cannot_create_or_probe(self):
+        for backend in ("rocm", "unrecognized", {"backend": "cuda"}):
+            with self.subTest(backend=backend), self.assertRaisesRegex(SessionError, "collected device backend"):
+                automatic.normalize_automatic_task(
+                    self.project, self.payload, runner=self.runner,
+                    backend_lookup=Mock(return_value=backend))
+        self.runner.assert_not_called()
+        self.assertFalse(self.manager._sessions)
+
+    def test_browser_cannot_supply_hardware_observation(self):
+        lookup = Mock(return_value="cuda")
+        for field, value in (("backend", "cuda"), ("device_observation", {"verified": True}),
+                             ("backend_lookup", "cuda")):
+            with self.subTest(field=field), self.assertRaisesRegex(SessionError, "accept only"):
+                automatic.normalize_automatic_task(
+                    self.project, {**self.payload, field: value}, runner=self.runner, backend_lookup=lookup)
+        lookup.assert_not_called()
+        self.runner.assert_not_called()
+
+    def test_manual_mode_does_not_consult_collected_hardware(self):
+        lookup = Mock(return_value="cuda")
+        body = {"profile_id": "gpu", "backend": "metax"}
+        self.assertEqual(automatic.normalize_automatic_task(
+            self.project, body, runner=self.runner, backend_lookup=lookup), body)
+        lookup.assert_not_called()
+        self.runner.assert_not_called()
+
     def test_alias_classification_is_only_a_hint_and_actual_hardware_wins(self):
         from fl_dashboard.tasks.device_recognition import ALIAS_BACKEND_SOURCE
         self.update_profile(backend="metax", backend_source=ALIAS_BACKEND_SOURCE, ssh_alias="metax_c550")

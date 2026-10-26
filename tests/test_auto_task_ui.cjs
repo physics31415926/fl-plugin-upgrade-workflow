@@ -10,7 +10,7 @@ function ui(){
     notice:(id,message,error)=>notices.push({id,message,error:!!error}),refresh:async()=>{},monitorUrl:(branch,id)=>'/monitor?branch='+branch+'&session='+id,
     window:{location:{assign:()=>{throw Error('unexpected navigation');}}},post:async(url,body)=>{calls.push({url,body,creating:context.state.creating,progress:context.$('create-start').textContent});return {session:{id:'task-demo',status:'prepared'}};},
     checkMachine:async()=>{throw Error('automatic mode must not preflight manually');},saveConnection:async()=>{throw Error('automatic mode must not save a profile');}};
-  vm.createContext(context);vm.runInContext(between('  function fields(', '  async function saveConnection(')+between('  async function create(',"  $('custom-settings').addEventListener("),context);return{context,nodes,calls,notices};
+  vm.createContext(context);vm.runInContext(between('  function pickerProfiles(', '  function profileBackendLabel(')+between('  function fields(', '  async function saveConnection(')+between('  async function create(',"  $('custom-settings').addEventListener("),context);return{context,nodes,calls,notices};
 }
 test('automatic fields use device and agent without manual connection, backend or models',()=>{
   const {context}=ui();context.$('model-paths').value='invalid manual JSON';context.$('remote-workspace').value='';context.$('backend').value='';context.$('goal').value='  Optional instructions  ';
@@ -29,8 +29,8 @@ test('automatic create requires ready agent and honors read-only or existing-PR 
   for(const variant of ['unavailable','readonly','monitor']){const {context,calls}=ui();if(variant==='unavailable')context.providerAvailable=()=>false;if(variant==='readonly')context.state.readOnly=true;if(variant==='monitor')context.taskPolicy=()=>({mode:'monitor'});context.checkButtons();assert.equal(context.$('create-start').disabled,true);await context.create(true);assert.equal(calls.length,0);}
 });
 test('only custom-mode checkbox enables legacy fields and restores manual preflight',async()=>{
-  const {context,calls}=ui();context.$('advanced-settings').open=true;context.checkButtons();assert.equal(context.$('custom-fields').disabled,true);assert.equal(context.fields().automatic,true);
-  context.$('custom-settings').checked=true;context.configureTaskMode();assert.equal(context.$('custom-fields').disabled,false);assert.equal(context.$('profile').required,false);assert.equal(context.$('branch').required,true);assert.equal(context.$('remote-workspace').required,true);assert.equal(context.$('ssh-alias').required,true);
+  const {context,calls}=ui();context.$('advanced-settings').open=true;context.checkButtons();assert.equal(context.$('custom-fields').disabled,true);assert.equal(context.$('custom-fields').hidden,true);assert.equal(context.fields().automatic,true);
+  context.$('custom-settings').checked=true;context.configureTaskMode();assert.equal(context.$('custom-fields').disabled,false);assert.equal(context.$('custom-fields').hidden,false);assert.equal(context.$('profile').required,false);assert.equal(context.$('branch').required,true);assert.equal(context.$('remote-workspace').required,true);assert.equal(context.$('ssh-alias').required,true);
   let checks=0;context.checkMachine=async()=>{checks++;return true;};await context.create(true);assert.equal(checks,1);assert.equal(calls.length,1);assert.equal(calls[0].body.require_preflight,true);assert.equal(calls[0].body.backend,'cuda');assert.equal(calls[0].body.remote_workspace,'/work/plugin');assert.equal(Object.hasOwn(calls[0].body,'automatic'),false);
   context.$('custom-settings').checked=false;context.configureTaskMode();assert.equal(context.$('custom-fields').disabled,true);assert.equal(context.$('ssh-alias').required,false);assert.equal(context.$('branch').required,true);assert.equal(context.$('profile').required,true);
 });

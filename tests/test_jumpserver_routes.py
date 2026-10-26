@@ -28,6 +28,8 @@ class JumpServerRouteTests(unittest.TestCase):
         self.profiles.profiles.return_value = [{"id": "jms-authorized", "source": "jumpserver",
                                                  "label": "Authorized test device"}]
         self.fleet = Mock()
+        self.fleet.task_devices.return_value = []
+        self.fleet.task_backend.return_value = None
         self.sync = Mock()
         self.sessions = SimpleNamespace(
             snapshot=Mock(side_effect=lambda **kw: {"sessions": [], "machine_profiles": [
@@ -171,11 +173,15 @@ class JumpServerRouteTests(unittest.TestCase):
         self.sessions.snapshot.assert_not_called()
 
     def test_workbench_uses_only_current_bridge_profiles_without_ssh_sync(self):
+        observed = [{"id": "jms-authorized", "backend": "cuda", "hardware": "NVIDIA H100"}]
+        self.fleet.task_devices.return_value = observed
         for suffix in ("", "?view=cards"):
             with self.subTest(suffix=suffix):
                 status, body = self.request("/api/codex-sessions" + suffix)
                 self.assertEqual(200, status)
                 self.assertEqual(self.profiles.profiles.return_value, body["machine_profiles"])
+                self.assertEqual(observed, body["task_devices"])
+                self.fleet.task_devices.assert_called_with("vllm", self.profiles.profiles.return_value)
                 self.assertEqual("jumpserver", body["machine_source"])
                 self.assertEqual("jumpserver", body["ssh_config_sync"]["source"])
                 self.assertEqual(1, body["ssh_config_sync"]["profile_count"])
@@ -201,6 +207,14 @@ class JumpServerRouteTests(unittest.TestCase):
         with patch("fl_dashboard.tasks.automatic_tasks.normalize_automatic_task", return_value=payload):
             self.assertEqual(200, self.request("/api/codex-sessions", body=payload)[0])
         self.sessions.create.assert_called_once_with(payload)
+
+    def test_automatic_creation_receives_server_owned_device_lookup(self):
+        payload = {"automatic": True, "profile_id": "jms-authorized"}
+        with patch("fl_dashboard.tasks.automatic_tasks.normalize_automatic_task", return_value=payload) as normalize:
+            self.assertEqual(200, self.request("/api/codex-sessions", body=payload)[0])
+        profile = {"id": "jms-authorized"}
+        self.assertIsNone(normalize.call_args.kwargs["backend_lookup"](profile))
+        self.fleet.task_backend.assert_called_once_with("vllm", profile)
 
     def test_reauthorization_does_not_block_interacting_with_existing_task(self):
         self.profiles.profiles.return_value = []
