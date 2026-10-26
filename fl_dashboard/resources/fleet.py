@@ -20,12 +20,13 @@ from tempfile import TemporaryDirectory
 from fl_dashboard.agents.codex_sessions import CodexSessionManager
 from fl_dashboard.monitoring.branch_monitor import LABELS
 from fl_dashboard.tasks.automatic_tasks import _ssh_argv
-from fl_dashboard.resources.telemetry import parse_telemetry, probe_script
+from fl_dashboard.resources.telemetry import parse_telemetry, probe_script, reached
+from fl_dashboard.resources.probe_failures import classify_failure
 from fl_dashboard.resources.task_devices import monitor_profile, observation, profile_context, supported_backends
 
 MAX_HOSTS = 512
 MAX_OUTPUT = 128 * 1024
-PROBE_TIMEOUT = 35
+PROBE_TIMEOUT = 45
 STALE_SECONDS = 600
 REFRESH_INTERVAL = 300
 MIN_REFRESH_SECONDS = 5
@@ -36,6 +37,10 @@ _ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.-]{0,99}\Z")
 
 
 class _InventoryLimit(ValueError):
+    pass
+
+
+class _ProbeOutputLimit(ValueError):
     pass
 
 
@@ -558,33 +563,67 @@ class DeviceFleet:
                         return self._failure("SSH 配置已不存在，请重新同步。", attempted)
                     argv[1:1] = ["-F", str(profile["import_path"])]
                 argv[1:1] = ["-T", "-o", "ControlMaster=no", "-o", "ControlPath=none", "-o", "PermitLocalCommand=no"]
+                return self._probe_device(profile, argv, previous, attempted)
+        except Exception:
+            return self._failure("设备统计暂时不可用，请检查本机连接配置。", attempted, kind="configuration")
+
+    def _retry_pause(self, key):
+        # Spread reconnects instead of creating another simultaneous gateway burst.
+        return self._cache_stop.wait(0.5 + (int(key[:2], 16) % 11) / 10)
+
+    def _probe_device(self, profile, argv, previous, attempted):
+        """Retry only transient failures once; never infer SSH failure from exit alone."""
+        for attempt in range(2):
+            with self._lock:
+                current = self._reconcile_source()
+                if self._closed or current["epoch"] != profile["source_epoch"] or not current["valid"]:
+                    return self._failure("设备授权或连接已变化，本轮采集已取消。", attempted, kind="cancelled")
+            try:
                 result = self._runner(argv + ["bash -s"], input=probe_script().encode("utf-8"),
                                       timeout=PROBE_TIMEOUT, output_limit=MAX_OUTPUT)
-            stdout = result.stdout if isinstance(result.stdout, bytes) else str(result.stdout or "").encode("utf-8")
-            stderr = result.stderr if isinstance(result.stderr, bytes) else str(result.stderr or "").encode("utf-8")
-            if len(stdout) + len(stderr) > MAX_OUTPUT:
-                return self._failure("设备统计输出超过上限，未采用结果。", attempted)
-            if result.returncode:
-                lowered = stderr.lower()
-                message = ("SSH 主机密钥尚未受信任，请在本机终端确认。" if b"host key verification failed" in lowered else
-                           "SSH 认证失败，请检查已保存的连接。" if b"permission denied" in lowered else
-                           "设备统计连接失败，请检查 SSH 连接。")
-                return self._failure(message, attempted)
-            try:
-                view, sample = parse_telemetry(profile["alias"], stdout.decode("utf-8", "replace"), previous)
-            except Exception:
-                return self._failure("无法解析设备统计，当前可用性未知。", attempted, reachable=True)
-            return {"view": view, "sample": sample, "observed": self._monotonic(),
-                    "attempted": attempted, "updated_at": _iso(self._clock()),
-                    "error": bool(view.get("error")) or view.get("verdict") in ("unknown", "down")}
-        except subprocess.TimeoutExpired:
-            return self._failure("设备统计超时，请稍后重试。", attempted)
-        except Exception:
-            return self._failure("设备统计暂时不可用，请检查本机连接配置。", attempted)
+                stdout = result.stdout if isinstance(result.stdout, bytes) else str(result.stdout or "").encode("utf-8")
+                stderr = result.stderr if isinstance(result.stderr, bytes) else str(result.stderr or "").encode("utf-8")
+                if len(stdout) + len(stderr) > MAX_OUTPUT:
+                    raise _ProbeOutputLimit()
+                failure = classify_failure(result.returncode, stdout, stderr) if result.returncode else None
+                if failure is None:
+                    try:
+                        view, sample = parse_telemetry(profile["alias"], stdout.decode("utf-8", "replace"), previous)
+                    except Exception:
+                        connected = reached(stdout.decode("utf-8", "replace"))
+                        return self._failure("无法解析设备统计，当前可用性未知。", attempted,
+                                             reachable=True if connected else None, kind="parsing")
+                    if view.get("reachable") is False:
+                        failure = classify_failure(0, stdout, stderr) or {
+                            "message": "设备采集数据无效，本轮可用性待确认。", "reachable": None,
+                            "retryable": False, "kind": "parsing"}
+                    else:
+                        return {"view": view, "sample": sample, "observed": self._monotonic(),
+                                "attempted": attempted, "updated_at": _iso(self._clock()),
+                                "error": bool(view.get("error")) or view.get("verdict") in ("unknown", "down")}
+            except subprocess.TimeoutExpired as exc:
+                raw = exc.output or b""
+                connected = reached(raw.decode("utf-8", "replace") if isinstance(raw, bytes) else str(raw))
+                failure = {"message": ("已连接设备，但资源采集超时。" if connected else
+                                       "设备采集等待超时，暂时无法确认 SSH 连接状态。"),
+                           "reachable": True if connected else None, "retryable": True, "kind": "timeout"}
+            except _ProbeOutputLimit:
+                return self._failure("设备统计输出超过上限，未采用结果。", attempted, kind="output_limit")
+            if attempt == 0 and failure["retryable"]:
+                if self._retry_pause(profile["key"]):
+                    return self._failure("设备统计已取消。", attempted, kind="cancelled")
+                continue
+            message = failure["message"]
+            if attempt:
+                message += " 已自动重试一次。"
+            return self._failure(message, attempted, reachable=failure["reachable"], kind=failure["kind"])
 
-    def _failure(self, message, attempted, reachable=False):
-        return {"view": {"reachable": reachable, "verdict": "down" if reachable is False else "unknown", "error": message,
-                         "accel": _blank_accel(), "node": {}}, "sample": None, "observed": self._monotonic(),
+    def _failure(self, message, attempted, reachable=None, *, kind=None):
+        view = {"reachable": reachable, "verdict": "down" if reachable is False else "unknown", "error": message,
+                "accel": _blank_accel(), "node": {}}
+        if kind:
+            view["error_kind"] = kind
+        return {"view": view, "sample": None, "observed": self._monotonic(),
                 "attempted": attempted, "updated_at": _iso(self._clock()), "error": True}
 
     def _completed(self, key, future, source_epoch):
@@ -692,11 +731,15 @@ class DeviceFleet:
             for reader in readers:
                 reader.join(timeout=2)
             if overflow.is_set():
-                raise ValueError("Probe output limit exceeded")
+                raise _ProbeOutputLimit("Probe output limit exceeded")
             return subprocess.CompletedProcess(argv, process.returncode, bytes(output), bytes(errors))
         except subprocess.TimeoutExpired:
             self._stop_process(process)
-            raise
+            for reader in readers:
+                reader.join(timeout=2)
+            # Preserve only bounded output so the caller can identify whether the
+            # target shell was reached before its sampling command timed out.
+            raise subprocess.TimeoutExpired(argv, timeout, output=bytes(output), stderr=bytes(errors)) from None
         finally:
             with self._lock:
                 self._processes.discard(process)

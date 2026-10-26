@@ -88,7 +88,7 @@ class DeviceFleetTests(unittest.TestCase):
         self.assertIn("-T", argv)
         self.assertEqual(str(self.config), argv[argv.index("-F") + 1])
         self.assertIsInstance(kwargs["input"], bytes)
-        self.assertEqual(35, kwargs["timeout"])
+        self.assertEqual(45, kwargs["timeout"])
         self.assertEqual(MAX_OUTPUT, kwargs["output_limit"])
         for _ in range(3):
             self.collector.snapshot("vllm")
@@ -121,7 +121,7 @@ class DeviceFleetTests(unittest.TestCase):
         self.collector._runner = Mock(side_effect=subprocess.TimeoutExpired("fixture", 35))
         self.collector.refresh("vllm")
         result = self.wait()
-        self.assertEqual("down", result["hosts"][0]["verdict"])
+        self.assertEqual("unknown", result["hosts"][0]["verdict"])
         self.assertEqual(0, result["summary"]["free_cards"])
         self.assertEqual(1, result["summary"]["total_cards"])
         self.assertIn("超时", result["hosts"][0]["error"])
