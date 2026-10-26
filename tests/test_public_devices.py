@@ -61,7 +61,8 @@ class PublicDeviceTests(unittest.TestCase):
         worker.start()
         def request(path, method="GET"):
             conn = HTTPConnection("127.0.0.1", server.server_port, timeout=3)
-            conn.request(method, path, body="{}" if method == "POST" else None)
+            headers = {"Content-Type": "application/json", "Origin": f"http://127.0.0.1:{server.server_port}"} if method == "POST" else {}
+            conn.request(method, path, body="{}" if method == "POST" else None, headers=headers)
             response = conn.getresponse()
             result = response.status, json.loads(response.read())
             conn.close()
@@ -70,12 +71,16 @@ class PublicDeviceTests(unittest.TestCase):
             capabilities = request("/api/capabilities")[1]
             self.assertTrue(capabilities["devices"])
             self.assertTrue(capabilities["read_only"])
-            self.assertFalse(capabilities["devices_refresh"])
+            self.assertTrue(capabilities["device_refresh"])
+            self.assertTrue(capabilities["devices_refresh"])
             self.assertFalse(capabilities["sessions"])
             with patch("fl_dashboard.services.share_server.read_public_devices", return_value={"project_id": "vllm", "hosts": [], "read_only": True}) as read:
                 self.assertEqual(200, request("/api/devices?project=vllm")[0])
                 read.assert_called_once_with("http://127.0.0.1:8766", "vllm")
-                self.assertEqual(405, request("/api/devices/refresh", "POST")[0])
+                with patch("fl_dashboard.services.share_server.PublicDeviceRefresher.refresh", return_value={
+                    "project_id": "vllm", "hosts": [], "read_only": True, "device_refresh": True}) as refresh:
+                    self.assertEqual(202, request("/api/devices/refresh", "POST")[0])
+                    refresh.assert_called_once_with("vllm")
                 self.assertEqual(405, request("/api/codex-sessions", "POST")[0])
                 self.assertEqual(read.call_count, 1)
         finally:

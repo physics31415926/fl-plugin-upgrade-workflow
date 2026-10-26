@@ -52,7 +52,10 @@ class GatewayTests(unittest.TestCase):
                 self.send_response(200)
                 self.send_header("Content-Type", "application/json")
                 self.end_headers()
-                self.wfile.write(b'{"accepted":true}')
+                reply = ({"project_id": "vllm", "hosts": [], "refreshing": True,
+                          "agent_settings": {"key": "private-key"}} if self.path.startswith("/api/devices/refresh")
+                         else {"accepted": True})
+                self.wfile.write(json.dumps(reply).encode())
 
         self.control = ThreadingHTTPServer(("127.0.0.1", 0), Control)
         self.control.daemon_threads = True
@@ -106,7 +109,7 @@ class GatewayTests(unittest.TestCase):
         self.assertEqual(self.request("/api/codex-sessions", method="POST", body={})[0], 405)
         self.assertEqual(self.calls, [])
 
-    def test_device_views_are_public_but_collection_still_requires_an_authorized_share(self):
+    def test_public_device_refresh_preserves_task_control_permissions(self):
         for path in ("/devices", "/devices.html", "/api/devices?project=vllm"):
             self.assertEqual(200, self.request(path)[0])
         status, _, raw = self.request("/api/devices?project=vllm", headers={"Authorization": "Bearer private-token", "X-FL-Session-Owner": "private-owner"})
@@ -119,7 +122,12 @@ class GatewayTests(unittest.TestCase):
             self.assertEqual(call[:2], ("GET", "/api/devices?project=vllm"))
             for header in ("Authorization", "Cookie", "X-FL-Session-Owner"):
                 self.assertNotIn(header, call[2])
-        self.assertEqual(405, self.request("/api/devices/refresh", method="POST", body={})[0])
+        status, _, raw = self.request("/api/devices/refresh", method="POST", body={})
+        self.assertEqual(202, status)
+        self.assertTrue(json.loads(raw)["read_only"])
+        self.assertTrue(json.loads(raw)["device_refresh"])
+        self.assertNotIn("private-key", raw.decode())
+        self.assertEqual({}, self.calls[-1][3])
         self.assertEqual(200, self.request("/api/devices/refresh?project=vllm", method="POST", body={"profile_id": "ssh-test"}, token=self.created["token"])[0])
         self.assertEqual("/api/devices/refresh?project=vllm", self.calls[-1][1])
 
@@ -128,7 +136,7 @@ class GatewayTests(unittest.TestCase):
             self.assertEqual(400, self.request(path)[0])
         self.assertEqual([], self.calls)
 
-    def test_expired_share_cookie_downgrades_public_device_reads_only(self):
+    def test_expired_share_cookie_downgrades_public_device_access(self):
         self.store.revoke(self.created["id"])
         for path in ("/devices", "/api/devices?project=vllm", "/api/capabilities", "/api/projects"):
             status, headers, raw = self.request(path, token=self.created["token"])
@@ -136,9 +144,13 @@ class GatewayTests(unittest.TestCase):
             self.assertIn("Max-Age=0", headers["Set-Cookie"])
             if path.startswith("/api/devices") or path == "/api/capabilities":
                 self.assertTrue(json.loads(raw)["read_only"])
-        self.assertEqual(401, self.request("/api/devices/refresh", method="POST", body={}, token=self.created["token"])[0])
+        status, headers, raw = self.request("/api/devices/refresh", method="POST", body={}, token=self.created["token"])
+        self.assertEqual(202, status)
+        self.assertIn("Max-Age=0", headers["Set-Cookie"])
+        self.assertTrue(json.loads(raw)["read_only"])
+        self.assertEqual(400, self.request("/api/devices/refresh", method="POST", body={"profile_id": "ssh-test"}, token=self.created["token"])[0])
         self.assertEqual(401, self.request("/api/codex-sessions", token=self.created["token"])[0])
-        self.assertTrue(all(call[0] == "GET" and call[1].startswith("/api/devices?") for call in self.calls))
+        self.assertTrue(all(call[1].startswith(("/api/devices?", "/api/devices/refresh?")) for call in self.calls))
 
     def test_jumpserver_settings_are_never_forwarded_even_with_full_access_share(self):
         token = self.created["token"]

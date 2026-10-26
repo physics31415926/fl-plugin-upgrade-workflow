@@ -24,7 +24,7 @@ function harness(handler,options={}){
 }
 const fresh=id=>({id,label:'Host '+id,ssh_alias:'host_'+id,backend:'cuda',backend_label:'NVIDIA / 英伟达',verdict:'free',reachable:true,updated_at:new Date().toISOString(),age_seconds:0,accel:{total:1,free:1,busy:0,unknown:0,residual:0,card_name:'Demo',cards:[{index:0,busy:false,residual:false,mem_used:0,mem_total:81920,util:0,procs:[]}]},node:{cpu_pct:0,mem_pct:2}});
 const snapshot=(hosts=[fresh('a')],extra={})=>({project_id:'vllm',refreshing:false,refresh_interval:300,updated_at:new Date().toISOString(),hosts,...extra});
-const put=(ui,data)=>{ui.api.state.readable=true;ui.api.state.allowed=true;ui.api.state.data=data;ui.api.state.receivedAt=Date.now();};
+const put=(ui,data)=>{ui.api.state.readable=true;ui.api.state.allowed=true;ui.api.state.canRefresh=true;ui.api.state.data=data;ui.api.state.receivedAt=Date.now();};
 
 test('device script parses and uses text rendering without external scripts',()=>{new vm.Script(source);assert.doesNotMatch(source,/innerHTML|insertAdjacentHTML/);assert.doesNotMatch(file('devices.html'),/<script[^>]+src=/);});
 test('missing values stay unknown and true zero remains visible',()=>{const {api}=harness();assert.equal(api.percent(null),'—');assert.equal(api.memory(undefined),'—');assert.equal(api.number(NaN),'—');assert.equal(api.percent(0),'0%');assert.equal(api.memory(0),'0 GiB');assert.equal(api.cardSymbol({busy:null}),'?');assert.equal(api.cardSymbol({busy:false}),'F');assert.equal(api.cardSymbol({busy:true}),'B');assert.equal(api.cardSymbol({busy:true,residual:true}),'~');});
@@ -347,4 +347,60 @@ test('initial metadata preparation explains the work instead of displaying zero-
 test('legacy snapshots keep collection progress without fabricated concurrency counts',()=>{
  const ui=harness();put(ui,snapshot([],{refreshing:true,progress:{done:2,total:8}}));ui.api.render();assert.match(ui.node('refresh-status').textContent,/采集中.*2 \/ 8.*逐步显示/);assert.doesNotMatch(ui.node('refresh-status').textContent,/台采集中|台排队/);
  ui.api.state.data.concurrency={limit:12};ui.api.render();assert.doesNotMatch(ui.node('refresh-status').textContent,/台采集中|台排队|NaN/);
+});
+
+const publicSnapshot=(hosts=[fresh('public')],extra={})=>snapshot(hosts,{read_only:true,device_refresh:true,...extra});
+const publicCapabilities={devices:true,read_only:true,device_refresh:true,sessions:false,jumpserver_settings:false};
+
+test('anonymous manual-refresh permission shows the action without enabling management or automatic scans',async()=>{
+ const ui=harness(url=>new URL(url).pathname==='/api/capabilities'?publicCapabilities:publicSnapshot([],{updated_at:null}));
+ await ui.api.selectProject('vllm');
+ assert.equal(ui.api.state.allowed,false);assert.equal(ui.api.state.canRefresh,true);assert.equal(ui.api.state.auto,false);
+ assert.equal(ui.node('collection-actions').hidden,false);assert.equal(ui.node('auto-collection-control').hidden,true);assert.equal(ui.node('auto-refresh').disabled,true);assert.equal(ui.node('auto-refresh').checked,false);
+ assert.equal(ui.node('machine-source-panel').hidden,true);assert.equal(ui.node('sessions-link').hidden,true);assert.match(ui.node('shared-mode').textContent,/资源可刷新.*任务只读/);
+ await ui.api.tick();ui.node('auto-refresh').checked=true;ui.node('auto-refresh').listeners.change();await settle();
+ await ui.api.jumpserverAction('refresh');assert.equal(ui.api.state.auto,false);
+ assert.equal(ui.calls.some(call=>call.options.method==='POST'),false);assert.equal(ui.calls.some(call=>new URL(call.url).pathname.startsWith('/api/jumpserver')),false);
+});
+
+test('an anonymous manual refresh posts once, keeps cached details and follows collection progress',async()=>{
+ let finish;const ui=harness((url,options)=>new URL(url).pathname==='/api/capabilities'?publicCapabilities:options.method==='POST'?new Promise(resolve=>finish=resolve):publicSnapshot());
+ await ui.api.selectProject('vllm');ui.api.state.selected='public';ui.api.render();
+ const pending=ui.api.refreshResources();await settle();await ui.api.refreshResources();
+ assert.equal(ui.calls.filter(call=>call.options.method==='POST').length,1);const sent=ui.calls.find(call=>call.options.method==='POST');
+ assert.equal(new URL(sent.url).pathname,'/api/devices/refresh');assert.equal(new URL(sent.url).searchParams.get('project'),'vllm');assert.deepEqual(JSON.parse(sent.options.body),{});
+ assert.match(ui.node('hosts').textContent,/Host public/);assert.equal(ui.node('card-details').children.length,1);assert.equal(ui.node('refresh-devices').disabled,true);
+ finish(publicSnapshot(undefined,{refreshing:true,progress:{done:1,total:3},concurrency:{limit:8,running:2,queued:0}}));await pending;
+ assert.equal(ui.api.state.canRefresh,true);assert.equal(ui.api.state.allowed,false);assert.equal(ui.node('refresh-devices').disabled,true);assert.match(ui.node('refresh-status').textContent,/1 \/ 3/);assert.doesNotMatch(ui.node('hosts').textContent,/新建任务/);
+});
+
+test('public refresh cooldown survives cached polling and expires without launching another scan',async()=>{
+ let now=Date.now(),remaining=30;class ClockDate extends Date{static now(){return now;}}
+ const ui=harness((url,options)=>new URL(url).pathname==='/api/capabilities'?publicCapabilities:publicSnapshot(undefined,{public_refresh_retry_after:options.method==='POST'?30:remaining}));ui.context.Date=ClockDate;
+ remaining=0;await ui.api.selectProject('vllm');remaining=30;await ui.api.refreshResources();
+ assert.equal(ui.api.state.canRefresh,true);assert.equal(ui.api.state.allowed,false);assert.equal(ui.api.state.authExpired,false);assert.equal(ui.node('refresh-devices').disabled,true);assert.match(ui.node('refresh-devices').textContent,/30 秒后/);assert.equal(ui.node('error').hidden,true);
+ await ui.api.refreshResources();assert.equal(ui.calls.filter(call=>call.options.method==='POST').length,1);
+ now+=10000;remaining=20;await ui.api.tick();assert.match(ui.node('refresh-status').textContent,/等待 20 秒/);assert.equal(ui.calls.filter(call=>call.options.method==='POST').length,1);
+ now+=20000;remaining=0;await ui.api.tick();assert.equal(ui.node('refresh-devices').disabled,false);assert.equal(ui.calls.filter(call=>call.options.method==='POST').length,1);
+});
+
+test('a revoked management share can retain explicit public manual refresh without restoring task privileges',async()=>{
+ const ui=harness(()=>publicSnapshot());put(ui,snapshot([fresh('old')]));ui.api.state.selected='public';await ui.api.tick();
+ assert.equal(ui.api.state.allowed,false);assert.equal(ui.api.state.canRefresh,true);assert.equal(ui.api.state.auto,false);assert.equal(ui.node('sessions-link').hidden,true);assert.equal(ui.node('machine-source-panel').hidden,true);assert.equal(ui.node('collection-actions').hidden,false);
+ assert.equal(ui.calls.some(call=>call.options.method==='POST'),false);await ui.api.refreshResources();assert.equal(ui.calls.filter(call=>call.options.method==='POST').length,1);assert.equal(ui.api.state.allowed,false);
+});
+
+test('explicit denial of manual refresh wins and remains denied after a normal cached read',async()=>{
+ const ui=harness(url=>new URL(url).pathname==='/api/capabilities'?{...publicCapabilities,device_refresh:false}:snapshot([fresh('public')],{read_only:true}));await ui.api.selectProject('vllm');
+ assert.equal(ui.api.state.canRefresh,false);assert.equal(ui.node('collection-actions').hidden,true);await ui.api.refreshResources();await ui.api.tick();assert.equal(ui.calls.some(call=>call.options.method==='POST'),false);
+});
+
+test('capability-only public manual refresh remains usable when an older snapshot omits the flag',async()=>{
+ const ui=harness(url=>new URL(url).pathname==='/api/capabilities'?publicCapabilities:snapshot([fresh('public')],{read_only:true}));await ui.api.selectProject('vllm');
+ assert.equal(ui.api.state.canRefresh,true);await ui.api.refreshResources();assert.equal(ui.calls.filter(call=>call.options.method==='POST').length,1);assert.equal(ui.api.state.allowed,false);
+});
+
+test('public manual refresh errors keep cached devices and do not claim management authorization expired',async()=>{
+ const ui=harness((url,options)=>new URL(url).pathname==='/api/capabilities'?publicCapabilities:options.method==='POST'?{code:503,data:{error:'采集服务暂不可用'}}:publicSnapshot());await ui.api.selectProject('vllm');ui.api.state.selected='public';await ui.api.refreshResources();
+ assert.equal(ui.api.state.canRefresh,true);assert.equal(ui.api.state.allowed,false);assert.equal(ui.api.state.authExpired,false);assert.equal(ui.api.state.selected,'public');assert.match(ui.node('hosts').textContent,/Host public/);assert.match(ui.node('error').textContent,/暂不可用/);assert.doesNotMatch(ui.node('error').textContent,/授权已失效/);
 });

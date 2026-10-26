@@ -941,7 +941,7 @@ def make_server(engine: Engine | None, host: str, port: int, monitor: object | N
                 self._json(200, {"read_only": False, "sessions": sessions is not None,
                                  "refresh": monitor is not None, "workflow": engine is not None,
                                  "access_shares": access_shares is not None, "shared_access": False,
-                                 "devices": sessions is not None, "machine_source": machine_source(),
+                                 "devices": sessions is not None, "device_refresh": sessions is not None, "machine_source": machine_source(),
                                  "jumpserver_settings": sessions is not None,
                                  "project_id": project.id, "label": project.label, "multi_project": registry.multi_project,
                                  "engine": project.engine_name, "default_branch": project.default_branch,

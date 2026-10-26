@@ -28,7 +28,7 @@ from fl_dashboard.monitoring.branch_monitor import BranchMonitor
 from fl_dashboard.monitoring.snapshot_cache import MonitorSnapshotCache
 from fl_dashboard.projects.project_registry import ProjectRegistry
 from fl_dashboard.monitoring.pr_acceptance import public_acceptance_tables, detail_text
-from fl_dashboard.services.public_devices import read_public_devices
+from fl_dashboard.services.public_devices import PublicDeviceRefresher, read_public_devices
 from fl_dashboard.services.share_gateway import validate_control_url
 
 
@@ -362,6 +362,7 @@ def make_server(cache, host="127.0.0.1", port=8765, *, username="viewer", passwo
     if access_shares is not None and control_url is None:
         raise ValueError("Access sharing requires the control URL")
     device_control_url = validate_control_url(control_url) if control_url is not None else None
+    device_refresher = PublicDeviceRefresher(device_control_url) if device_control_url else None
     gateway = None
     if access_shares is not None:
         from fl_dashboard.services.share_gateway import ShareGateway
@@ -473,7 +474,9 @@ def make_server(cache, host="127.0.0.1", port=8765, *, username="viewer", passwo
                     self._send(503, {"error": "设备资源服务尚未配置，请联系管理员。"})
                     return
                 try:
-                    self._send(200, read_public_devices(device_control_url, project.id))
+                    data = read_public_devices(device_control_url, project.id)
+                    data["public_refresh_retry_after"] = device_refresher.retry_after()
+                    self._send(200, data)
                 except Exception:
                     self._send(503, {"error": "设备资源暂不可用，请稍后重试。"})
             elif path == "/api/projects":
@@ -495,7 +498,8 @@ def make_server(cache, host="127.0.0.1", port=8765, *, username="viewer", passwo
                 self._send(200, {**CAPABILITIES, "refresh": project.monitor is not None, "default_branch": _scalar(project.default_branch),
                                  "project_id": _scalar(project.id), "label": _scalar(project.label), "multi_project": registry.multi_project,
                                  "engine": _scalar(project.engine_name), "workflow": False,
-                                 "devices": device_control_url is not None, "devices_refresh": False, "jumpserver_settings": False,
+                                 "devices": device_control_url is not None, "device_refresh": device_control_url is not None,
+                                 "devices_refresh": device_control_url is not None, "jumpserver_settings": False,
                                  "adaptation_tasks": project.native_tasks is not None or project.readonly_sessions is not None})
             elif path == "/healthz":
                 self._send(200, {"ok": True, "read_only": True})
@@ -511,6 +515,34 @@ def make_server(cache, host="127.0.0.1", port=8765, *, username="viewer", passwo
             else:
                 self._send(404, {"error": "Not available in the read-only dashboard"})
 
+        def _device_refresh_trusted(self):
+            if gateway is not None:
+                return gateway._trusted(self, post=True)
+            hosts, origins = self.headers.get_all("Host", []), self.headers.get_all("Origin", [])
+            fetch_sites = self.headers.get_all("Sec-Fetch-Site", [])
+            trusted = len(hosts) == len(origins) == 1 and len(fetch_sites) <= 1
+            try:
+                origin = urlsplit(origins[0]) if trusted else None
+                scheme = "https" if tls_context is not None else "http"
+                trusted = bool(origin and origin.scheme == scheme and origin.netloc.lower() == hosts[0].lower()
+                               and not origin.username and not origin.password and not origin.path
+                               and not origin.query and not origin.fragment
+                               and (not fetch_sites or fetch_sites[0].lower() in ("same-origin", "none")))
+                if trusted and not trusted_ingress:
+                    # Direct listeners accept their configured/local address, not
+                    # an arbitrary Host supplied through a rebinding DNS name.
+                    bound = self.server.server_address[0]
+                    names = {host.lower(), str(bound).lower(), str(self.connection.getsockname()[0]).lower()}
+                    if _loopback(bound):
+                        names.update({"localhost", "127.0.0.1", "::1"})
+                    trusted = (origin.hostname or "").lower() in names and (
+                        origin.port or (443 if scheme == "https" else 80)) == self.server.server_port
+            except (ValueError, IndexError):
+                trusted = False
+            if not trusted:
+                self._send(403, {"error": "Resource refresh must originate from this dashboard"})
+            return trusted
+
         def do_POST(self):
             if gateway is not None and gateway.handle(self):
                 return
@@ -524,6 +556,30 @@ def make_server(cache, host="127.0.0.1", port=8765, *, username="viewer", passwo
                 project = registry.select(target.query)
             except ValueError:
                 self._send(400, {"error": "Unknown or duplicate project"})
+                return
+            if path == "/api/devices/refresh":
+                if device_refresher is None:
+                    self._send(503, {"error": "设备资源服务尚未配置，请联系管理员。"})
+                    return
+                if not self._device_refresh_trusted():
+                    return
+                try:
+                    query = parse_qs(target.query, keep_blank_values=True, max_num_fields=2)
+                    if (target.scheme or target.netloc or target.fragment or "\\" in self.path
+                            or len(self.path) > 8192 or any(ord(c) < 32 for c in self.path)
+                            or set(query) - {"project"} or any(len(values) != 1 for values in query.values())):
+                        raise ValueError("Invalid resource refresh query")
+                    from fl_dashboard.services.share_gateway import ShareGateway
+                    _, body = ShareGateway._body(self, 4096)
+                    if body:
+                        raise ValueError("Public resource refresh accepts no fields")
+                except (ValueError, TypeError, UnicodeError):
+                    self._send(400, {"error": "资源刷新只接受当前仓库和空 JSON 对象。"})
+                    return
+                try:
+                    self._send(202, device_refresher.refresh(project.id))
+                except Exception:
+                    self._send(503, {"error": "设备资源暂不可用，请稍后重试。"})
                 return
             if path != "/api/branch-refresh":
                 self._send(405, {"error": "This shared dashboard is read-only"})

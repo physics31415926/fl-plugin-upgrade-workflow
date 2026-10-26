@@ -179,16 +179,17 @@ class ShareGateway:
                 handler._send(503, {"error": "Sharing access is temporarily unavailable"})
             return True
         public_read = handler.command in ("GET", "HEAD") and path in PUBLIC_DEVICE_GET_ROUTES
+        public_request = public_read or handler.command == "POST" and path == "/api/devices/refresh"
         try:
             grant = self.store.validate(token) if token else None
         except Exception:
-            if public_read:
+            if public_request:
                 handler._expired_share_cookie = True
                 return False
             handler._send(503, {"error": "Sharing access is temporarily unavailable"})
             return True
         if grant is None:
-            if public_read:
+            if public_request:
                 handler._expired_share_cookie = True
                 return False
             handler._send(401, {"error": "Sharing access has expired or been revoked"}, cookie=self._clear_cookie())
