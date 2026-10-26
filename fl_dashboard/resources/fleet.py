@@ -27,6 +27,7 @@ from fl_dashboard.resources.task_devices import monitor_profile, observation, pr
 MAX_HOSTS = 512
 MAX_OUTPUT = 128 * 1024
 PROBE_TIMEOUT = 45
+CONNECT_TIMEOUT = 15
 STALE_SECONDS = 600
 REFRESH_INTERVAL = 300
 MIN_REFRESH_SECONDS = 5
@@ -557,7 +558,10 @@ class DeviceFleet:
                     writer = object.__new__(CodexSessionManager)
                     writer._write_ssh_config(config_path, profile["alias"], connection_profile["ssh_connection"])
                     connection_profile = {**connection_profile, "ssh_config_path": str(config_path)}
-                argv = _ssh_argv(SimpleNamespace(root=profile["source_root"]), connection_profile, executable)
+                # Shared gateways may need longer to accept a burst than task
+                # preflight; keep enough of the outer budget for the remote probe.
+                argv = _ssh_argv(SimpleNamespace(root=profile["source_root"]), connection_profile, executable,
+                                 connect_timeout=CONNECT_TIMEOUT)
                 if not connection_profile.get("ssh_connection") and profile["import_path"] is not None:
                     if not profile["import_path"].is_file():
                         return self._failure("SSH 配置已不存在，请重新同步。", attempted)
@@ -569,7 +573,7 @@ class DeviceFleet:
 
     def _retry_pause(self, key):
         # Spread reconnects instead of creating another simultaneous gateway burst.
-        return self._cache_stop.wait(0.5 + (int(key[:2], 16) % 11) / 10)
+        return self._cache_stop.wait(1.0 + (int(key[:2], 16) % 21) / 10)
 
     def _probe_device(self, profile, argv, previous, attempted):
         """Retry only transient failures once; never infer SSH failure from exit alone."""

@@ -47,7 +47,7 @@ class ProbeFailureTests(unittest.TestCase):
 
     def test_known_transport_errors_are_retryable_without_exposing_details(self):
         for text in ("Connection reset by peer", "Connection closed by remote host", "Connection timed out",
-                     "Operation timed out", "Connection refused", "Connection aborted", "Network is unreachable",
+                     "Operation timed out", "Connection to example.test port 2222 timed out", "Connection refused", "Connection aborted", "Network is unreachable",
                      "No route to host", "kex_exchange_identification: read failed",
                      "ssh_exchange_identification: read failed", "banner exchange: rejected",
                      "Temporary failure in name resolution"):

@@ -86,6 +86,8 @@ class DeviceFleetTests(unittest.TestCase):
         for option in ("BatchMode=yes", "StrictHostKeyChecking=yes", "ClearAllForwardings=yes", "ForwardAgent=no", "ForwardX11=no", "ControlMaster=no", "ControlPath=none", "PermitLocalCommand=no"):
             self.assertIn(option, argv)
         self.assertIn("-T", argv)
+        self.assertIn("ConnectTimeout=15", argv)
+        self.assertNotIn("ConnectTimeout=8", argv)
         self.assertEqual(str(self.config), argv[argv.index("-F") + 1])
         self.assertIsInstance(kwargs["input"], bytes)
         self.assertEqual(45, kwargs["timeout"])
