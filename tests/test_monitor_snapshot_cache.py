@@ -7,6 +7,7 @@ import time
 import unittest
 from unittest.mock import patch
 
+from fl_dashboard.monitoring.branch_monitor import MonitorError
 from fl_dashboard.monitoring.snapshot_cache import MonitorSnapshotCache
 
 
@@ -124,6 +125,26 @@ class MonitorSnapshotCacheTests(unittest.TestCase):
         self.assertEqual(partial["observed_at"], good["observed_at"])
         self.assertEqual(partial["errors"], [])
         self.assertEqual(cache.path.read_bytes(), persisted)
+
+    def test_remote_error_has_safe_actionable_reason_and_preserves_cache(self):
+        cache = self.cache()
+        good = cache.refresh()
+        persisted = cache.path.read_bytes()
+        for code, expected in (("remote_missing", "监控远端配置已失效"),
+                               ("remote_ambiguous", "找到多个匹配的 Git 远端"),
+                               ("unrecognized", "状态采集未完成")):
+            with self.subTest(code=code):
+                self.monitor.error = MonitorError("private token and repository path", code=code)
+                self.expire(cache)
+                failed = cache.refresh()
+                self.assertIn(expected, failed["collection"]["error"])
+                self.assertNotIn("private", json.dumps(failed))
+                self.assertEqual(failed["backends"], good["backends"])
+                self.assertEqual(failed["observed_at"], good["observed_at"])
+                self.assertEqual(cache.path.read_bytes(), persisted)
+        self.monitor.error = None
+        self.expire(cache)
+        self.assertIsNone(cache.refresh()["collection"]["error"])
 
     def test_first_partial_is_visible_but_is_not_persisted_as_good(self):
         self.monitor.errors = ["CI lookup unavailable"]

@@ -31,7 +31,7 @@ import tomllib
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable
-from urllib.parse import quote, urlencode
+from urllib.parse import quote, urlencode, urlsplit
 from urllib.request import Request, urlopen
 
 from fl_dashboard.monitoring.pr_acceptance import acceptance_summary
@@ -59,7 +59,9 @@ LABELS = {
 
 
 class MonitorError(RuntimeError):
-    pass
+    def __init__(self, message: str, *, code: str | None = None):
+        super().__init__(message)
+        self.code = code
 
 
 def _utc_now() -> str:
@@ -194,8 +196,59 @@ class BranchMonitor:
             raise MonitorError(f"git {args[0]} failed: {(done.stderr or done.stdout).strip()}")
         return done
 
+    @staticmethod
+    def _github_remote_repo(url: str) -> str | None:
+        """Identify ordinary GitHub clone URLs without exposing embedded credentials."""
+        if not isinstance(url, str) or any(char.isspace() for char in url):
+            return None
+        scp = re.fullmatch(r"git@github\.com:([A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+?)(?:\.git)?/?", url, re.I)
+        if scp:
+            return scp.group(1).casefold()
+        try:
+            parsed = urlsplit(url)
+            if (parsed.hostname != "github.com" or parsed.query or parsed.fragment or
+                    parsed.scheme not in {"https", "ssh"} or
+                    parsed.port not in (None, 443 if parsed.scheme == "https" else 22) or
+                    (parsed.scheme == "ssh" and parsed.username != "git")):
+                return None
+        except ValueError:
+            return None
+        path = re.fullmatch(r"/([A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+?)(?:\.git)?/?", parsed.path)
+        return path.group(1).casefold() if path else None
+
+    def _resolved_remote(self, *, allow_tracking_only: bool = True) -> str:
+        """Recover an alias rename only when the target repository is unambiguous.
+
+        Resolve each operation so a running monitor survives later Git remote
+        renames. Never rewrite the user's remotes or assume origin is upstream.
+        """
+        names = self._git("remote").stdout.splitlines()
+        if self.remote in names:
+            return self.remote
+        candidates = []
+        if self.github_repo:
+            for name in names:
+                if not REF.fullmatch(name):
+                    continue
+                url = self._git("remote", "get-url", name, check=False)
+                if url.returncode == 0 and self._github_remote_repo(url.stdout.strip()) == self.github_repo.casefold():
+                    candidates.append(name)
+        if len(candidates) == 1:
+            return candidates[0]
+        if len(candidates) > 1:
+            raise MonitorError("Multiple remotes match the monitored repository; configure its remote alias",
+                               code="remote_ambiguous")
+        # Keep read-only inspection of deliberately offline repositories. Once
+        # any remote exists, an unrelated clone must never supply fallback refs.
+        if allow_tracking_only and not names:
+            refs = self._git("for-each-ref", "--format=%(refname)", f"refs/remotes/{self.remote}/")
+            if refs.stdout.strip():
+                return self.remote
+        raise MonitorError("Configured remote is unavailable and no remote matches the monitored repository",
+                           code="remote_missing")
+
     def _head(self, branch: str) -> tuple[str, str]:
-        ref = f"refs/remotes/{self.remote}/{branch}"
+        ref = f"refs/remotes/{self._resolved_remote()}/{branch}"
         sha = self._git("rev-parse", "--verify", ref).stdout.strip().lower()
         if not SHA.fullmatch(sha):
             raise MonitorError(f"Invalid SHA for {ref}")
@@ -205,7 +258,7 @@ class BranchMonitor:
         return self._git("show", f"{sha}:{path}").stdout
 
     def _branches(self) -> list[str]:
-        prefix = f"refs/remotes/{self.remote}/"
+        prefix = f"refs/remotes/{self._resolved_remote()}/"
         done = self._git("for-each-ref", "--format=%(refname)", prefix)
         return sorted(ref[len(prefix):] for ref in done.stdout.splitlines()
                       if ref.startswith(prefix) and not ref.endswith("/HEAD"))
@@ -879,17 +932,27 @@ class BranchMonitor:
     def status(self, branch: str | None = None, force: bool = False) -> dict[str, Any]:
         # Polling must refresh remote refs as well as cached GitHub metadata.
         selected = branch or self.branch
+        offline_refresh_error = None
         if not force and time.monotonic() - self._auto_refresh_times.get(selected, float("-inf")) >= 60:
             if self._auto_refresh_lock.acquire(blocking=False):
                 try:
                     if time.monotonic() - self._auto_refresh_times.get(selected, float("-inf")) >= 60:
-                        return self.refresh_branch(branch=branch)
+                        try:
+                            return self.refresh_branch(branch=branch)
+                        except MonitorError as exc:
+                            if exc.code != "remote_missing":
+                                raise
+                            # Existing refs may be intentionally inspected in an
+                            # offline clone. Preserve that data, but never claim
+                            # an automatic refresh fetched a current revision.
+                            self._resolved_remote()
+                            offline_refresh_error = "Git remote is unavailable; showing local tracking refs"
                 finally:
                     self._auto_refresh_times[selected] = time.monotonic()
                     self._auto_refresh_lock.release()
         branch = branch or self.branch
         self._validate_branch(branch)
-        errors: list[str] = []
+        errors: list[str] = [offline_refresh_error] if offline_refresh_error else []
         ref, sha = self._head(branch)
         cases = self._cases(sha)
         registry = self._registry(sha)
@@ -935,9 +998,10 @@ class BranchMonitor:
         branch = branch or self.branch
         self._validate_branch(branch)
         fetch_error = None
+        remote = self._resolved_remote(allow_tracking_only=False)
         try:
-            self._git("fetch", "--no-tags", self.remote,
-                      f"+refs/heads/{branch}:refs/remotes/{self.remote}/{branch}", timeout=30)
+            self._git("fetch", "--no-tags", remote,
+                      f"+refs/heads/{branch}:refs/remotes/{remote}/{branch}", timeout=30)
         except MonitorError as exc:
             fetch_error = f"Branch fetch failed: {exc}"
         result = self.status(branch=branch, force=True)

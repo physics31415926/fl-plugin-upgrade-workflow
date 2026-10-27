@@ -72,6 +72,8 @@ python -B <tools>/sglang_evidence.py --repo <clean-candidate> --branch <baseline
 
 将 `examples/branch-monitor.example.json` 复制为 `branch-monitor.json`，核对插件仓库路径、remote、分支、模型和 backend PR 编号。启动 `python scripts/flflow.py serve --config workflow.json --monitor-config branch-monitor.json` 后，首页 `/` 显示分支监控；原工作流控制页在 `/workflow`。页面可切换本地 remote-tracking 分支，并用“读取最新状态”更新目标分支 Git ref 与 GitHub CI。`branch-monitor.json` 是本机配置，已被 Git 忽略。
 
+如果插件仓库重命名了 Git 远端，采集器会按 `github_repo` 自动查找唯一匹配的 GitHub 远端，继续读取所选分支；不会默认把 `origin` 或 fork 当成监控仓库。没有匹配或存在多个匹配时，页面保留缓存并提示在本机明确配置 `remote`。
+
 监控服务优先通过已登录的 `gh api` 读取 GitHub 状态；若未安装或不可用，则用 GitHub HTTP API（可通过 `GH_TOKEN` 或 `GITHUB_TOKEN` 提高配额）。远端接口数据缓存 5 分钟。完整监控结果按仓库配置和分支分别缓存并落盘；重新打开页面或重启服务时，先显示最近一次完整结果，再按原有周期在后台采集。页面每 15 秒读取状态，明确标注缓存、后台更新及上次采集时间；首次尚无记录时显示采集中。点击刷新会立即请求采集；网络故障或结果不完整时保留上次完整结果，不把旧记录的时间改成当前时间。
 
 监控缓存存放在 `resource_state_dir` 下的 `monitor-snapshots/`；未配置时使用 `sessions_dir`，再回退到验收目录的上级目录。无需额外设置。本机与局域网公开快照分别保存，公开快照经过字段筛选；缓存不包含任务会话或登录凭证。每个监控最多缓存 12 个分支，配置变化会隔离旧缓存，损坏的缓存不会阻止服务启动。

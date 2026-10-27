@@ -12,10 +12,24 @@ import tempfile
 import threading
 import time
 
+from .branch_monitor import MonitorError
+
 
 MAX_BRANCHES = 12
 MAX_CACHE_BYTES = 16 * 1024 * 1024
 COLLECTION_ERROR = "状态采集未完成，请稍后重试；已有结果将继续保留。"
+_COLLECTION_ERRORS = {
+    "remote_missing": "监控远端配置已失效，未找到与监控仓库匹配的 Git 远端；请在本机检查配置，已有结果将继续保留。",
+    "remote_ambiguous": "找到多个匹配的 Git 远端，请在本机明确配置监控远端；已有结果将继续保留。",
+}
+
+
+def _collection_error(exc):
+    # Only fixed, typed reasons may cross into public pages. Git output can
+    # contain credentials, private repository paths or connection details.
+    if isinstance(exc, MonitorError):
+        return _COLLECTION_ERRORS.get(getattr(exc, "code", None), COLLECTION_ERROR)
+    return COLLECTION_ERROR
 
 
 def _clone(value):
@@ -210,9 +224,9 @@ class MonitorSnapshotCache:
                         entry.last_success = time.monotonic()
                 if good:
                     self._persist()
-        except Exception:
+        except Exception as exc:
             with self._lock:
-                entry.error = COLLECTION_ERROR
+                entry.error = _collection_error(exc)
         finally:
             with self._lock:
                 entry.flight = None
