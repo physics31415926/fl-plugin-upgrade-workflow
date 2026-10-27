@@ -3,7 +3,7 @@ from http.client import HTTPConnection
 import json
 import threading
 import unittest
-from unittest.mock import Mock
+from unittest.mock import Mock, call
 
 from fl_dashboard.monitoring.branch_monitor import BranchMonitor
 from fl_dashboard.projects.project_registry import ProjectContext, ProjectRegistry
@@ -14,12 +14,13 @@ class BranchOptionsTests(unittest.TestCase):
     def test_monitor_only_reads_local_remote_refs(self):
         monitor = object.__new__(BranchMonitor)
         monitor.branch = "release/next"
-        monitor._git = Mock(return_value=Mock(stdout="refs/remotes/upstream/main\nrefs/remotes/upstream/release/next\nrefs/remotes/upstream/HEAD\n"))
+        monitor._git = Mock(side_effect=[Mock(stdout="upstream\n"), Mock(stdout="refs/remotes/upstream/main\nrefs/remotes/upstream/release/next\nrefs/remotes/upstream/HEAD\n")])
         monitor.remote = "upstream"
         monitor.transport = Mock(side_effect=AssertionError("No network collection"))
         monitor.status = Mock(side_effect=AssertionError("No status collection"))
         self.assertEqual(monitor.branch_options(), {"branch": "release/next", "branches": ["main", "release/next"]})
-        monitor._git.assert_called_once_with("for-each-ref", "--format=%(refname)", "refs/remotes/upstream/")
+        self.assertEqual(monitor._git.call_args_list, [call("remote"),
+            call("for-each-ref", "--format=%(refname)", "refs/remotes/upstream/")])
         monitor.transport.assert_not_called()
         monitor.status.assert_not_called()
 
