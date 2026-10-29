@@ -35,3 +35,43 @@ class DiscoveryTests(unittest.TestCase):
             self.assertEqual(adaptation_backend({"body": f"Upgrade the {alias} empty backend to SGLang 0.5.18, adapt interfaces."}), backend)
         self.assertEqual(adaptation_backend({"title": "feat(iluvatar): complete SGLang 0.5.18 empty runtime adaptation"}), "corex")
         self.assertIsNone(adaptation_backend({"title": "feat(musa): add operator helper"}))
+
+    def test_amd_and_rocm_aliases_identify_the_same_adaptation(self):
+        for alias in ("amd", "rocm", "AMD ROCm"):
+            with self.subTest(alias=alias):
+                self.assertEqual(adaptation_backend({
+                    "title": f"adapt({alias}): backend upgrade",
+                    "head": {"ref": "adapt/amd-runtime-upgrade"},
+                }), "amd")
+        self.assertIsNone(adaptation_backend({"title": "adapt(amdgpuhelper): runtime"}))
+        self.assertIsNone(adaptation_backend({"title": "adapt(rocmplus): runtime"}))
+        self.assertIsNone(adaptation_backend({
+            "title": "adapt(amd): backend upgrade",
+            "head": {"ref": "adapt/cuda-runtime-upgrade"},
+        }))
+
+    def test_added_backend_purpose_identifies_amd_without_special_title(self):
+        body = ("Adds AMD (ROCm/HIP) as a `vllm-plugin-FL` backend on vLLM 0.32, "
+                "validated on AMD W7900D. CUDA utilities are reused.")
+        self.assertEqual(adaptation_backend({"title": "New runtime support", "body": body}), "amd")
+        self.assertEqual(adaptation_backend({
+            "body": "### Summary\nThis PR adds ROCm as an SGLang-Plugin-FL backend for SGLang 0.5.18."
+        }), "amd")
+
+    def test_amd_evidence_or_dependencies_are_not_adaptation_intent(self):
+        bodies = (
+            "Adds AMD ROCm support libraries for vLLM 0.32.",
+            "Adds an AMD test device as a CI runner for vLLM 0.32.",
+            "Adds AMD examples and ROCm installation notes.",
+            "### Tests\nAdds AMD as a vllm-plugin-FL backend on vLLM 0.32.",
+            "### Summary\nValidated the CUDA change on AMD (ROCm/HIP).",
+        )
+        for body in bodies:
+            with self.subTest(body=body):
+                self.assertIsNone(adaptation_backend({"title": "Update shared utilities", "body": body}))
+        self.assertEqual(adaptation_backend({
+            "body": "Adds MetaX as a vllm-plugin-FL backend on vLLM 0.32, reusing AMD ROCm helpers."
+        }), "metax")
+        self.assertIsNone(adaptation_backend({
+            "body": "Adds AMD and MetaX as a vllm-plugin-FL backend on vLLM 0.32."
+        }))

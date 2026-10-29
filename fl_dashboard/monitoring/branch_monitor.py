@@ -45,6 +45,7 @@ PLATFORM = re.compile(r"^[a-z][a-z0-9_-]{0,63}$")
 CASE_DIR = "tools/adaptation-gate-cases"
 LABELS = {
     "cuda": "NVIDIA / 英伟达",
+    "amd": "AMD / 超威半导体",
     "ascend": "Ascend / 昇腾",
     "enflame": "Enflame / 燧原",
     "hygon": "Hygon / 海光",
@@ -962,14 +963,28 @@ class BranchMonitor:
         backend_ids = list(dict.fromkeys([*registry_backends, *self.backend_labels, *self.backend_prs,
                                           *self.merged_commits, *self.backend_pr_discovery]))
         candidate_prs = None
-        if backend_ids and self.github_repo:
+        if self.github_repo:
             try:
                 candidate_prs = self._candidate_prs(branch, force, errors)
             except (OSError, ValueError, MonitorError) as exc:
                 errors.append(f"Backend PR discovery unavailable: {exc}")
+        # New backend adaptations can precede their platforms.yml entry. Use
+        # the selected branch's verified PR purpose, without changing the
+        # configured backend set or leaking rows into other release branches.
+        discovered_backends = set()
+        for candidate in candidate_prs or []:
+            backend = adaptation_backend(candidate)
+            if (backend and backend not in backend_ids and
+                    self._matches_pr_selector(candidate, branch, {"content_backend": backend}) and
+                    (candidate.get("state") == "open" or
+                     self._ancestor(candidate.get("merge_commit_sha"), sha))):
+                backend_ids.append(backend)
+                discovered_backends.add(backend)
         backends = []
         for backend in backend_ids:
             pr, pr_data = self._pr(backend, branch, force, errors, candidate_prs, sha)
+            if backend in discovered_backends and pr is None:
+                continue
             integration = self._integration(backend, branch, sha, pr_data)
             ci = self._backend_ci(backend, integration, jobs, branch_ci, pr_data, force, errors, branch=branch)
             current_ci = self._branch_backend_ci(backend, jobs, branch_ci) if integration["status"] == "merged" else ci

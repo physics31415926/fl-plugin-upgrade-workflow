@@ -82,7 +82,7 @@ python -B <tools>/sglang_evidence.py --repo <clean-candidate> --branch <baseline
 
 默认根据 PR 标题和正文的 Summary / Description / 概述等目的段落识别 backend 适配。接受明确的适配、升级标题，或明确说明将插件、vLLM、SGLang 适配到某 backend 的正文。分支名称仅用于冲突检查，不能单独证明适配；测试表格、代码块、引用和 HTML 注释不作为适配目标。普通算子修复、CI 调整及仅提及某设备的 PR 不自动关联。规则采用保守文本匹配，描述不明确时由维护者指定 PR 编号。
 
-候选及显式配置的 PR 都必须由 GitHub 详情确认其目标分支（base.ref）与页面所选分支完全一致；旧分支的 PR、CI 和验收引用不会带入新分支，无法确认目标分支时不显示该 PR。适配目标必须唯一；多个候选不自动选择。已明确配置的打开 PR 和已验证合入当前分支的 PR 保持优先。backend_pr_discovery 的 head_prefixes 和可选 title_terms 是维护者显式覆盖规则。corex 与 iluvatar 视为同一 backend。PR 关联、合入状态、CI 和验收记录分别判定，描述中的通过结果不会覆盖真实 CI 状态。
+候选及显式配置的 PR 都必须由 GitHub 详情确认其目标分支（base.ref）与页面所选分支完全一致；旧分支的 PR、CI 和验收引用不会带入新分支，无法确认目标分支时不显示该 PR。适配目标必须唯一；多个候选不自动选择。已明确配置的打开 PR 和已验证合入当前分支的 PR 保持优先。backend_pr_discovery 的 head_prefixes 和可选 title_terms 是维护者显式覆盖规则。corex 与 iluvatar 视为同一 backend；AMD 与 ROCm 统一识别为 AMD。明确的新增 backend 适配 PR 即使尚未写入 platforms.yml，也会在其目标分支中自动生成一行；切换到其他分支不会带入该行。PR 关联、合入状态、CI 和验收记录分别判定，描述中的通过结果不会覆盖真实 CI 状态。
 
 适配 CI 只汇总对应 backend 的测试，准备步骤和通知不参与判定，其他 backend 的失败不会影响它。PR 合入目标分支并验证合入提交后，继续显示该适配 PR 原提交的测试结果；后续分支的同 backend CI 在展开详情中单独显示。缺少测试记录时显示未知，代码合入本身不代表测试通过。显式配置的已验收 CI 运行仍校验测试提交、运行次数与当前代码树。
 

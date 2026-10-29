@@ -2,7 +2,7 @@
 import re
 
 ALIASES = {
-    "cuda": ("cuda", "nvidia"), "ascend": ("ascend",),
+    "cuda": ("cuda", "nvidia"), "amd": ("amd", "rocm"), "ascend": ("ascend",),
     "metax": ("metax",), "corex": ("corex", "iluvatar"),
     "hygon": ("hygon",), "musa": ("musa", "moore threads", "mthreads"),
     "thead": ("thead", "t-head"), "enflame": ("enflame",),
@@ -46,6 +46,11 @@ def adaptation_backend(pr):
     for line in _purpose(pr.get("body")):
         for sentence in re.split(r"(?<=[.!?。])\s+", line):
             statement = sentence.strip(" -*").casefold()
+            added = re.match(r"^(?:(?:this pr|this change)\s+)?(?:add|adds)\s+(.+?)\s+as\s+(?:an?\s+)?(?:vllm(?:-plugin-fl)?|sglang(?:-plugin-fl)?)\s+backend\s+(?:on|for)\s+(?:vllm|sglang)\s+\d", statement)
+            if added:
+                # Only the declared target identifies a newly added backend;
+                # reused runtimes and hardware in the remainder are evidence.
+                targets.update(_backends(added[1]))
             if re.match(r"^(?:(?:this pr|this change)\s+)?(?:adapt|adapts|upgrade|upgrades|migrate|migrates|port|ports)\s+(?:the\s+)?(?:vllm(?:-plugin-fl)?|sglang(?:-plugin-fl)?|plugin|backend)\b", statement):
                 targets.update(_backends(statement))
             elif re.match(r"^(?:(?:this pr|this change)\s+)?(?:upgrade|upgrades|adapt|adapts)\s+(?:the\s+)?", statement) and re.search(r"\b(?:backend|runtime|target)\s+(?:from|to)\s+(?:sglang|vllm)\s+\d", statement):
