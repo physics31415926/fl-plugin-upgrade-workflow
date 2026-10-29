@@ -963,7 +963,7 @@ class BranchMonitor:
         backend_ids = list(dict.fromkeys([*registry_backends, *self.backend_labels, *self.backend_prs,
                                           *self.merged_commits, *self.backend_pr_discovery]))
         candidate_prs = None
-        if self.github_repo:
+        if backend_ids and self.github_repo:
             try:
                 candidate_prs = self._candidate_prs(branch, force, errors)
             except (OSError, ValueError, MonitorError) as exc:
