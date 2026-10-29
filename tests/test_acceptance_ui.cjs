@@ -24,7 +24,7 @@ class Element {
 function descendants(node) { return [node,...node.childNodes.filter(child=>typeof child!=='string').flatMap(descendants)]; }
 function ui(name) {
   const source=script(name),nodes=new Map(),href='https://example.invalid/team/dashboard/monitor?project=sglang';
-  const context={URL,URLSearchParams,location:{href,origin:'https://example.invalid'},window:{location:{href,origin:'https://example.invalid',search:'?project=sglang'}},
+  const context={URL,URLSearchParams,$:()=>null,location:{href,origin:'https://example.invalid'},window:{location:{href,origin:'https://example.invalid',search:'?project=sglang'}},
     document:{body:new Element('body'),createElement:tag=>new Element(tag),getElementById:id=>{if(!nodes.has(id))nodes.set(id,new Element('div'));return nodes.get(id);}},
     readOnly:false,safe:value=>value==null||value===''?'—':String(value),shortSha:value=>String(value||'').slice(0,10),reasonText:value=>value,scenarioLabels:{}};
   context.byId=id=>context.document.getElementById(id);

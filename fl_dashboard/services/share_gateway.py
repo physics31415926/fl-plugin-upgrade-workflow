@@ -18,8 +18,9 @@ COOKIE_NAME = "__Host-fl_access"
 PERMANENT_COOKIE_SECONDS = 24 * 60 * 60
 MAX_BODY = 1_000_000
 MAX_RESPONSE = 16 * 1024 * 1024
-PUBLIC_DEVICE_GET_ROUTES = frozenset({"/devices", "/devices.html", "/api/devices", "/api/capabilities", "/api/projects"})
+PUBLIC_DEVICE_GET_ROUTES = frozenset({"/devices", "/devices.html", "/api/devices", "/api/capabilities", "/api/projects", "/assets/overview-export.js"})
 GET_ROUTES = frozenset({
+    "/assets/overview-export.js",
     "/", "/index.html", "/monitor", "/monitor.html", "/workflow", "/workflow.html",
     "/sessions", "/sessions.html", "/devices", "/devices.html", "/api/devices",
     "/api/projects", "/api/projects-status",

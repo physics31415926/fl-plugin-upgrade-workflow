@@ -23,7 +23,7 @@ import ssl
 import threading
 from urllib.parse import parse_qs, urlsplit
 
-from fl_dashboard.paths import TEMPLATES
+from fl_dashboard.paths import ASSETS, TEMPLATES
 from fl_dashboard.monitoring.branch_monitor import BranchMonitor
 from fl_dashboard.monitoring.snapshot_cache import MonitorSnapshotCache
 from fl_dashboard.projects.project_registry import ProjectRegistry
@@ -458,6 +458,12 @@ def make_server(cache, host="127.0.0.1", port=8765, *, username="viewer", passwo
                 return
             if path in ("/", "/index.html"):
                 self._send(200, page, content_type="text/html; charset=utf-8")
+            elif path == "/assets/overview-export.js":
+                asset = ASSETS / "overview-export.js"
+                if not asset.is_file():
+                    self._send(404, {"error": "Export script is not installed"})
+                    return
+                self._send(200, asset.read_bytes(), content_type="application/javascript; charset=utf-8")
             elif path in ("/monitor", "/monitor.html"):
                 self._send(200, monitor_page, content_type="text/html; charset=utf-8")
             elif path in ("/devices", "/devices.html"):
