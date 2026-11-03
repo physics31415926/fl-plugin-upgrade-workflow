@@ -32,6 +32,9 @@ LOGIN_ERROR = "JumpServer 登录失败，请检查账号、密码和服务器登
 AUTH_ERROR = "JumpServer 登录已失效或没有权限，请重新登录。"
 INVENTORY_ERROR = "JumpServer 资产列表未完整返回，已保留上次结果，请重试。"
 NETWORK_ERROR = "无法连接 JumpServer，请检查服务地址、网络和 HTTPS 证书后重试。"
+AUTO_LOGIN_COOLDOWN = 60
+AUTO_LOGIN_PAUSED = "JumpServer 自动登录已暂停，请重新输入密码登录，或退出登录以清除保存的密码。"
+AUTO_LOGIN_RETRY = "JumpServer 自动登录暂不可用，请稍后重试。"
 
 
 class JumpServerError(ValueError):
@@ -39,6 +42,10 @@ class JumpServerError(ValueError):
 
 
 class _Unauthorized(JumpServerError):
+    pass
+
+
+class _LoginRejected(JumpServerError):
     pass
 
 
@@ -235,13 +242,17 @@ def _asset_permissions(payload, identity):
 
 
 class JumpServerInventory:
-    """Shared source of authorized assets; never returns tokens or saves passwords."""
+    """Authorized assets with optional current-user encrypted login recovery."""
 
-    def __init__(self, directory, *, encrypt=None, decrypt=None, requester=None):
+    def __init__(self, directory, *, encrypt=None, decrypt=None, requester=None, monotonic=None):
         self.path = Path(directory) / "jumpserver.json"
         self._encrypt = encrypt or (_dpapi if os.name == "nt" else None)
         self._decrypt = decrypt or ((lambda data: _dpapi(data, decrypt=True)) if os.name == "nt" else None)
         self._requester = requester or _request
+        self._monotonic = monotonic or time.monotonic
+        self._credential = ""
+        self._auto_login_blocked = False
+        self._auto_login_after = 0
         self._lock = threading.RLock()
         self._settings = dict(DEFAULTS)
         self._token = ""
@@ -286,13 +297,56 @@ class JumpServerInventory:
             if encrypted and self._decrypt:
                 token = self._decrypt(base64.b64decode(encrypted, validate=True)).decode("utf-8")
                 self._token = self._validate_token(token)
-            # A restored credential is not proof that today's permissions are unchanged.
-            self._error = "请刷新 JumpServer 资产列表。" if self._token else ("请登录 JumpServer。" if self._settings["enabled"] else None)
+            saved = record.get("encrypted_credential")
+            if saved and self._can_remember_password():
+                try:
+                    # Validate the encrypted identity binding, then discard plaintext.
+                    self._read_password(saved, self._settings)
+                    self._credential = saved
+                    self._auto_login_blocked = record.get("auto_login_blocked") is True
+                except JumpServerError:
+                    self._credential = ""
+            # Restored credentials never prove that today's permissions are unchanged.
+            self._error = (AUTO_LOGIN_PAUSED if self._auto_login_blocked else
+                           "请刷新 JumpServer 资产列表。" if self._token or self._credential else
+                           "请登录 JumpServer。" if self._settings["enabled"] else None)
         except Exception:
-            self._token = ""
+            self._token, self._credential = "", ""
+            self._auto_login_blocked = False
             self._assets = []
             self._authenticated = False
             self._error = "JumpServer 本机配置无法读取，请重新配置并登录。"
+
+    def _can_remember_password(self):
+        return callable(self._encrypt) and callable(self._decrypt)
+
+    def _clear_password(self):
+        self._credential = ""
+        self._auto_login_blocked = False
+        self._auto_login_after = 0
+
+    def _read_password(self, encrypted, settings):
+        try:
+            if not self._can_remember_password() or not isinstance(encrypted, str) or len(encrypted) > 65536:
+                raise ValueError()
+            value = json.loads(self._decrypt(base64.b64decode(encrypted, validate=True)))
+            if (not isinstance(value, dict) or set(value) != {"base_url", "username", "password"}
+                    or any(value[key] != settings[key] for key in ("base_url", "username"))):
+                raise ValueError()
+            password = value["password"]
+            if not isinstance(password, str) or not password or len(password) > 4096 or "\x00" in password:
+                raise ValueError()
+            return password
+        except Exception:
+            raise JumpServerError("JumpServer 保存的密码无法安全读取，请重新登录。") from None
+
+    def _seal_password(self, password, settings):
+        try:
+            value = {key: settings[key] for key in ("base_url", "username")}
+            value["password"] = password
+            return base64.b64encode(self._encrypt(json.dumps(value, ensure_ascii=False).encode("utf-8"))).decode("ascii")
+        except Exception:
+            raise JumpServerError("无法安全保存 JumpServer 本机配置，请检查存储目录权限。") from None
 
     @staticmethod
     def _validate_token(token):
@@ -306,6 +360,8 @@ class JumpServerInventory:
             if self._token and self._encrypt:
                 encrypted = base64.b64encode(self._encrypt(self._token.encode("utf-8"))).decode("ascii")
             record = {"schema_version": 1, "settings": self._settings, "encrypted_token": encrypted,
+                      "encrypted_credential": self._credential or None,
+                      "auto_login_blocked": bool(self._credential and self._auto_login_blocked),
                       "assets": self._assets, "updated_at": self._updated_at}
             atomic_json(self.path, record)
             if os.name != "nt":
@@ -316,7 +372,9 @@ class JumpServerInventory:
 
     def _snapshot(self):
         return {**self._settings, "authenticated": self._authenticated and bool(self._token),
-                "can_refresh": bool(self._token),
+                "can_refresh": bool(self._token or self._credential and not self._auto_login_blocked),
+                "password_saved": bool(self._credential),
+                "can_remember_password": self._can_remember_password(),
                 "refreshing": self._refreshing, "updated_at": self._updated_at, "error": self._error,
                 "asset_count": len(self._assets), "assets": copy.deepcopy(self._assets)}
 
@@ -342,38 +400,57 @@ class JumpServerInventory:
                 self._generation += 1
                 self._refreshing = False
                 if identity_changed:
+                    self._clear_password()
                     self._token, self._assets, self._updated_at = "", [], None
                     self._authenticated = False
                 if not value["enabled"]:
                     self._authenticated = False
                 self._settings = value
-                self._error = "请登录 JumpServer。" if value["enabled"] and not self._token else None
+                self._error = (AUTO_LOGIN_PAUSED if self._auto_login_blocked else
+                               "请登录 JumpServer。" if value["enabled"] and not (self._token or self._credential) else None)
                 self._save()
             return self._snapshot()
 
+    def _authenticate(self, settings, password):
+        status, body = self._call("POST", self._url(settings, "authentication/auth/"), None,
+                                  {"username": settings["username"], "password": password})
+        if not 200 <= status < 300:
+            if status in (408, 429) or status >= 500:
+                raise JumpServerError(NETWORK_ERROR)
+            raise _LoginRejected(LOGIN_ERROR)
+        try:
+            return self._validate_token(body.get("token") if isinstance(body, dict) else None)
+        except JumpServerError as exc:
+            raise _LoginRejected(str(exc)) from None
+
     def login(self, payload):
-        if not isinstance(payload, dict) or set(payload) - (set(DEFAULTS) | {"password"}):
+        if not isinstance(payload, dict) or set(payload) - (set(DEFAULTS) | {"password", "remember_password"}):
             raise JumpServerError("JumpServer 登录参数格式无效。")
         password = payload.get("password")
+        remember = payload.get("remember_password", False)
+        if not isinstance(remember, bool):
+            raise JumpServerError("JumpServer remember_password 必须为布尔值。")
         if not isinstance(password, str) or not password or len(password) > 4096 or "\x00" in password:
             raise JumpServerError("请输入 JumpServer 密码。")
-        self.configure({**{k: v for k, v in payload.items() if k in DEFAULTS}, "enabled": True})
         with self._lock:
             self._open()
+            if remember and not self._can_remember_password():
+                raise JumpServerError("当前环境不支持安全保存 JumpServer 密码，请取消保存密码后登录。")
+            # Configure and capture the identity atomically: a concurrent settings
+            # change must never redirect this password to a different server.
+            self.configure({**{k: v for k, v in payload.items() if k in DEFAULTS}, "enabled": True})
             self._revision += 1
             self._generation += 1
             revision = self._revision
             settings = dict(self._settings)
+            self._clear_password()
             self._token, self._authenticated, self._refreshing = "", False, False
             self._save()
         try:
-            status, body = self._call("POST", self._url(settings, "authentication/auth/"), None,
-                                      {"username": settings["username"], "password": password})
-            if not 200 <= status < 300:
-                raise JumpServerError(LOGIN_ERROR)
-            token = self._validate_token(body.get("token") if isinstance(body, dict) else None)
+            token = self._authenticate(settings, password)
             with self._lock:
                 self._ensure_active(revision)
+                self._credential = self._seal_password(password, settings) if remember else ""
                 self._token, self._authenticated, self._error = token, True, None
                 self._save()
         except _Cancelled:
@@ -381,10 +458,49 @@ class JumpServerInventory:
         except JumpServerError as exc:
             with self._lock:
                 if revision == self._revision and not self._closed:
+                    self._clear_password()
                     self._token, self._authenticated, self._error = "", False, str(exc)
                     self._generation += 1
             raise
         return self.refresh()
+
+    def _recover_token(self, settings, revision):
+        with self._lock:
+            self._ensure_active(revision)
+            if self._auto_login_blocked or not self._credential:
+                raise _Unauthorized(AUTO_LOGIN_PAUSED if self._auto_login_blocked else AUTH_ERROR)
+            if self._monotonic() < self._auto_login_after:
+                raise JumpServerError(AUTO_LOGIN_RETRY)
+            # Claim before network/decryption work; transient failures cannot
+            # trigger an unbounded stream of authentication requests.
+            self._auto_login_after = self._monotonic() + AUTO_LOGIN_COOLDOWN
+            encrypted = self._credential
+        try:
+            try:
+                password = self._read_password(encrypted, settings)
+            except JumpServerError:
+                raise _LoginRejected(AUTO_LOGIN_PAUSED) from None
+            with self._lock:
+                self._ensure_active(revision)
+            token = self._authenticate(settings, password)
+        except _LoginRejected:
+            with self._lock:
+                self._ensure_active(revision)
+                self._auto_login_blocked = True
+                self._token = ""
+                self._save()
+            raise _Unauthorized(AUTO_LOGIN_PAUSED) from None
+        except JumpServerError:
+            raise JumpServerError(NETWORK_ERROR) from None
+        finally:
+            password = None
+        with self._lock:
+            self._ensure_active(revision)
+            self._token = token
+            self._authenticated = False
+            self._auto_login_after = 0
+            self._save()
+        return token
 
     @staticmethod
     def _url(settings, path):
@@ -522,21 +638,52 @@ class JumpServerInventory:
             for future in pending:
                 future.cancel()
 
+    def resume(self):
+        """Queue restoration after the controller starts; constructors stay offline."""
+        with self._lock:
+            if (self._closed or not self._settings["enabled"] or self._refreshing
+                    or not (self._token or self._credential and not self._auto_login_blocked)
+                    or not self._token and self._monotonic() < self._auto_login_after):
+                return self._snapshot()
+            return self.refresh()
+
     def refresh(self):
         with self._lock:
             self._open()
-            if not self._settings["enabled"]:
+            if not self._settings["enabled"] or self._refreshing:
                 return self._snapshot()
             if not self._token:
-                raise JumpServerError("请先登录 JumpServer，再刷新授权资产。")
+                if self._auto_login_blocked:
+                    raise JumpServerError(AUTO_LOGIN_PAUSED)
+                if not self._credential:
+                    raise JumpServerError("请先登录 JumpServer，再刷新授权资产。")
+                if self._monotonic() < self._auto_login_after:
+                    raise JumpServerError(AUTO_LOGIN_RETRY)
             if not self._refreshing:
                 self._refreshing, self._error = True, None
                 self._worker.submit(self._refresh, dict(self._settings), self._token, self._revision)
             return self._snapshot()
 
     def _refresh(self, settings, token, revision):
+        recovered = False
         try:
-            assets = self._fetch(settings, token, revision)
+            if not token:
+                token = self._recover_token(settings, revision)
+                recovered = True
+            try:
+                assets = self._fetch(settings, token, revision)
+            except _Unauthorized:
+                with self._lock:
+                    self._ensure_active(revision)
+                    self._token, self._authenticated = "", False
+                    self._generation += 1
+                    self._save()
+                    recoverable = bool(self._credential and not self._auto_login_blocked)
+                if recovered or not recoverable:
+                    raise
+                token = self._recover_token(settings, revision)
+                recovered = True
+                assets = self._fetch(settings, token, revision)
             with self._lock:
                 self._ensure_active(revision)
                 previous = self._assets, self._updated_at
@@ -559,6 +706,9 @@ class JumpServerInventory:
                     self._generation += 1
                     if isinstance(exc, _Unauthorized):
                         self._token = ""
+                        if recovered and self._credential:
+                            self._auto_login_blocked = True
+                            self._error = AUTO_LOGIN_PAUSED
                         try:
                             self._save()
                         except JumpServerError:
@@ -574,6 +724,7 @@ class JumpServerInventory:
             self._revision += 1
             self._generation += 1
             self._settings["enabled"] = False
+            self._clear_password()
             self._token, self._authenticated, self._refreshing, self._error = "", False, False, None
             self._save()
             return self._snapshot()
@@ -584,5 +735,6 @@ class JumpServerInventory:
             self._revision += 1
             self._refreshing = False
             self._token = ""
+            self._clear_password()
         self._worker.shutdown(wait=False, cancel_futures=True)
         self._accounts.shutdown(wait=False, cancel_futures=True)

@@ -1328,7 +1328,11 @@ def make_server(engine: Engine | None, host: str, port: int, monitor: object | N
             jumpserver.close()
             super().server_close()
 
-    return DashboardServer((host, port), Handler)
+    server = DashboardServer((host, port), Handler)
+    # Restore the saved platform session asynchronously after a successful bind.
+    # Status reads remain cache-only; recovery failures stay in inventory state.
+    jumpserver.resume()
+    return server
 
 
 def serve(engine: Engine | None, host: str, port: int, monitor: object | None = None,

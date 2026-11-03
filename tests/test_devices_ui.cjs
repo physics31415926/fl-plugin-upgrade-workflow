@@ -71,7 +71,7 @@ test('sharing grants can view resources but never load or mutate JumpServer conf
 });
 test('login clears the password immediately and does not issue duplicate requests or save it in UI state',async()=>{
  let finish;const ui=harness(()=>new Promise(resolve=>finish=resolve));localJms(ui,jms({enabled:false,authenticated:false,updated_at:null}));ui.node('jumpserver-url').value='https://jump.example.test';ui.node('jumpserver-username').value='fixture-user';ui.node('jumpserver-password').value='fixture-only-password';ui.node('jumpserver-ssh-port').value='2222';
- const login=ui.api.loginJumpserver({preventDefault(){}});assert.equal(ui.node('jumpserver-password').value,'');await ui.api.loginJumpserver({preventDefault(){}});assert.equal(ui.calls.length,1);const body=JSON.parse(ui.calls[0].options.body);assert.equal(body.password,'fixture-only-password');assert.equal(body.ssh_port,2222);assert.equal(JSON.stringify(ui.api.jumpserver).includes('fixture-only-password'),false);assert.equal(ui.node('refresh-devices').disabled,true);
+ const login=ui.api.loginJumpserver({preventDefault(){}});assert.equal(ui.node('jumpserver-password').value,'');await ui.api.loginJumpserver({preventDefault(){}});assert.equal(ui.calls.length,1);const body=JSON.parse(ui.calls[0].options.body);assert.equal(body.password,'fixture-only-password');assert.equal(body.remember_password,false);assert.equal(body.ssh_port,2222);assert.equal(JSON.stringify(ui.api.jumpserver).includes('fixture-only-password'),false);assert.equal(ui.node('refresh-devices').disabled,true);
  finish(jms({refreshing:true}));await login;assert.equal(ui.api.jumpserver.data.authenticated,true);assert.equal(ui.node('jumpserver-settings').open,false);assert.equal(ui.node('jumpserver-password').value,'');
 });
 test('successful machine sync triggers resource collection even with auto collection paused',async()=>{
@@ -409,4 +409,89 @@ test('capability-only public manual refresh remains usable when an older snapsho
 test('public manual refresh errors keep cached devices and do not claim management authorization expired',async()=>{
  const ui=harness((url,options)=>new URL(url).pathname==='/api/capabilities'?publicCapabilities:options.method==='POST'?{code:503,data:{error:'采集服务暂不可用'}}:publicSnapshot());await ui.api.selectProject('vllm');ui.api.state.selected='public';await ui.api.refreshResources();
  assert.equal(ui.api.state.canRefresh,true);assert.equal(ui.api.state.allowed,false);assert.equal(ui.api.state.authExpired,false);assert.equal(ui.api.state.selected,'public');assert.match(ui.node('hosts').textContent,/Host public/);assert.match(ui.node('error').textContent,/暂不可用/);assert.doesNotMatch(ui.node('error').textContent,/授权已失效/);
+});
+
+
+test('remember-password is opt-in and only enabled with local secure storage support',()=>{
+ const input=file('devices.html').match(/<input\b[^>]*id="jumpserver-remember-password"[^>]*>/)[0];
+ assert.doesNotMatch(input,/\bchecked\b/);assert.match(input,/type="checkbox"/);assert.match(input,/aria-describedby="jumpserver-password-note"/);
+ const ui=harness();localJms(ui,jms({authenticated:false,can_refresh:false,can_remember_password:true}));
+ assert.equal(ui.node('jumpserver-remember-password').checked,false);assert.equal(ui.node('jumpserver-remember-password').disabled,false);
+ ui.node('jumpserver-remember-password').checked=true;ui.api.renderJumpserver();assert.equal(ui.node('jumpserver-remember-password').checked,true);
+ ui.api.jumpserver.data.can_remember_password=false;ui.api.renderJumpserver();
+ assert.equal(ui.node('jumpserver-remember-password').disabled,true);assert.equal(ui.node('jumpserver-remember-password').checked,false);
+ assert.match(ui.node('jumpserver-password-note').textContent,/没有可用的安全存储.*仍可登录/);
+});
+
+test('remembered login sends explicit consent once, immediately clears input and never writes secrets to browser storage',async()=>{
+ let finish;const saved=[],ui=harness(()=>new Promise(resolve=>finish=resolve),{storage:{getItem:()=>null,setItem:(...args)=>saved.push(args)}});
+ localJms(ui,jms({enabled:false,authenticated:false,can_refresh:false,can_remember_password:true,updated_at:null}));
+ ui.node('jumpserver-url').value='https://jump.example.test';ui.node('jumpserver-username').value='fixture-user';ui.node('jumpserver-password').value='fixture-only-remembered-password';ui.node('jumpserver-remember-password').checked=true;
+ const pending=ui.api.loginJumpserver({preventDefault(){}});
+ assert.equal(ui.node('jumpserver-password').value,'');assert.equal(JSON.parse(ui.calls[0].options.body).remember_password,true);
+ assert.equal(JSON.stringify(ui.api.jumpserver).includes('fixture-only-remembered-password'),false);assert.deepEqual(saved,[]);
+ finish(jms({password_saved:true,can_remember_password:true,can_refresh:true,refreshing:true}));await pending;
+ assert.match(ui.node('jumpserver-credential-state').textContent,/已开启自动登录/);
+ assert.equal(ui.node('jumpserver-login-fields').hidden,true);assert.equal(ui.node('jumpserver-logout').textContent,'退出并忘记密码');
+ assert.match(ui.node('jumpserver-credential-note').textContent,/退出会清除/);assert.equal(ui.node('jumpserver-remember-password').checked,false);
+});
+
+test('unsupported storage cannot send remember-password consent even if the disabled control is changed',async()=>{
+ const ui=harness(()=>jms({refreshing:true}));localJms(ui,jms({enabled:false,authenticated:false,can_refresh:false,can_remember_password:false}));
+ ui.node('jumpserver-url').value='https://jump.example.test';ui.node('jumpserver-username').value='fixture-user';ui.node('jumpserver-password').value='fixture-only-password';ui.node('jumpserver-remember-password').checked=true;
+ await ui.api.loginJumpserver();assert.equal(JSON.parse(ui.calls[0].options.body).remember_password,false);assert.equal(ui.node('jumpserver-password').value,'');
+});
+
+test('paused automatic login offers manual login and logout even when no credential can refresh',async()=>{
+ const ui=harness(()=>jms({authenticated:false,can_refresh:false,password_saved:false,can_remember_password:true}));
+ localJms(ui,jms({authenticated:false,can_refresh:false,password_saved:true,can_remember_password:true}));
+ assert.equal(ui.node('jumpserver-login-fields').hidden,false);assert.equal(ui.node('jumpserver-connection-status').hidden,false);
+ assert.match(ui.node('jumpserver-credential-state').textContent,/自动登录已暂停，请重新登录/);assert.match(ui.node('jumpserver-summary').textContent,/自动登录已暂停/);
+ assert.equal(ui.node('jumpserver-logout').hidden,false);assert.equal(ui.node('jumpserver-logout').disabled,false);
+ assert.equal(ui.node('jumpserver-logout').textContent,'退出并忘记密码');assert.equal(ui.node('refresh-machines').disabled,true);
+ ui.node('jumpserver-remember-password').checked=true;await ui.api.jumpserverAction('logout');
+ assert.deepEqual(JSON.parse(ui.calls[0].options.body),{});assert.equal(new URL(ui.calls[0].url).pathname,'/api/jumpserver/logout');
+ assert.equal(ui.node('jumpserver-remember-password').checked,false);assert.equal(ui.node('jumpserver-logout').hidden,true);
+ assert.match(ui.node('jumpserver-feedback').textContent,/清除保存的凭据和密码/);
+});
+
+test('LAN visitors cannot see credential controls or submit a remembered login',async()=>{
+ for(const allowed of [false,true]){
+  const ui=harness();localJms(ui,jms({authenticated:false,can_refresh:false,can_remember_password:true,password_saved:true}));
+  ui.api.state.allowed=allowed;ui.api.state.jumpserverSettings=false;ui.api.renderJumpserver();
+  assert.equal(ui.node('machine-source-panel').hidden,true);
+  ui.node('jumpserver-password').value='fixture-only-password';ui.node('jumpserver-remember-password').checked=true;
+  await ui.api.loginJumpserver();await ui.api.jumpserverAction('logout');assert.equal(ui.calls.length,0);
+ }
+});
+
+
+test('entering the local device page resumes a saved password once and polling does not retry login',async()=>{
+ const saved=jms({authenticated:false,can_refresh:true,password_saved:true,can_remember_password:true});
+ const ui=harness((url,options)=>{
+  const route=new URL(url).pathname;
+  if(route==='/api/capabilities')return{devices:true,read_only:false,jumpserver_settings:true,machine_source:'jumpserver'};
+  if(route==='/api/jumpserver/refresh')return{...saved,refreshing:true};
+  if(route==='/api/jumpserver')return saved;
+  return snapshot();
+ });
+ await ui.api.selectProject('vllm');
+ const posts=()=>ui.calls.filter(call=>call.options.method==='POST');
+ assert.equal(posts().length,1);assert.equal(new URL(posts()[0].url).pathname,'/api/jumpserver/refresh');assert.deepEqual(JSON.parse(posts()[0].options.body),{});
+ await ui.api.tick();await ui.api.tick();assert.equal(posts().length,1);
+});
+
+test('page entry never resumes paused, disabled, token-only or remote credentials',async()=>{
+ const base=jms({authenticated:false,can_refresh:true,password_saved:true,can_remember_password:true});
+ for(const scenario of [
+  {data:{...base,can_refresh:false}},
+  {data:{...base,enabled:false}},
+  {data:{...base,password_saved:false}},
+  {data:{...base,authenticated:true}},
+  {data:base,capabilities:{read_only:true,jumpserver_settings:false}},
+  {data:base,capabilities:{read_only:false,jumpserver_settings:false}},
+ ]){
+  const ui=harness(url=>{const route=new URL(url).pathname;if(route==='/api/capabilities')return{devices:true,read_only:false,jumpserver_settings:true,machine_source:'jumpserver',...scenario.capabilities};if(route==='/api/jumpserver')return scenario.data;return snapshot();});
+  await ui.api.selectProject('vllm');assert.equal(ui.calls.some(call=>call.options.method==='POST'),false);
+ }
 });

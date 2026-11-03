@@ -84,7 +84,9 @@ class JumpServerRouteTests(unittest.TestCase):
             getattr(self.inventory, operation).assert_not_called()
 
     def test_get_only_reads_cached_state(self):
+        self.inventory.resume.assert_called_once_with()
         status, body = self.request("/api/jumpserver?project=vllm")
+        self.inventory.resume.assert_called_once_with()
         self.assertEqual(200, status)
         self.assertEqual(self.state, body)
         self.inventory.snapshot.assert_called_once_with()
