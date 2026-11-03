@@ -288,9 +288,17 @@ class BranchMonitor:
     def _ci_platform(self, backend: str) -> str:
         return self.backend_ci_platforms.get(backend, backend)
 
+    def _ci_platforms(self, backend: str) -> tuple[str, ...]:
+        platform = self._ci_platform(backend)
+        # The same NVIDIA backend uses either name across workflow versions.
+        # Preserve explicit mappings to a genuinely different CI platform.
+        if backend in ("cuda", "nvidia") and platform in ("cuda", "nvidia"):
+            return ("cuda", "nvidia")
+        return (platform,)
+
     def _ci_test_jobs(self, backend: str, jobs: list[dict[str, Any]]) -> list[dict[str, Any]]:
-        prefix = f"test-{self._ci_platform(backend)} / "
-        return [job for job in jobs if job.get("name", "").startswith(prefix) and
+        prefixes = tuple(f"test-{platform} / " for platform in self._ci_platforms(backend))
+        return [job for job in jobs if job.get("name", "").startswith(prefixes) and
                 not any(part in job.get("name", "") for part in (" / notify / ", " / Setup ("))]
 
     def _version(self, sha: str) -> str | None:
@@ -621,7 +629,8 @@ class BranchMonitor:
                            branch_ci: dict[str, Any]) -> dict[str, Any]:
         jobs = self._ci_test_jobs(backend, branch_jobs)
         if not jobs:
-            jobs = [job for job in branch_jobs if job.get("name") == f"test-{self._ci_platform(backend)}"]
+            names = {f"test-{platform}" for platform in self._ci_platforms(backend)}
+            jobs = [job for job in branch_jobs if job.get("name") in names]
         status = self._ci_status(jobs)
         return {"status": status, "scope": "branch", "detail": f"{len(jobs)} backend test jobs at branch HEAD",
                 "url": self._ci_check_url(jobs, status) or branch_ci.get("url"), "commit": branch_ci.get("commit")}
@@ -960,6 +969,7 @@ class BranchMonitor:
         branch_ci, jobs = self._branch_ci(branch, sha, force, errors)
         manifests = self._manifests()
         registry_backends = [self._ci_backend_ids.get(platform, platform) for platform in registry]
+        registry_backends = ["cuda" if backend == "nvidia" else backend for backend in registry_backends]
         backend_ids = list(dict.fromkeys([*registry_backends, *self.backend_labels, *self.backend_prs,
                                           *self.merged_commits, *self.backend_pr_discovery]))
         candidate_prs = None
@@ -995,7 +1005,7 @@ class BranchMonitor:
             records = self._acceptance_records(backend, branch, sha, pr)
             acceptance = acceptance_summary(pr, pr_data, records, gate, branch=branch, head=sha)
             backends.append({"id": backend, "label": self.backend_labels.get(backend, LABELS.get(backend, backend)),
-                             "ci_enabled": registry.get(self._ci_platform(backend), False), "integration": integration,
+                             "ci_enabled": any(registry.get(platform, False) for platform in self._ci_platforms(backend)), "integration": integration,
                              "ci": ci, "current_ci": current_ci, "pr": pr, "gate": gate, "results": results,
                              "acceptance_records": records, "acceptance": acceptance})
         backends.sort(key=lambda item: (item["id"] != "cuda", str(item["label"]).casefold(), item["id"]))
@@ -1032,7 +1042,7 @@ class BranchMonitor:
             raise MonitorError("Unknown gate model or mode")
         _, sha = self._head(branch)
         registry = self._registry(sha)
-        if (self._ci_platform(backend) not in registry and backend not in self.backend_labels and
+        if (not any(platform in registry for platform in self._ci_platforms(backend)) and backend not in self.backend_labels and
                 backend not in self.backend_prs and backend not in self.merged_commits and
                 backend not in self.backend_pr_discovery):
             raise MonitorError("Unknown backend")
