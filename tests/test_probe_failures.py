@@ -55,6 +55,11 @@ class ProbeFailureTests(unittest.TestCase):
                 self.assert_failure(classify_failure(255, "", text + " " + SECRET),
                                     kind="transport", reachable=False, retryable=True)
 
+    def test_timeout_does_not_infer_which_connection_hop_failed(self):
+        result = classify_failure(255, b"", b"Connection timed out " + SECRET.encode())
+        self.assertEqual("SSH 连接超时，尚未进入设备采集，请稍后重试。", result["message"])
+        self.assert_failure(result, kind="transport", reachable=False, retryable=True)
+
     def test_unknown_ssh_failure_does_not_assert_asset_is_down(self):
         for text in ("", SECRET, "Unexpected SSH diagnostic " + SECRET):
             with self.subTest(text=text):

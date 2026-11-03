@@ -35,12 +35,15 @@ class PublicDeviceTests(unittest.TestCase):
     def test_projection_only_preserves_display_metrics_at_every_level(self):
         result = public_snapshot({"project_id": "vllm", "ssh_profiles": "private", "summary": {"free_cards": 1, "config": "private"},
             "hosts": [{"id": "device", "label": "GPU", "ssh_connection": "private", "source_root": "private",
+                       "updated_at": "2026-10-22T01:00:00+00:00", "checked_at": "2026-10-22T02:00:00+00:00",
                        "node": {"cpu_pct": 10, "command": "private"},
                        "accel": {"total": 1, "private": "private", "cards": [{"index": 0, "util": 0, "secret": "private",
                            "procs": [{"pid": 123, "name": "python", "user": "operator", "cmdline": "private", "token": "private"}]}]}}]}, "vllm")
         self.assertTrue(result["read_only"])
         self.assertNotIn("private", json.dumps(result))
         self.assertEqual(result["hosts"][0]["accel"]["cards"][0]["procs"][0]["pid"], 123)
+        self.assertEqual("2026-10-22T01:00:00+00:00", result["hosts"][0]["updated_at"])
+        self.assertEqual("2026-10-22T02:00:00+00:00", result["hosts"][0]["checked_at"])
         for value in ({}, {"project_id": "sglang", "hosts": []}, {"project_id": "vllm", "hosts": {}}):
             with self.assertRaises(ValueError):
                 public_snapshot(value, "vllm")

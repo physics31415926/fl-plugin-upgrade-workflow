@@ -60,7 +60,7 @@ def classify_failure(returncode, stdout, stderr):
         return _failure("SSH 认证失败，请检查已保存的连接与资产账号授权。",
                         reachable=False, retryable=False, kind="authentication")
     if "timed out" in diagnostic:
-        return _failure("SSH 入口连接超时，尚未进入设备采集，请稍后重试。",
+        return _failure("SSH 连接超时，尚未进入设备采集，请稍后重试。",
                         reachable=False, retryable=True, kind="transport")
     if any(pattern in diagnostic for pattern in _TRANSPORT):
         return _failure("SSH 连接暂时中断或不可达，请稍后重试。",

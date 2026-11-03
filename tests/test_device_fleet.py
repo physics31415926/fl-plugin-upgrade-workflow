@@ -128,6 +128,35 @@ class DeviceFleetTests(unittest.TestCase):
         self.assertEqual(1, result["summary"]["total_cards"])
         self.assertIn("超时", result["hosts"][0]["error"])
 
+    def test_checked_at_advances_after_failures_without_refreshing_historical_metrics(self):
+        self.collector.refresh("vllm")
+        original = self.wait()["hosts"][0]
+        self.assertEqual(original["updated_at"], original["checked_at"])
+        self.collector._retry_pause = Mock(return_value=False)
+        self.collector._runner = Mock(return_value=subprocess.CompletedProcess(
+            [], 255, b"", b"Connection timed out"))
+        previous_check = original["checked_at"]
+        for _ in range(2):
+            self.now += 6
+            self.collector.refresh("vllm")
+            snapshot = self.wait()
+            failed = snapshot["hosts"][0]
+            self.assertGreater(failed["checked_at"], previous_check)
+            self.assertEqual(original["updated_at"], failed["updated_at"])
+            self.assertEqual(original["node"], failed["node"])
+            self.assertTrue(failed["stale"])
+            self.assertEqual("down", failed["verdict"])
+            self.assertEqual(0, snapshot["summary"]["free_cards"])
+            self.assertEqual(1, failed["last_known_accel"]["total"])
+            previous_check = failed["checked_at"]
+        self.now += 6
+        self.collector._runner = self.runner
+        self.collector.refresh("vllm")
+        recovered = self.wait()["hosts"][0]
+        self.assertGreater(recovered["checked_at"], previous_check)
+        self.assertEqual(recovered["updated_at"], recovered["checked_at"])
+        self.assertFalse(recovered["stale"])
+
     def test_complete_unknown_samples_keep_fresh_metrics_and_sampling_time(self):
         current = view()
         current.update(verdict="unknown", error="设备指标不完整，不能确认空闲容量", collection_complete=True)
@@ -598,6 +627,7 @@ class DeviceFleetTests(unittest.TestCase):
         restored.refresh("vllm")
         old = self.wait(restored)["hosts"][0]
         self.assertEqual(original["updated_at"], old["updated_at"])
+        self.assertIsNone(old["checked_at"])
         self.assertFalse(started.is_set())
         catalog.update(generation=1, authenticated=True)
         restored.refresh("vllm")

@@ -17,7 +17,7 @@ from fl_dashboard.services.share_gateway import validate_control_url
 
 MAX_RESPONSE = 16 * 1024 * 1024
 _HOST = {"id", "label", "ssh_alias", "backend", "backend_label", "reachable", "verdict",
-         "error", "collection_complete", "updated_at", "age_seconds", "stale", "refreshing", "supported"}
+         "error", "collection_complete", "updated_at", "checked_at", "age_seconds", "stale", "refreshing", "supported"}
 _ACCEL = {"family", "label", "card_name", "total", "free", "busy", "unknown", "residual",
           "physical_cards", "chips_per_card"}
 _CARD = {"index", "card", "name", "util", "mem_used", "mem_total", "temp", "power", "health",

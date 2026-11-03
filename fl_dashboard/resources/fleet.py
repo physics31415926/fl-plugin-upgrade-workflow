@@ -285,6 +285,7 @@ class DeviceFleet:
                             backend=view.get("backend") or profile["backend"],
                             backend_label=view.get("backend_label") if view.get("backend") else profile["backend_label"],
                             updated_at=entry.get("updated_at") if entry else None,
+                            checked_at=entry.get("checked_at") if entry else None,
                             age_seconds=round(age, 1) if age is not None else None,
                             stale=stale, task_count=profile["task_count"],
                             refreshing=profile["key"] in state["pending"])
@@ -602,8 +603,9 @@ class DeviceFleet:
                             "message": "设备采集数据无效，本轮可用性待确认。", "reachable": None,
                             "retryable": False, "kind": "parsing"}
                     else:
+                        checked_at = _iso(self._clock())
                         return {"view": view, "sample": sample, "observed": self._monotonic(),
-                                "attempted": attempted, "updated_at": _iso(self._clock()),
+                                "attempted": attempted, "updated_at": checked_at, "checked_at": checked_at,
                                 "error": bool(view.get("error")) or view.get("verdict") in ("unknown", "down")}
             except subprocess.TimeoutExpired as exc:
                 raw = exc.output or b""
@@ -627,8 +629,9 @@ class DeviceFleet:
                 "accel": _blank_accel(), "node": {}}
         if kind:
             view["error_kind"] = kind
+        checked_at = _iso(self._clock())
         return {"view": view, "sample": None, "observed": self._monotonic(),
-                "attempted": attempted, "updated_at": _iso(self._clock()), "error": True}
+                "attempted": attempted, "updated_at": checked_at, "checked_at": checked_at, "error": True}
 
     def _completed(self, key, future, source_epoch):
         with self._lock:
