@@ -127,6 +127,12 @@ class AutomaticTasksTests(unittest.TestCase):
         options = self.runner.call_args.kwargs
         self.assertEqual(argv[-2], "selected-gpu")
         self.assertEqual(options["timeout"], 20)
+        for option in ("ConnectTimeout=8", "ServerAliveInterval=5", "ServerAliveCountMax=1",
+                       "BatchMode=yes", "ConnectionAttempts=1", "StrictHostKeyChecking=yes",
+                       "ClearAllForwardings=yes", "ForwardAgent=no", "ForwardX11=no"):
+            self.assertIn(option, argv)
+        self.assertNotIn("ServerAliveInterval=15", argv)
+        self.assertNotIn("ServerAliveCountMax=3", argv)
         self.assertIsInstance(options["input"], bytes)
         self.assertNotIn(b"\r", options["input"])
         self.assertIn(b'count" -lt 100', options["input"])

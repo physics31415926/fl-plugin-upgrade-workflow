@@ -559,10 +559,10 @@ class DeviceFleet:
                     writer = object.__new__(CodexSessionManager)
                     writer._write_ssh_config(config_path, profile["alias"], connection_profile["ssh_connection"])
                     connection_profile = {**connection_profile, "ssh_config_path": str(config_path)}
-                # Shared gateways may need longer to accept a burst than task
-                # preflight; keep enough of the outer budget for the remote probe.
+                # Shared gateways can reply slowly. Allow multiple keepalive
+                # intervals; the outer probe still enforces its 45-second deadline.
                 argv = _ssh_argv(SimpleNamespace(root=profile["source_root"]), connection_profile, executable,
-                                 connect_timeout=CONNECT_TIMEOUT)
+                                 connect_timeout=CONNECT_TIMEOUT, server_alive_interval=15, server_alive_count_max=3)
                 if not connection_profile.get("ssh_connection") and profile["import_path"] is not None:
                     if not profile["import_path"].is_file():
                         return self._failure("SSH 配置已不存在，请重新同步。", attempted)

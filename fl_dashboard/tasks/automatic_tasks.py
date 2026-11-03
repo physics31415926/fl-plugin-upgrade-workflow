@@ -162,7 +162,8 @@ def _resolve(project, provider, profile_id):
     return target, source, copy.deepcopy(profile)
 
 
-def _ssh_argv(source, profile, executable, *, connect_timeout=8):
+def _ssh_argv(source, profile, executable, *, connect_timeout=8,
+              server_alive_interval=5, server_alive_count_max=1):
     alias = CodexSessionManager._name(profile.get("ssh_alias", ""), "SSH alias")
     argv = [executable]
     config_path = profile.get("ssh_config_path")
@@ -174,7 +175,7 @@ def _ssh_argv(source, profile, executable, *, connect_timeout=8):
             raise SessionError("Saved SSH config is unavailable or outside its owner directory")
         argv += ["-F", str(path)]
     argv += ["-o", "BatchMode=yes", "-o", f"ConnectTimeout={connect_timeout}", "-o", "ConnectionAttempts=1",
-             "-o", "ServerAliveInterval=5", "-o", "ServerAliveCountMax=1",
+             "-o", f"ServerAliveInterval={server_alive_interval}", "-o", f"ServerAliveCountMax={server_alive_count_max}",
              "-o", "StrictHostKeyChecking=yes", "-o", "ClearAllForwardings=yes",
              "-o", "ForwardAgent=no", "-o", "ForwardX11=no", alias]
     return argv
