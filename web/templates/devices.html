@@ -122,7 +122,7 @@ function renderStatus(){
 function render(){renderSummary();renderTable();renderDetail();renderStatus();renderJumpserver();}
 async function request(path,body,project=state.project){const options={credentials:'same-origin',cache:'no-store',redirect:'error',headers:{'Content-Type':'application/json'}};if(body!==undefined)Object.assign(options,{method:'POST',body:JSON.stringify(body)});const response=await fetch(route(path,project),options);let data;try{data=await response.json();}catch(_){throw new Error('服务返回了无法读取的响应。');}if(!response.ok){const error=new Error(typeof data.error==='string'?data.error:'资源采集暂不可用');error.status=response.status;throw error;}return data;}
 function failure(error){if(error.status===401||error.status===403){state.allowed=false;state.canRefresh=false;state.refreshCooldownUntil=0;state.jumpserverSettings=false;state.authExpired=true;state.data=null;state.selected=null;jumpserver.data=null;jumpserver.inventoryRecovery=null;jumpserver.resourceQueued=false;jumpserver.waitingResources=false;$('jumpserver-password').value='';$('sessions-link').hidden=true;$('shared-mode').textContent='只读访问';$('shared-mode').hidden=false;notify('管理授权已失效，正在切换为只读查看；管理操作需重新打开有效分享链接。');}else notify(error.message||'设备资源暂不可用，请稍后重试。');render();}
-function accept(data){
+function accept(data,{snapshotRead=false}={}){
  if(data.project_id&&data.project_id!==state.project)throw new Error('返回的设备不属于当前仓库，请重新刷新。');
  const downgraded=data.read_only===true&&state.allowed;
  if(data.read_only===true){state.allowed=false;state.jumpserverSettings=false;jumpserver.data=null;jumpserver.inventoryRecovery=null;jumpserver.resourceQueued=false;jumpserver.waitingResources=false;jumpserver.uncertain=false;$('jumpserver-password').value='';$('sessions-link').hidden=true;}
@@ -131,12 +131,12 @@ function accept(data){
  if(!state.allowed){$('shared-mode').textContent=state.canRefresh?'资源可刷新 · 任务只读':'只读访问';$('shared-mode').hidden=false;}
  applyRefreshCooldown(data);state.data=data;state.receivedAt=Date.now();
  if(jumpserver.waitingResources&&jumpserver.resourceStarted&&!data.refreshing){if(!data.error){jumpserver.waitingResources=false;jumpserver.uncertain=false;jumpserver.notice='机器列表和资源读数已更新。';}else jumpserver.resourceStarted=false;}
- if(jumpserver.inventoryRecovery==='readings'&&!data.error&&!jumpserver.mutating&&!jumpserver.resourceQueued&&!jumpserver.waitingResources&&jumpserver.awaitedUpdate===null){
+ if(snapshotRead&&jumpserver.inventoryRecovery==='readings'&&!data.error&&!jumpserver.mutating&&!jumpserver.resourceQueued&&!jumpserver.waitingResources&&jumpserver.awaitedUpdate===null){
   jumpserver.inventoryRecovery=null;jumpserver.uncertain=false;jumpserver.notice='';
  }
  notify(data.error||'');render();
 }
-async function readSnapshot(){if(!state.readable||state.loading||state.requesting||state.switching)return;const generation=state.generation,revision=state.revision,project=state.project;state.loading=true;try{const data=await request('/api/devices',undefined,project);if(generation===state.generation&&revision===state.revision)accept(data);}catch(error){if(generation===state.generation&&revision===state.revision)failure(error);}finally{if(generation===state.generation)state.loading=false;}}
+async function readSnapshot(){if(!state.readable||state.loading||state.requesting||state.switching)return;const generation=state.generation,revision=state.revision,project=state.project;state.loading=true;try{const data=await request('/api/devices',undefined,project);if(generation===state.generation&&revision===state.revision)accept(data,{snapshotRead:true});}catch(error){if(generation===state.generation&&revision===state.revision)failure(error);}finally{if(generation===state.generation)state.loading=false;}}
 async function refreshResources(){if(!state.canRefresh||refreshWait()>0||state.requesting||state.switching||state.data?.refreshing||resourceRequests.has(state.project)||jumpserver.mutating||jumpserver.data?.refreshing)return;const generation=state.generation,project=state.project;state.revision++;state.requesting=true;resourceRequests.add(project);renderStatus();try{const data=await request('/api/devices/refresh',{},project);if(generation===state.generation){if(jumpserver.waitingResources)jumpserver.resourceStarted=true;accept(data);}}catch(error){if(generation===state.generation)failure(error);}finally{resourceRequests.delete(project);if(generation===state.generation)state.requesting=false;renderStatus();}}
 async function tick(foreground=false){
  if(document.hidden||state.switching||!state.readable)return;

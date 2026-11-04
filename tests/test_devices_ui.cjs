@@ -191,6 +191,19 @@ test('foreground recovery reconciles inventory and partial device results withou
  assert.equal(ui.calls.filter(call=>new URL(call.url).pathname==='/api/jumpserver').length,2);
  assert.equal(ui.calls.some(call=>call.options.method==='POST'),false);
 });
+test('a manual refresh response started before inventory recovery cannot release historical rows',async()=>{
+ let finish;
+ const ui=harness((url,options)=>{
+  if(options.method==='POST')return new Promise(resolve=>finish=resolve);
+  if(new URL(url).pathname==='/api/jumpserver')return jms();
+  return snapshot([fresh('new')]);
+ });
+ localJms(ui);ui.api.acceptJumpserver(jms({authenticated:false,error:'机器来源暂不可用'}));
+ const manual=ui.api.refreshResources();await settle();
+ await ui.api.tick(true);finish(snapshot([fresh('old')]));await manual;
+ assert.equal(ui.api.summarize().free,0);
+ await ui.api.tick();assert.equal(ui.api.summarize().free,1);assert.match(ui.node('hosts').textContent,/Host new/);
+});
 test('foreground status reconciliation cannot undo an explicit connection change waiting for telemetry',async()=>{
  const ui=harness(url=>{
   const path=new URL(url).pathname;
