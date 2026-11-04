@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="64" height="64" role="img" aria-label="FL adaptation workbench">
+  <rect x="2" y="2" width="60" height="60" rx="14" fill="#13314f"/>
+  <path d="M32 11v18" stroke="#6fd3a6" stroke-width="3.4" stroke-linecap="round"/>
+  <path d="M24 19l8-8 8 8" fill="none" stroke="#6fd3a6" stroke-width="3.4" stroke-linecap="round" stroke-linejoin="round"/>
+  <rect x="12" y="34" width="11" height="18" rx="2.5" fill="#3f8ecc"/>
+  <rect x="26.5" y="27" width="11" height="25" rx="2.5" fill="#67b2e8"/>
+  <rect x="41" y="39" width="11" height="13" rx="2.5" fill="#2a6fa8"/>
+</svg>

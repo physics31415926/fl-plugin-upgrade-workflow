@@ -1,0 +1,6 @@
+{
+  "meta": {
+    "title": "FL 插件适配工作台",
+    "description": "在左侧面板跟踪 vLLM-Plugin-FL 与 SGLang-Plugin-FL 的适配进展：各分支的 PR、CI 和验收状态，GPU 设备可用性，以及适配任务。同时管理本机看板进程，并把同样的只读查询开放给 Agent。"
+  }
+}

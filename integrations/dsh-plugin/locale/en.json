@@ -1,0 +1,6 @@
+{
+  "meta": {
+    "title": "FL Adaptation Workbench",
+    "description": "Tracks vLLM-Plugin-FL and SGLang-Plugin-FL upgrade progress in a sidebar panel: per-branch PR, CI and acceptance status, GPU fleet availability, and adaptation tasks. Manages the local dashboard process and exposes the same reads to the agent."
+  }
+}
