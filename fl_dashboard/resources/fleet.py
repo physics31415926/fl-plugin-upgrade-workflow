@@ -30,6 +30,7 @@ PROBE_TIMEOUT = 45
 CONNECT_TIMEOUT = 15
 STALE_SECONDS = 600
 REFRESH_INTERVAL = 300
+PERIODIC_CHECK_SECONDS = 5
 MIN_REFRESH_SECONDS = 5
 DEFAULT_PROBE_WORKERS = 12
 MAX_PROBE_WORKERS = 32
@@ -105,7 +106,8 @@ class DeviceFleet:
         self._cache_write_future = None
         self._cache_dirty = False
         self._cache_guard = threading.Lock()
-        self._cache_stop = threading.Event()
+        self._stop = threading.Event()
+        self._periodic_thread = None
         if cache_path is not None:
             from fl_dashboard.resources.device_cache import DeviceTelemetryCache
             self._disk_cache = DeviceTelemetryCache(cache_path)
@@ -182,7 +184,7 @@ class DeviceFleet:
     def _write_cache(self):
         # Coalesce a completed batch so a large fleet does not rewrite the snapshot
         # once per device. Only display metadata and readings reach the cache helper.
-        while not self._cache_stop.wait(.15):
+        while not self._stop.wait(.15):
             with self._cache_guard:
                 with self._lock:
                     if self._closed:
@@ -208,10 +210,12 @@ class DeviceFleet:
             # A temporary catalog read failure may retain this identity's display
             # history, but never authorizes a probe or a fallback to local aliases.
             previous = self._source_signature
-            scope = previous[3] if previous and previous[0] else None
-            return {"enabled": True, "generation": -1, "valid": False, "scope": scope}
+            return {"enabled": previous[0] if previous else True, "generation": -1,
+                    "valid": False, "scope": previous[3] if previous else None}
         try:
-            enabled = bool(catalog.get("enabled"))
+            enabled = catalog["enabled"]
+            if type(enabled) is not bool or (not enabled and catalog.get("error")):
+                raise ValueError("Invalid inventory source")
             generation = catalog.get("generation", 0)
             if type(generation) is not int:
                 raise ValueError("Invalid inventory generation")
@@ -221,8 +225,11 @@ class DeviceFleet:
                 if all(isinstance(value, str) and value.strip() for value in identity):
                     scope = hashlib.sha256(json.dumps(identity, ensure_ascii=False,
                                                        separators=(",", ":")).encode("utf-8")).hexdigest()
+            refreshing = bool(catalog.get("refreshing"))
             valid = not enabled or bool(scope and catalog.get("authenticated") and not catalog.get("error"))
-            return {"enabled": enabled, "generation": generation, "valid": valid, "scope": scope}
+            return {"enabled": enabled, "generation": generation, "valid": valid, "scope": scope,
+                    "refreshing": refreshing,
+                    "can_resume": bool(enabled and scope and catalog.get("can_refresh") and not refreshing)}
         except Exception:
             # Malformed identity data cannot inherit another account's history.
             return {"enabled": True, "generation": -1, "valid": False, "scope": None}
@@ -259,14 +266,15 @@ class DeviceFleet:
             if not source["valid"]:
                 for state in self._states.values():
                     state.update(inventory_error=True,
-                                 error="JumpServer 授权或资产列表已失效，请在本机重新登录或刷新。")
+                                 error=("JumpServer 授权或资产列表已失效，请在本机重新登录或刷新。"
+                                        if source["enabled"] else "设备来源暂不可用，请检查本机设备配置。"))
         return {**source, "epoch": self._source_epoch}
 
     def snapshot(self, project_id):
         with self._lock:
             if project_id not in self._states:
                 raise ValueError("Unknown device-monitor project")
-            self._reconcile_source()
+            source = self._reconcile_source()
             state = self._states[project_id]
             now = self._monotonic()
             hosts = []
@@ -300,12 +308,13 @@ class DeviceFleet:
                     summary["online"] += 1
                 if host.get("verdict") == "free" and not host["stale"]:
                     summary["free_hosts"] += 1
-                for source, target in (("total", "total_cards"), ("free", "free_cards"),
+                for metric, target in (("total", "total_cards"), ("free", "free_cards"),
                                        ("busy", "busy_cards"), ("unknown", "unknown_cards"), ("residual", "residual_cards")):
-                    summary[target] += max(0, int(host["accel"].get(source) or 0))
+                    summary[target] += max(0, int(host["accel"].get(metric) or 0))
             running = sum(1 for key in state["pending"]
                           if key in self._inflight and self._inflight[key].running())
             return {"project_id": project_id, "refreshing": state["refreshing"],
+                    "periodic_enabled": self._periodic_enabled(project_id, source),
                     "progress": {"done": state["done"], "total": state["total"]},
                     "concurrency": {"limit": self.max_workers, "running": running,
                                     "queued": len(state["pending"]) - running},
@@ -407,6 +416,63 @@ class DeviceFleet:
             return rows[0]["device_observation"]["backend"]
         return None
 
+    def start_periodic(self):
+        """Start controller-owned collection after binding and resuming the catalog."""
+        with self._lock:
+            if not self._closed and self._periodic_thread is None:
+                self._periodic_thread = threading.Thread(target=self._periodic_loop,
+                                                         name="device-refresh", daemon=True)
+                self._periodic_thread.start()
+
+    def _periodic_enabled(self, project_id, source):
+        project = self._projects[project_id]
+        if self._periodic_thread is None or self._closed or project.sessions is None:
+            return False
+        # A new controller has a default ~/.ssh/config even before its operator
+        # selects a source. Enrol local SSH only via explicit config or telemetry
+        # from a manual inventory (including restored display-only history).
+        state = self._states[project_id]
+        return bool(source["enabled"] or getattr(project.monitor, "config", {}).get("ssh_import_config")
+                    or state["updated_at"] or state["profiles"])
+
+    def _periodic_loop(self):
+        # Startup has already attempted catalog restoration. A network outage
+        # may need another attempt, while an expired login still requires input.
+        retry_at = self._monotonic() + REFRESH_INTERVAL
+        while not self._stop.is_set():
+            delay = PERIODIC_CHECK_SECONDS
+            with self._lock:
+                if self._closed:
+                    return
+                source = self._reconcile_source()
+                projects = [key for key in self._states if self._periodic_enabled(key, source)]
+                if projects:
+                    now = self._monotonic()
+                    if source["valid"] and not source.get("refreshing"):
+                        # Wait out an overlong or manual round without accumulating
+                        # ticks. Every project in this round shares a request time
+                        # so later inventories also reuse completed endpoint probes.
+                        if not any(self._states[key]["refreshing"] for key in projects):
+                            for key in projects:
+                                self._queue_refresh(key, None, source, now, periodic=True)
+                            delay = REFRESH_INTERVAL
+                    elif source.get("can_resume") and now >= retry_at:
+                        retry_at = now + REFRESH_INTERVAL
+                        # resume only queues asynchronous work; serialize it with close.
+                        try:
+                            self.inventory.resume()
+                        except Exception:
+                            pass  # The inventory retains the login/connection error.
+            self._stop.wait(delay)
+
+    def _queue_refresh(self, project_id, profile_id, source, requested_at, *, periodic=False):
+        state = self._states[project_id]
+        state.update(refreshing=True, pending=set(), total=0, done=0, error=None,
+                     requested_at=requested_at)
+        state["generation"] += 1
+        state["metadata_future"] = self._metadata.submit(
+            self._schedule, project_id, profile_id, state["generation"], source, periodic=periodic)
+
     def refresh(self, project_id, profile_id=None):
         if profile_id is not None and (not isinstance(profile_id, str) or not _ID.fullmatch(profile_id)):
             raise ValueError("Invalid device profile ID")
@@ -416,13 +482,8 @@ class DeviceFleet:
             if self._closed:
                 raise ValueError("Device monitor has stopped")
             source = self._reconcile_source()
-            state = self._states[project_id]
-            if not state["refreshing"]:
-                state.update(refreshing=True, pending=set(), total=0, done=0, error=None,
-                             requested_at=self._monotonic())
-                state["generation"] += 1
-                state["metadata_future"] = self._metadata.submit(
-                    self._schedule, project_id, profile_id, state["generation"], source)
+            if not self._states[project_id]["refreshing"]:
+                self._queue_refresh(project_id, profile_id, source, self._monotonic())
         return self.snapshot(project_id)
 
     def _inventory(self, project_id, source):
@@ -476,7 +537,7 @@ class DeviceFleet:
                            "monitor_connection": source["enabled"]})
         return sorted(result, key=lambda row: (row["backend"] != "cuda", row["backend_label"].split("/")[0].strip().casefold(), row["label"].casefold()))
 
-    def _schedule(self, project_id, profile_id, generation, source):
+    def _schedule(self, project_id, profile_id, generation, source, *, periodic):
         try:
             with self._lock:
                 current = self._reconcile_source()
@@ -508,11 +569,12 @@ class DeviceFleet:
                         continue
                     cached = self._cache.get(key)
                     # A second project's metadata may arrive after a slow shared
-                    # probe finished. Reuse results completed since this request,
-                    # plus a short cooldown measured from completion, not SSH start.
+                    # probe finished. Reuse completions from this round. Manual
+                    # requests also have a short cooldown; a new automatic round
+                    # must still sample the last endpoints of an overlong round.
                     completed = cached.get("completed", float("-inf")) if cached else float("-inf")
-                    if cached and (now - completed < MIN_REFRESH_SECONDS
-                                   or completed >= state["requested_at"]):
+                    if cached and (completed >= state["requested_at"]
+                                   or (not periodic and now - completed < MIN_REFRESH_SECONDS)):
                         state["pending"].discard(key)
                         continue
                     if key in self._inflight:
@@ -574,7 +636,7 @@ class DeviceFleet:
 
     def _retry_pause(self, key):
         # Spread reconnects instead of creating another simultaneous gateway burst.
-        return self._cache_stop.wait(1.0 + (int(key[:2], 16) % 21) / 10)
+        return self._stop.wait(1.0 + (int(key[:2], 16) % 21) / 10)
 
     def _probe_device(self, profile, argv, previous, attempted):
         """Retry only transient failures once; never infer SSH failure from exit alone."""
@@ -759,7 +821,7 @@ class DeviceFleet:
             self._reconcile_source()
             records = self._cache_records() if self._disk_cache is not None else None
             self._closed = True
-            self._cache_stop.set()
+            self._stop.set()
             processes = list(self._processes)
             for state in self._states.values():
                 state.update(refreshing=False, pending=set())

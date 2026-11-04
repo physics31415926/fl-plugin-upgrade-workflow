@@ -49,13 +49,15 @@ class PublicDeviceTests(unittest.TestCase):
                 public_snapshot(value, "vllm")
 
     def test_concurrency_status_is_public_without_internal_worker_data(self):
-        result = public_snapshot({"project_id": "vllm", "hosts": [],
+        result = public_snapshot({"project_id": "vllm", "hosts": [], "periodic_enabled": True,
                                   "concurrency": {"limit": 12, "running": 8, "queued": 40,
                                                   "processes": ["private"], "connection": "private"}}, "vllm")
         self.assertEqual({"limit": 12, "running": 8, "queued": 40}, result["concurrency"])
         self.assertNotIn("private", json.dumps(result))
         legacy = public_snapshot({"project_id": "vllm", "hosts": []}, "vllm")
         self.assertEqual({}, legacy["concurrency"])
+        self.assertTrue(result["periodic_enabled"])
+        self.assertFalse(legacy["periodic_enabled"])
 
     def test_readonly_controller_source_does_not_require_a_share_store(self):
         cache = SnapshotCache(FakeMonitor(), refresh_interval=0)

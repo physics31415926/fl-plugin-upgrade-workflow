@@ -1323,15 +1323,18 @@ def make_server(engine: Engine | None, host: str, port: int, monitor: object | N
 
     class DashboardServer(ThreadingHTTPServer):
         def server_close(self):
-            registry.close_caches()
             device_fleet.close()
             jumpserver.close()
+            registry.close_caches()
             super().server_close()
 
     server = DashboardServer((host, port), Handler)
     # Restore the saved platform session asynchronously after a successful bind.
     # Status reads remain cache-only; recovery failures stay in inventory state.
     jumpserver.resume()
+    # A standalone task owner delegates inventory to its aggregate controller.
+    if owner_rpc_secret is None and any(project.sessions is not None for project in registry.projects):
+        device_fleet.start_periodic()
     return server
 
 

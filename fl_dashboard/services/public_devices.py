@@ -53,6 +53,7 @@ def public_snapshot(value, project):
     if not isinstance(value, dict) or value.get("project_id") != project or not isinstance(value.get("hosts"), list):
         raise ValueError("Invalid cached device response")
     result = _fields(value, {"project_id", "refreshing", "updated_at", "refresh_interval", "error"})
+    result["periodic_enabled"] = value.get("periodic_enabled") is True
     result.update(read_only=True, device_refresh=True, progress=_fields(value.get("progress"), {"done", "total"}),
                   concurrency=_fields(value.get("concurrency"), {"limit", "running", "queued"}),
                   summary=_fields(value.get("summary"), _SUMMARY), hosts=[])

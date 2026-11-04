@@ -84,6 +84,7 @@ class JumpServerRouteTests(unittest.TestCase):
             getattr(self.inventory, operation).assert_not_called()
 
     def test_get_only_reads_cached_state(self):
+        self.fleet.start_periodic.assert_called_once_with()
         self.inventory.resume.assert_called_once_with()
         status, body = self.request("/api/jumpserver?project=vllm")
         self.inventory.resume.assert_called_once_with()
@@ -275,7 +276,9 @@ class JumpServerRouteTests(unittest.TestCase):
     def test_only_authenticated_single_owner_requests_preserve_raw_profiles(self):
         token_path = str(Path(tempfile.gettempdir()) / "explicit-dummy-owner-token.json")
         monitor = SimpleNamespace(config={"sessions_owner_token_file": token_path})
+        self.fleet.start_periodic.reset_mock()
         server = self.make_server(sessions=self.sessions, monitor=monitor)
+        self.fleet.start_periodic.assert_not_called()
         self.owner_token.assert_called_once_with(token_path)
         worker = threading.Thread(target=server.serve_forever, daemon=True)
         worker.start()
@@ -312,7 +315,9 @@ class JumpServerRouteTests(unittest.TestCase):
         monitor = SimpleNamespace(config={"sessions_owner_token_file": token_path})
         registry = ProjectRegistry([ProjectContext("vllm", "vLLM", monitor=monitor, sessions=self.sessions),
                                     ProjectContext("sglang", "SGLang")])
+        self.fleet.start_periodic.reset_mock()
         server = self.make_server(registry=registry)
+        self.fleet.start_periodic.assert_called_once_with()
         self.owner_token.assert_not_called()
         worker = threading.Thread(target=server.serve_forever, daemon=True)
         worker.start()

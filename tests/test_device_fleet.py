@@ -314,6 +314,152 @@ class DeviceFleetTests(unittest.TestCase):
         self.collector.refresh("vllm")
         self.assertTrue(self.wait()["error"])
 
+    @patch("fl_dashboard.resources.fleet.REFRESH_INTERVAL", .07)
+    @patch("fl_dashboard.resources.fleet.PERIODIC_CHECK_SECONDS", .01)
+    def test_periodic_rounds_share_probes_cover_distinct_hosts_and_skip_overlapping_ticks(self):
+        config = {"ssh_import_config": str(self.config), "device_probe_workers": 2}
+        self.projects[0].monitor.config = config
+        shared = self.profiles[0]
+        self.profiles.append(dict(shared, id="vllm-only", ssh_alias="vllm-only"))
+        other_profiles = [dict(shared, id="same-endpoint"), dict(shared, id="peer-only", ssh_alias="peer-only")]
+        other = SimpleNamespace(root=self.owner, snapshot=Mock(return_value={"machine_profiles": other_profiles}))
+        peer = SimpleNamespace(id="sglang", sessions=other, monitor=SimpleNamespace(config=config))
+        full, release, two_rounds = (threading.Event() for _ in range(3))
+        guard = threading.Lock()
+        aliases = []
+
+        def runner(argv, **kwargs):
+            with guard:
+                aliases.append(argv[-2])
+                if len(aliases) == 2:
+                    full.set()
+                if len(aliases) == 6:
+                    two_rounds.set()
+            release.wait(3)
+            return subprocess.CompletedProcess([], 0, b"fixture", b"")
+
+        fleet = self.make(runner, projects=self.projects + [peer])
+        fleet._monotonic = time.monotonic
+        self.addCleanup(release.set)
+        self.assertFalse(fleet.snapshot("vllm")["periodic_enabled"])
+        fleet.start_periodic()
+        thread = fleet._periodic_thread
+        fleet.start_periodic()
+        self.assertIs(thread, fleet._periodic_thread)
+        self.assertTrue(full.wait(2))
+        self.assertTrue(fleet.snapshot("sglang")["periodic_enabled"])
+        time.sleep(.16)  # Keep both SSH workers occupied for more than two ticks.
+        self.assertEqual(2, len(aliases))
+        self.assertEqual(1, self.manager.snapshot.call_count)
+        self.assertEqual(1, other.snapshot.call_count)
+        self.assertEqual(fleet._states["vllm"]["requested_at"], fleet._states["sglang"]["requested_at"])
+        release.set()
+        self.assertTrue(two_rounds.wait(2))
+        self.assertCountEqual(["device-demo", "vllm-only", "peer-only"] * 2, aliases[:6])
+        self.assertEqual({"first", "vllm-only"}, {row["id"] for row in fleet.snapshot("vllm")["hosts"]})
+        self.assertEqual({"same-endpoint", "peer-only"}, {row["id"] for row in fleet.snapshot("sglang")["hosts"]})
+        self.assertEqual(2, fleet.snapshot("sglang")["concurrency"]["limit"])
+        fleet.close()
+        thread.join(.5)
+        self.assertFalse(thread.is_alive())
+        self.assertFalse(fleet.snapshot("sglang")["periodic_enabled"])
+
+    @patch("fl_dashboard.resources.fleet.PERIODIC_CHECK_SECONDS", .01)
+    def test_periodic_default_ssh_requires_manual_inventory_then_resumes_from_cache(self):
+        cache_path = self.root / "device-cache.json"
+        fleet = self.make(cache_path=cache_path)
+        fleet.start_periodic()
+        time.sleep(.04)
+        self.assertFalse(fleet.snapshot("vllm")["periodic_enabled"])
+        self.manager.snapshot.assert_not_called()
+        self.assertEqual([], self.calls)
+        fleet.refresh("vllm")
+        self.wait(fleet)
+        self.assertTrue(fleet.snapshot("vllm")["periodic_enabled"])
+        fleet.close()
+
+        collected = threading.Event()
+        def runner(*args, **kwargs):
+            collected.set()
+            return self.runner(*args, **kwargs)
+        restored = self.make(runner, cache_path=cache_path)
+        self.assertTrue(restored.snapshot("vllm")["hosts"][0]["stale"])
+        restored.start_periodic()
+        self.assertTrue(collected.wait(2))
+        self.assertEqual(1, self.wait(restored)["summary"]["free_cards"])
+        argv = self.calls[-1][0]
+        self.assertEqual(str(self.config), argv[argv.index("-F") + 1])
+        thread = restored._periodic_thread
+        restored.close()
+        thread.join(.5)
+        self.assertFalse(thread.is_alive())
+
+    def test_transient_catalog_failure_preserves_selected_local_ssh_history_and_enrollment(self):
+        catalog, inventory, _, bridge = self.jumpserver_fixture()
+        catalog["enabled"] = False
+        fleet = self.make(inventory=inventory, profile_source=bridge)
+        fleet.refresh("vllm")
+        original = self.wait(fleet)["hosts"][0]
+        inventory.catalog.side_effect = OSError("temporary catalog outage")
+        fleet.refresh("vllm")
+        retained = self.wait(fleet)["hosts"][0]
+        self.assertTrue(retained["stale"])
+        self.assertEqual(original["updated_at"], retained["updated_at"])
+        self.assertEqual(0, retained["accel"]["free"])
+        self.assertEqual(1, self.sync.calls)
+        self.assertEqual(1, len(self.calls))
+        inventory.catalog.side_effect = lambda: dict(catalog)
+        collected = threading.Event()
+        def runner(*args, **kwargs):
+            collected.set()
+            return self.runner(*args, **kwargs)
+        fleet._runner = runner
+        fleet.start_periodic()
+        self.assertTrue(collected.wait(2))
+        self.assertTrue(self.wait(fleet)["periodic_enabled"])
+        bridge.profiles.assert_not_called()
+
+    @patch("fl_dashboard.resources.fleet.PERIODIC_CHECK_SECONDS", .01)
+    def test_periodic_retries_recoverable_inventory_only_and_keeps_ssh_offline(self):
+        catalog, inventory, _, bridge = self.jumpserver_fixture()
+        catalog.update(authenticated=False, error="fixture outage", can_refresh=True)
+        self.projects[0].monitor.config["ssh_import_config"] = str(self.config)
+        read, retried, collected = (threading.Event() for _ in range(3))
+        def catalog_view():
+            read.set()
+            return dict(catalog)
+        def resume():
+            retried.set()
+            raise OSError("fixture outage")
+        def runner(*args, **kwargs):
+            collected.set()
+            return self.runner(*args, **kwargs)
+        inventory.catalog.side_effect = catalog_view
+        inventory.resume = Mock(side_effect=resume)
+        fleet = self.make(runner, inventory=inventory, profile_source=bridge)
+        fleet.start_periodic()
+        self.assertTrue(read.wait(2))
+        self.assertTrue(fleet.snapshot("vllm")["periodic_enabled"])
+        inventory.resume.assert_not_called()
+        self.now += 301
+        self.assertTrue(retried.wait(2))
+        time.sleep(.04)
+        inventory.resume.assert_called_once()
+        catalog.update(can_refresh=False)
+        self.now += 301
+        time.sleep(.04)
+        inventory.resume.assert_called_once()
+        catalog.update(authenticated=True, can_refresh=True, refreshing=True, error=None)
+        time.sleep(.04)
+        bridge.profiles.assert_not_called()
+        self.assertEqual(0, self.sync.calls)
+        self.assertEqual([], self.calls)
+        catalog.update(refreshing=False)
+        self.assertTrue(collected.wait(2))
+        self.assertEqual(1, self.wait(fleet)["summary"]["free_cards"])
+        inventory.resume.assert_called_once()
+        self.assertEqual(["jms-fixture"], [argv[-2] for argv, _ in self.calls])
+
     def test_shared_connection_inflight_is_deduplicated_between_projects(self):
         entered, release = threading.Event(), threading.Event()
         calls = []

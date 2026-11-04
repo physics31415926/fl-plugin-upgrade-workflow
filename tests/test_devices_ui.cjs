@@ -19,7 +19,7 @@ function harness(handler,options={}){
  const nodes=new Map(),calls=[],events={},history=[];
  const node=id=>{if(!nodes.has(id))nodes.set(id,new Element());return nodes.get(id);};
  const context={URL,URLSearchParams,JSON,Math,Number,Date,Set,localStorage:options.storage,location:{href:'http://127.0.0.1:8766/devices?project=vllm',search:'?project=vllm'},history:{replaceState:(_a,_b,url)=>history.push(url)},document:{hidden:false,getElementById:node,createElement:tag=>new Element(tag),createDocumentFragment:()=>new Element('#fragment'),addEventListener:(name,fn)=>events[name]=fn},fetch:async(url,options)=>{calls.push({url,options});const result=await(handler?handler(url,options):{});return{ok:result.code===undefined||result.code<400,status:result.code||200,json:async()=>result.data||result};}};
- vm.createContext(context);vm.runInContext(source.replace('initialize();setInterval(tick,3000);','globalThis.api={state,number,percent,memory,age,stale,verdict,cardState,cardSymbol,taskUrl,interval,due,shownHosts,summarize,render,renderHost,renderDetail,readSnapshot,refreshResources,tick,selectProject,initialize,jumpserver,readJumpserver,jumpserverAction,loginJumpserver,acceptJumpserver,renderJumpserver,refreshSyncedResources,hasJumpserverCredential,saveJumpserverSettings,resumeJumpserver};'),context);
+ vm.createContext(context);vm.runInContext(source.replace('initialize();setInterval(tick,3000);','globalThis.api={state,number,percent,memory,age,stale,verdict,cardState,cardSymbol,taskUrl,shownHosts,summarize,render,renderHost,renderDetail,readSnapshot,refreshResources,tick,selectProject,initialize,jumpserver,readJumpserver,jumpserverAction,loginJumpserver,acceptJumpserver,renderJumpserver,refreshSyncedResources,hasJumpserverCredential,saveJumpserverSettings,resumeJumpserver};'),context);
  return{context,api:context.api,node,calls,events,history};
 }
 const fresh=id=>({id,label:'Host '+id,ssh_alias:'host_'+id,backend:'cuda',backend_label:'NVIDIA / 英伟达',verdict:'free',reachable:true,updated_at:new Date().toISOString(),age_seconds:0,accel:{total:1,free:1,busy:0,unknown:0,residual:0,card_name:'Demo',cards:[{index:0,busy:false,residual:false,mem_used:0,mem_total:81920,util:0,procs:[]}]},node:{cpu_pct:0,mem_pct:2}});
@@ -49,9 +49,20 @@ test('device and process metadata are rendered as text, shared processes are ded
 test('refresh starts one JSON request and exposes progressive sweep state',async()=>{let finish;const ui=harness(()=>new Promise(resolve=>finish=resolve));put(ui,snapshot([],{updated_at:null}));const run=ui.api.refreshResources();await settle();await ui.api.refreshResources();assert.equal(ui.calls.length,1);assert.equal(new URL(ui.calls[0].url).pathname,'/api/devices/refresh');assert.deepEqual(JSON.parse(ui.calls[0].options.body),{});assert.equal(ui.calls[0].options.credentials,'same-origin');assert.equal(ui.node('refresh-devices').disabled,true);finish(snapshot([],{refreshing:true,progress:{done:2,total:8}}));await run;assert.match(ui.node('refresh-status').textContent,/2 \/ 8/);assert.equal(ui.node('refresh-devices').disabled,true);});
 test('old GET snapshot cannot replace a newer POST refresh snapshot',async()=>{let oldRead;const ui=harness((_url,options)=>options.method==='POST'?snapshot([fresh('new')],{refreshing:true}):new Promise(resolve=>oldRead=resolve));put(ui,snapshot([fresh('old')]));const pending=ui.api.readSnapshot();await settle();await ui.api.refreshResources();oldRead(snapshot([fresh('late')]));await pending;assert.equal(ui.api.state.data.hosts[0].id,'new');});
 test('switching project ignores the previous project response and clears old rows',async()=>{let vllmRead;const ui=harness(url=>{const parsed=new URL(url);if(parsed.pathname==='/api/capabilities')return{devices:true,read_only:false};if(parsed.searchParams.get('project')==='vllm')return new Promise(resolve=>vllmRead=resolve);return snapshot([fresh('sg')],{project_id:'sglang'});});put(ui,snapshot([fresh('vl')]));const old=ui.api.readSnapshot();await settle();await ui.api.selectProject('sglang');vllmRead(snapshot([fresh('late')]));await old;assert.equal(ui.api.state.project,'sglang');assert.equal(ui.api.state.data.hosts[0].id,'sg');assert.doesNotMatch(ui.node('hosts').textContent,/Host late|Host vl/);});
-test('hidden tabs perform no reads or collection and paused auto only reads cache',async()=>{const ui=harness(()=>snapshot([],{updated_at:null}));put(ui,snapshot([],{updated_at:null}));ui.context.document.hidden=true;await ui.api.tick();assert.equal(ui.calls.length,0);ui.context.document.hidden=false;ui.api.state.auto=false;await ui.api.tick();assert.equal(ui.calls.length,1);assert.equal(ui.calls[0].options.method,undefined);});
-test('automatic collection is throttled after failures instead of retrying every poll',async()=>{const ui=harness((_url,options)=>options.method==='POST'?{code:503,data:{error:'unavailable'}}:snapshot([],{updated_at:null}));put(ui,snapshot([],{updated_at:null}));await ui.api.tick();await ui.api.tick();assert.equal(ui.calls.filter(call=>call.options.method==='POST').length,1);assert.equal(ui.api.state.allowed,true);});
-test('expired grant disables automatic collection and clears private resource data',async()=>{const ui=harness(()=>({code:401,data:{error:'expired'}}));put(ui,snapshot([fresh('private')]));await ui.api.tick();assert.equal(ui.api.state.allowed,false);assert.equal(ui.api.state.auto,false);assert.equal(ui.api.state.data,null);assert.equal(ui.node('auto-refresh').checked,false);assert.doesNotMatch(ui.node('hosts').textContent,/private/);assert.match(ui.node('error').textContent,/授权已失效/);});
+test('a hidden page skips polls and reads the current snapshot when it returns to the foreground',async()=>{
+ const ui=harness(()=>snapshot([fresh('latest')]));
+ put(ui,snapshot([fresh('old')]));
+ ui.context.document.hidden=true;await ui.api.tick();assert.equal(ui.calls.length,0);
+ ui.context.document.hidden=false;ui.events.visibilitychange();await settle();
+ assert.equal(ui.calls.length,1);assert.equal(new URL(ui.calls[0].url).pathname,'/api/devices');assert.equal(ui.calls[0].options.method,undefined);
+ assert.match(ui.node('hosts').textContent,/Host latest/);
+});
+test('a failed manual refresh is not retried by snapshot polling',async()=>{
+ const ui=harness((_url,options)=>options.method==='POST'?{code:503,data:{error:'unavailable'}}:snapshot([],{updated_at:null}));
+ put(ui,snapshot([],{updated_at:null}));await ui.api.refreshResources();await ui.api.tick();await ui.api.tick();
+ assert.equal(ui.calls.filter(call=>call.options.method==='POST').length,1);assert.equal(ui.api.state.allowed,true);
+});
+test('expired grant disables manual collection and clears private resource data',async()=>{const ui=harness(()=>({code:401,data:{error:'expired'}}));put(ui,snapshot([fresh('private')]));await ui.api.tick();assert.equal(ui.api.state.allowed,false);assert.equal(ui.api.state.data,null);assert.equal(ui.node('refresh-devices').disabled,true);assert.doesNotMatch(ui.node('hosts').textContent,/private/);assert.match(ui.node('error').textContent,/授权已失效/);});
 test('ordinary read-only capability never starts a resource scan',async()=>{const ui=harness(()=>({devices:false,read_only:true}));await ui.api.selectProject('vllm');assert.equal(ui.calls.length,1);assert.equal(ui.api.state.allowed,false);assert.equal(ui.node('refresh-devices').disabled,true);});
 
 function profileHarness({requested='wanted',profiles=[{id:'wanted',role:'compute'}],readOnly=false}={}){
@@ -74,8 +85,8 @@ test('login clears the password immediately and does not issue duplicate request
  const login=ui.api.loginJumpserver({preventDefault(){}});assert.equal(ui.node('jumpserver-password').value,'');await ui.api.loginJumpserver({preventDefault(){}});assert.equal(ui.calls.length,1);const body=JSON.parse(ui.calls[0].options.body);assert.equal(body.password,'fixture-only-password');assert.equal(body.remember_password,false);assert.equal(body.ssh_port,2222);assert.equal(JSON.stringify(ui.api.jumpserver).includes('fixture-only-password'),false);assert.equal(ui.node('refresh-devices').disabled,true);
  finish(jms({refreshing:true}));await login;assert.equal(ui.api.jumpserver.data.authenticated,true);assert.equal(ui.node('jumpserver-settings').open,false);assert.equal(ui.node('jumpserver-password').value,'');
 });
-test('successful machine sync triggers resource collection even with auto collection paused',async()=>{
- const ui=harness((url,options)=>{const path=new URL(url).pathname;if(path==='/api/jumpserver/refresh')return jms({refreshing:true});if(path==='/api/jumpserver')return jms({updated_at:'2026-10-22T10:01:00Z'});if(path==='/api/devices/refresh')return snapshot([fresh('updated')],{refreshing:true});return snapshot([fresh('old')]);});localJms(ui);ui.api.state.auto=false;
+test('successful manual machine sync triggers one resource collection',async()=>{
+ const ui=harness((url,options)=>{const path=new URL(url).pathname;if(path==='/api/jumpserver/refresh')return jms({refreshing:true});if(path==='/api/jumpserver')return jms({updated_at:'2026-10-22T10:01:00Z'});if(path==='/api/devices/refresh')return snapshot([fresh('updated')],{refreshing:true});return snapshot([fresh('old')]);});localJms(ui);
  await ui.api.jumpserverAction('refresh');assert.equal(ui.api.summarize().free,0);assert.equal(ui.calls.length,1);await ui.api.tick();assert.equal(ui.calls.filter(call=>new URL(call.url).pathname==='/api/devices/refresh').length,1);assert.equal(ui.api.jumpserver.waitingResources,true);assert.equal(ui.api.summarize().free,0);
  await ui.api.tick();assert.equal(ui.api.jumpserver.waitingResources,false);assert.equal(ui.api.summarize().free,1);assert.equal(ui.calls.filter(call=>new URL(call.url).pathname==='/api/devices/refresh').length,1);
 });
@@ -95,14 +106,14 @@ test('hidden pages pause machine polling and defer queued resource collection un
  const ui=harness(url=>new URL(url).pathname==='/api/jumpserver'?jms({updated_at:'2026-10-22T10:02:00Z'}):snapshot());localJms(ui,jms({refreshing:true}));ui.api.jumpserver.awaitedUpdate='2026-10-22T10:00:00Z';ui.context.document.hidden=true;await ui.api.tick();assert.equal(ui.calls.length,0);ui.context.document.hidden=false;await ui.api.tick();assert.equal(ui.calls.some(call=>new URL(call.url).pathname==='/api/devices/refresh'),true);
 });
 test('switching back to SSH sends only the public source setting and refreshes resources immediately',async()=>{
- const ui=harness(url=>new URL(url).pathname==='/api/jumpserver/settings'?jms({enabled:false}):snapshot());localJms(ui);ui.api.state.auto=false;await ui.api.jumpserverAction('settings',{enabled:false});assert.deepEqual(JSON.parse(ui.calls[0].options.body),{enabled:false});assert.equal(ui.api.state.machineSource,'ssh_config');assert.equal(new URL(ui.calls[1].url).pathname,'/api/devices/refresh');
+ const ui=harness(url=>new URL(url).pathname==='/api/jumpserver/settings'?jms({enabled:false}):snapshot());localJms(ui);await ui.api.jumpserverAction('settings',{enabled:false});assert.deepEqual(JSON.parse(ui.calls[0].options.body),{enabled:false});assert.equal(ui.api.state.machineSource,'ssh_config');assert.equal(new URL(ui.calls[1].url).pathname,'/api/devices/refresh');
 });
 test('multiple asset accounts require an authorized selection and missing accounts never default to root',()=>{
  const ui=harness();localJms(ui,jms({assets:[{accounts:['operator','reader']},{accounts:[]}]}));assert.match(ui.node('jumpserver-account-hint').textContent,/1 台机器有多个授权账号/);assert.match(ui.node('jumpserver-account-hint').textContent,/1 台机器：平台未返回可自动连接账号/);assert.equal(ui.node('jumpserver-account').value,'');ui.node('jumpserver-account').value='operator';ui.api.renderJumpserver();assert.doesNotMatch(ui.node('jumpserver-account-hint').textContent,/多个授权账号/);
 });
 
 test('a failed resource restart cannot make historical machines available again on the next cached read',async()=>{
- let fail=true;const ui=harness(url=>{const name=new URL(url).pathname;if(name==='/api/jumpserver/settings')return jms({enabled:false});if(name==='/api/devices/refresh'&&fail)return{code:503,data:{error:'采集暂不可用'}};return snapshot();});localJms(ui);ui.api.state.auto=false;await ui.api.jumpserverAction('settings',{enabled:false});assert.equal(ui.api.summarize().free,0);await ui.api.tick();assert.equal(ui.api.summarize().free,0);fail=false;await ui.api.refreshResources();assert.equal(ui.api.summarize().free,1);
+ let fail=true;const ui=harness(url=>{const name=new URL(url).pathname;if(name==='/api/jumpserver/settings')return jms({enabled:false});if(name==='/api/devices/refresh'&&fail)return{code:503,data:{error:'采集暂不可用'}};return snapshot();});localJms(ui);await ui.api.jumpserverAction('settings',{enabled:false});assert.equal(ui.api.summarize().free,0);await ui.api.tick();assert.equal(ui.api.summarize().free,0);fail=false;await ui.api.refreshResources();assert.equal(ui.api.summarize().free,1);
 });
 test('project changes keep a login mutation serialized and refresh the newly selected project after it completes',async()=>{
  let finish;const ui=harness((url,options)=>{const u=new URL(url);if(u.pathname==='/api/jumpserver/login')return new Promise(resolve=>finish=resolve);if(u.pathname==='/api/capabilities')return{devices:true,jumpserver_settings:true,machine_source:'jumpserver'};if(u.pathname==='/api/jumpserver')return jms({username:'current-platform-user',updated_at:'2026-10-22T10:03:00Z'});return snapshot([fresh('sg')],{project_id:u.searchParams.get('project')});});localJms(ui);const login=ui.api.jumpserverAction('login',{username:'new-user',password:'fixture'});await settle();await ui.api.selectProject('sglang');await ui.api.jumpserverAction('login',{username:'duplicate',password:'fixture'});assert.equal(ui.calls.filter(call=>new URL(call.url).pathname==='/api/jumpserver/login').length,1);finish(jms({username:'old-response',updated_at:'2026-10-22T10:02:00Z'}));await login;assert.equal(ui.api.jumpserver.data.username,'current-platform-user');const resource=ui.calls.find(call=>new URL(call.url).pathname==='/api/devices/refresh');assert.ok(resource);assert.equal(new URL(resource.url).searchParams.get('project'),'sglang');
@@ -116,23 +127,87 @@ test('logging out of an unused platform session leaves the active SSH source ava
 });
 
 
-test('automatic resource scans default to five minutes and do not expire a normal five-minute-old sample',()=>{
- const ui=harness();put(ui,snapshot([fresh('one')],{refresh_interval:undefined}));assert.equal(ui.api.interval(),300000);const host=fresh('one');host.age_seconds=301;assert.equal(ui.api.stale(host),false);host.age_seconds=601;assert.equal(ui.api.stale(host),true);host.age_seconds=1;host.stale=true;assert.equal(ui.api.stale(host),true);ui.api.state.data.refresh_interval=60;assert.equal(ui.api.interval(),300000);ui.api.render();assert.match(ui.node('refresh-status').textContent,/每 5 分钟自动采集/);
+test('service scheduling status reflects the project snapshot and preserves the sample freshness window',()=>{
+ const ui=harness(),host=fresh('one');
+ put(ui,snapshot([host],{periodic_enabled:true,refresh_interval:undefined}));ui.api.render();
+ assert.match(ui.node('refresh-status').textContent,/后台服务每 5 分钟自动采集/);
+ assert.doesNotMatch(file('devices.html'),/id="auto-refresh"|隐藏页面时暂停/);
+ host.age_seconds=301;assert.equal(ui.api.stale(host),false);
+ host.age_seconds=601;assert.equal(ui.api.stale(host),true);
+ host.age_seconds=1;host.stale=true;assert.equal(ui.api.stale(host),true);
+ for(const enabled of [false,undefined]){
+  ui.api.state.data.periodic_enabled=enabled;ui.api.render();
+  assert.doesNotMatch(ui.node('refresh-status').textContent,/自动采集/);
+  assert.equal(ui.node('refresh-devices').disabled,false);
+ }
 });
-test('cached polling before five minutes cannot launch SSH scans or refresh the platform asset API',async()=>{
- const stamp=Date.now()-299000;const ui=harness(()=>snapshot(undefined,{updated_at:new Date(stamp).toISOString()}));localJms(ui);ui.api.state.data.updated_at=new Date(stamp).toISOString();for(let n=0;n<4;n++)await ui.api.tick();assert.equal(ui.calls.some(call=>call.options.method==='POST'),false);assert.equal(ui.calls.some(call=>new URL(call.url).pathname.startsWith('/api/jumpserver')),false);
+test('opening projects and polling from multiple tabs only observes the service, even for old or empty snapshots',async()=>{
+ let data=snapshot([fresh('cached')],{updated_at:'2000-01-01T00:00:00Z',periodic_enabled:true});
+ const handler=url=>new URL(url).pathname==='/api/capabilities'?{devices:true,jumpserver_settings:false}:data;
+ const first=harness(handler),second=harness(handler);
+ await first.api.selectProject('vllm');assert.match(first.node('hosts').textContent,/Host cached/);
+ data=snapshot([],{updated_at:null,periodic_enabled:false});await second.api.selectProject('vllm');
+ await first.api.selectProject('vllm');await first.api.tick();await second.api.tick();
+ data=snapshot([fresh('current')],{refreshing:true,progress:{done:1,total:2},periodic_enabled:true});
+ for(const tab of [first,second]){
+  await tab.api.tick();assert.match(tab.node('hosts').textContent,/Host current/);
+  assert.match(tab.node('refresh-status').textContent,/后台更新 1 \/ 2/);
+  assert.equal(tab.calls.some(call=>call.options.method==='POST'),false);
+ }
+ data=snapshot([fresh('current')]);await first.api.tick();await first.api.refreshResources();
+ assert.equal(first.calls.filter(call=>call.options.method==='POST').length,1);
 });
-test('automatic scan attempts are throttled across same-project navigation and browser tabs, while manual refresh remains immediate',async()=>{
- let now=Date.now();class ClockDate extends Date{static now(){return now;}}const values=new Map(),storage={getItem:key=>values.get(key)??null,setItem:(key,value)=>values.set(key,value)};
- const handler=(url,options)=>new URL(url).pathname==='/api/capabilities'?{devices:true,jumpserver_settings:false}:options.method==='POST'?{code:503,data:{error:'temporary'}}:snapshot([],{updated_at:null});
- const ui=harness(handler,{storage});ui.context.Date=ClockDate;put(ui,snapshot([],{updated_at:null}));await ui.api.tick();assert.equal(ui.calls.filter(call=>call.options.method==='POST').length,1);await ui.api.selectProject('vllm');assert.equal(ui.calls.filter(call=>call.options.method==='POST').length,1);
- const second=harness(handler,{storage});second.context.Date=ClockDate;put(second,snapshot([],{updated_at:null}));await second.api.tick();assert.equal(second.calls.filter(call=>call.options.method==='POST').length,0);await second.api.refreshResources();assert.equal(second.calls.filter(call=>call.options.method==='POST').length,1);
- now+=299000;await ui.api.tick();assert.equal(ui.calls.filter(call=>call.options.method==='POST').length,1);now+=1001;await ui.api.tick();assert.equal(ui.calls.filter(call=>call.options.method==='POST').length,2);assert.deepEqual([...values.keys()],['fl-device-refresh-time:vllm']);assert.match([...values.values()][0],/^\d+$/);
+test('observing another machine sync on page entry does not queue a resource scan',async()=>{
+ let syncing=true;
+ const ui=harness(url=>{
+  const path=new URL(url).pathname;
+  if(path==='/api/capabilities')return {devices:true,jumpserver_settings:true,machine_source:'jumpserver'};
+  if(path==='/api/jumpserver')return jms({refreshing:syncing,updated_at:syncing?'2026-10-22T10:00:00Z':'2026-10-22T10:01:00Z'});
+  return snapshot([],{updated_at:null});
+ });
+ await ui.api.selectProject('vllm');syncing=false;await ui.api.tick();
+ assert.equal(ui.api.jumpserver.data.refreshing,false);
+ assert.equal(ui.calls.some(call=>call.options.method==='POST'),false);
+});
+test('foreground recovery reconciles inventory and partial device results without issuing a scan',async()=>{
+ let recovered=false,finish;
+ const ui=harness(url=>{
+  const path=new URL(url).pathname;
+  if(path==='/api/capabilities')return {devices:true,jumpserver_settings:true,machine_source:'jumpserver'};
+  if(path==='/api/jumpserver')return recovered?jms():jms({error:'机器列表同步失败',authenticated:false});
+  if(recovered)return new Promise(resolve=>finish=resolve);
+  return snapshot([fresh('cached')]);
+ });
+ await ui.api.selectProject('vllm');
+ assert.equal(ui.api.summarize().free,0);assert.match(ui.node('jumpserver-feedback').textContent,/同步失败/);
+ ui.context.document.hidden=true;ui.events.visibilitychange();recovered=true;await ui.api.tick();
+ const before=ui.calls.length;
+ ui.context.document.hidden=false;ui.events.visibilitychange();await settle();
+ assert.deepEqual(ui.calls.slice(before).map(call=>new URL(call.url).pathname),['/api/jumpserver','/api/devices']);
+ assert.equal(ui.api.summarize().free,0);assert.doesNotMatch(ui.node('jumpserver-feedback').textContent,/同步失败/);
+ const partial=snapshot([fresh('current'),{...fresh('historical'),stale:true}],{refreshing:true,progress:{done:1,total:2}});
+ finish(partial);await settle();assert.equal(ui.api.summarize().free,1);assert.match(ui.node('refresh-status').textContent,/1 \/ 2/);
+ const healthyPoll=ui.api.tick();await settle();finish(partial);await healthyPoll;
+ assert.equal(ui.calls.filter(call=>new URL(call.url).pathname==='/api/jumpserver').length,2);
+ assert.equal(ui.calls.some(call=>call.options.method==='POST'),false);
+});
+test('foreground status reconciliation cannot undo an explicit connection change waiting for telemetry',async()=>{
+ const ui=harness(url=>{
+  const path=new URL(url).pathname;
+  if(path==='/api/jumpserver/settings'||path==='/api/jumpserver')return jms();
+  if(path==='/api/devices/refresh')return {code:503,data:{error:'采集暂不可用'}};
+  return snapshot([fresh('historical')]);
+ });
+ localJms(ui,jms({error:'之前的机器列表错误'}));ui.api.acceptJumpserver(ui.api.jumpserver.data);
+ await ui.api.jumpserverAction('settings',{default_account:'operator'});
+ assert.equal(ui.api.jumpserver.waitingResources,true);
+ ui.events.visibilitychange();await settle();
+ assert.equal(ui.api.summarize().free,0);assert.equal(ui.api.jumpserver.waitingResources,true);
 });
 test('returning to a project with a pending resource request cannot create a second scan',async()=>{
  let finish;const ui=harness((url,options)=>new URL(url).pathname==='/api/capabilities'?{devices:true,jumpserver_settings:false}:options.method==='POST'?new Promise(resolve=>finish=resolve):snapshot([],{updated_at:null}));put(ui,snapshot([],{updated_at:null}));const pending=ui.api.refreshResources();await settle();await ui.api.selectProject('vllm');await ui.api.refreshResources();assert.equal(ui.calls.filter(call=>call.options.method==='POST').length,1);assert.equal(ui.node('refresh-devices').disabled,true);finish(snapshot());await pending;
 });
-test('resource polling finishes in a hidden tab without launching the due automatic scan',async()=>{
+test('an in-flight snapshot read finishes without starting a scan after the page becomes hidden',async()=>{
  let finish;const ui=harness(()=>new Promise(resolve=>finish=resolve));put(ui,snapshot([],{updated_at:null}));const pending=ui.api.tick();await settle();ui.context.document.hidden=true;finish(snapshot([],{updated_at:null}));await pending;assert.equal(ui.calls.length,1);assert.equal(ui.calls[0].options.method,undefined);
 });
 
@@ -146,7 +221,7 @@ test('anonymous visitors read cached details and filters but cannot collect or c
 
 
 test('a revoked share downgrades a live device page to cached read-only without losing details',async()=>{
- const ui=harness(()=>snapshot([fresh('public')],{read_only:true}));put(ui,snapshot([fresh('old')]));ui.api.state.selected='public';await ui.api.tick();assert.equal(ui.api.state.allowed,false);assert.equal(ui.api.state.readable,true);assert.equal(ui.api.state.auto,false);assert.match(ui.node('hosts').textContent,/Host public/);assert.equal(ui.node('card-details').children.length,1);assert.equal(ui.node('collection-actions').hidden,true);assert.equal(ui.calls.some(call=>call.options.method==='POST'),false);await ui.api.refreshResources();assert.equal(ui.calls.length,1);
+ const ui=harness(()=>snapshot([fresh('public')],{read_only:true}));put(ui,snapshot([fresh('old')]));ui.api.state.selected='public';await ui.api.tick();assert.equal(ui.api.state.allowed,false);assert.equal(ui.api.state.readable,true);assert.match(ui.node('hosts').textContent,/Host public/);assert.equal(ui.node('card-details').children.length,1);assert.equal(ui.node('collection-actions').hidden,true);assert.equal(ui.calls.some(call=>call.options.method==='POST'),false);await ui.api.refreshResources();assert.equal(ui.calls.length,1);
 });
 
 
@@ -212,7 +287,7 @@ test('an account choice is kept as a draft while platform polling returns the pr
 test('saving SSH account settings sends only connection fields and recollects after success without login',async()=>{
  const data=jms({can_refresh:true,assets:[{id:'one',accounts:['secure','root']}]});
  const ui=harness(url=>new URL(url).pathname==='/api/jumpserver/settings'?{...data,default_account:'secure',task_account:'root'}:snapshot());
- localJms(ui);ui.api.acceptJumpserver(data,{initial:true});ui.api.state.auto=false;
+ localJms(ui);ui.api.acceptJumpserver(data,{initial:true});
  ui.node('jumpserver-url').value='https://unsent.example.test';ui.node('jumpserver-username').value='unsent-user';
  ui.node('jumpserver-password').value='fixture-only-unsent-password';
  ui.node('jumpserver-ssh-host').value='ssh-gateway.example.test';ui.node('jumpserver-ssh-port').value='2224';
@@ -361,11 +436,11 @@ const publicCapabilities={devices:true,read_only:true,device_refresh:true,sessio
 test('anonymous manual-refresh permission shows the action without enabling management or automatic scans',async()=>{
  const ui=harness(url=>new URL(url).pathname==='/api/capabilities'?publicCapabilities:publicSnapshot([],{updated_at:null}));
  await ui.api.selectProject('vllm');
- assert.equal(ui.api.state.allowed,false);assert.equal(ui.api.state.canRefresh,true);assert.equal(ui.api.state.auto,false);
- assert.equal(ui.node('collection-actions').hidden,false);assert.equal(ui.node('auto-collection-control').hidden,true);assert.equal(ui.node('auto-refresh').disabled,true);assert.equal(ui.node('auto-refresh').checked,false);
+ assert.equal(ui.api.state.allowed,false);assert.equal(ui.api.state.canRefresh,true);
+ assert.equal(ui.node('collection-actions').hidden,false);assert.equal(ui.node('refresh-devices').disabled,false);
  assert.equal(ui.node('machine-source-panel').hidden,true);assert.equal(ui.node('sessions-link').hidden,true);assert.match(ui.node('shared-mode').textContent,/资源可刷新.*任务只读/);
- await ui.api.tick();ui.node('auto-refresh').checked=true;ui.node('auto-refresh').listeners.change();await settle();
- await ui.api.jumpserverAction('refresh');assert.equal(ui.api.state.auto,false);
+ await ui.api.tick();
+ await ui.api.jumpserverAction('refresh');
  assert.equal(ui.calls.some(call=>call.options.method==='POST'),false);assert.equal(ui.calls.some(call=>new URL(call.url).pathname.startsWith('/api/jumpserver')),false);
 });
 
@@ -392,7 +467,7 @@ test('public refresh cooldown survives cached polling and expires without launch
 
 test('a revoked management share can retain explicit public manual refresh without restoring task privileges',async()=>{
  const ui=harness(()=>publicSnapshot());put(ui,snapshot([fresh('old')]));ui.api.state.selected='public';await ui.api.tick();
- assert.equal(ui.api.state.allowed,false);assert.equal(ui.api.state.canRefresh,true);assert.equal(ui.api.state.auto,false);assert.equal(ui.node('sessions-link').hidden,true);assert.equal(ui.node('machine-source-panel').hidden,true);assert.equal(ui.node('collection-actions').hidden,false);
+ assert.equal(ui.api.state.allowed,false);assert.equal(ui.api.state.canRefresh,true);assert.equal(ui.node('sessions-link').hidden,true);assert.equal(ui.node('machine-source-panel').hidden,true);assert.equal(ui.node('collection-actions').hidden,false);
  assert.equal(ui.calls.some(call=>call.options.method==='POST'),false);await ui.api.refreshResources();assert.equal(ui.calls.filter(call=>call.options.method==='POST').length,1);assert.equal(ui.api.state.allowed,false);
 });
 
