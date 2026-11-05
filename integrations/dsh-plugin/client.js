@@ -430,12 +430,65 @@ window.__ModuleLoader__.load({
   display: flex; flex-direction: column; height: 100%; min-height: 0;
   background: var(--dsw-alias-bg-base); color: var(--dsw-alias-label-primary);
   font-size: 13px; line-height: 1.5;
+
   /*
-   * The one colour not taken from a theme token: the foreground that sits on
-   * the brand fill. The brand colour is the same in both themes, so a token
-   * that flips with the theme would break contrast on it.
+   * The panel's palette is derived from theme tokens rather than invented.
+   *
+   * Every theme colour is declared requiresLightAndDark, so the
+   * theme is what keeps text legible when the user switches. A fixed hex hue
+   * would stay put while everything around it moved, and be wrong in one of
+   * the two themes. So richer surfaces come from color-mix() against the
+   * theme's own background: the hue still belongs to the theme, only the
+   * amount is ours. The --flup-on-brand value is the single exception, and
+   * precisely because the brand fill underneath it does not change.
    */
   --flup-on-brand: #fff;
+  --flup-wash-brand: color-mix(in srgb, var(--dsw-alias-brand-primary) 10%, var(--dsw-alias-bg-layer-1));
+  --flup-wash-ok: color-mix(in srgb, var(--dsw-alias-state-success-primary) 10%, var(--dsw-alias-bg-layer-1));
+  --flup-wash-warn: color-mix(in srgb, var(--dsw-alias-state-warn-primary) 10%, var(--dsw-alias-bg-layer-1));
+  --flup-wash-error: color-mix(in srgb, var(--dsw-alias-state-error-primary) 10%, var(--dsw-alias-bg-layer-1));
+  --flup-edge-brand: color-mix(in srgb, var(--dsw-alias-brand-primary) 38%, transparent);
+  --flup-ease: cubic-bezier(0.22, 0.61, 0.36, 1);
+}
+
+/*
+ * Motion is used for three things only: to show that something is genuinely
+ * live, to fill the wait before data arrives, and to let a new row settle in
+ * rather than appear from nothing. Anything purely decorative stays still.
+ */
+@keyframes flup-pulse {
+  0%, 100% { opacity: 1; transform: scale(1); }
+  50% { opacity: 0.45; transform: scale(0.82); }
+}
+@keyframes flup-halo {
+  0% { box-shadow: 0 0 0 0 currentColor; opacity: 0.55; }
+  70% { box-shadow: 0 0 0 6px currentColor; opacity: 0; }
+  100% { box-shadow: 0 0 0 0 currentColor; opacity: 0; }
+}
+@keyframes flup-spin { to { transform: rotate(360deg); } }
+@keyframes flup-rise {
+  from { opacity: 0; transform: translateY(4px); }
+  to { opacity: 1; transform: none; }
+}
+@keyframes flup-sweep {
+  from { background-position: 200% 0; }
+  to { background-position: -200% 0; }
+}
+@keyframes flup-grow {
+  from { transform: scaleX(0); }
+}
+/*
+ * A dashboard that animates is a dashboard someone has to sit in front of.
+ * Honour the OS setting: drop every animation and transition, and leave the
+ * static styling to carry the same information. Nothing below encodes meaning
+ * in motion alone, so this removes polish, not content.
+ */
+@media (prefers-reduced-motion: reduce) {
+  .flup-root *, .flup-root *::before, .flup-root *::after {
+    animation-duration: 0.001ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.001ms !important;
+  }
 }
 .flup-head {
   display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
@@ -457,11 +510,13 @@ window.__ModuleLoader__.load({
   background: var(--dsw-alias-bg-layer-1); color: var(--dsw-alias-label-primary);
   padding: 7px 10px 7px 9px; border-left-width: 3px;
   display: flex; flex-direction: column; gap: 1px; width: 100%;
+  transition: background 140ms var(--flup-ease), border-color 140ms var(--flup-ease), transform 140ms var(--flup-ease);
 }
-.flup-rail-btn:hover { background: var(--dsw-alias-bg-layer-2); }
+.flup-rail-btn:hover { background: var(--dsw-alias-bg-layer-2); transform: translateX(1px); }
+.flup-rail-btn:active { transform: translateX(1px) scale(0.99); }
 .flup-rail-btn[aria-current="true"] {
-  background: var(--dsw-alias-bg-layer-2); font-weight: 500;
-  border-color: var(--dsw-alias-brand-primary);
+  background: var(--dsw-alias-bg-layer-2); background: var(--flup-wash-brand);
+  font-weight: 500; border-color: var(--dsw-alias-brand-primary);
 }
 .flup-rail-btn:focus-visible { outline: 2px solid var(--dsw-alias-brand-primary); outline-offset: 1px; }
 /*
@@ -496,10 +551,14 @@ window.__ModuleLoader__.load({
   background: var(--dsw-alias-bg-layer-1); color: var(--dsw-alias-label-primary);
   border-radius: 6px; padding: 4px 11px; font: inherit; font-size: 12px; cursor: pointer;
   text-decoration: none; white-space: nowrap;
+  transition: background 130ms var(--flup-ease), border-color 130ms var(--flup-ease),
+    transform 130ms var(--flup-ease), filter 130ms var(--flup-ease);
 }
 .flup-btn:hover:not(:disabled) {
   background: var(--dsw-alias-bg-layer-2); border-color: var(--dsw-alias-brand-primary);
+  transform: translateY(-1px);
 }
+.flup-btn:active:not(:disabled) { transform: translateY(0) scale(0.98); }
 .flup-btn:disabled { opacity: 0.5; cursor: default; }
 .flup-btn:focus-visible { outline: 2px solid var(--dsw-alias-brand-primary); outline-offset: 1px; }
 /*
@@ -532,18 +591,39 @@ window.__ModuleLoader__.load({
 }
 .flup-input { width: 100%; }
 .flup-dot { display: inline-block; width: 7px; height: 7px; border-radius: 50%; flex: none; }
+/*
+ * Only a genuinely in-flight status pulses. That makes motion mean one thing
+ * in this panel — work is happening right now — so a glance at a long task
+ * list finds the live rows without reading any text. Settled states stay
+ * still, including the failed ones, which do not need to attract the eye
+ * forever. The halo is a separate element so the dot's own colour stays flat.
+ */
+.flup-dot-live { position: relative; animation: flup-pulse 1.6s var(--flup-ease) infinite; }
+.flup-dot-live::after {
+  content: ''; position: absolute; inset: 0; border-radius: 50%;
+  color: inherit; animation: flup-halo 1.6s var(--flup-ease) infinite;
+}
 .flup-state { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; color: var(--dsw-alias-label-secondary); }
 .flup-tabs { display: flex; gap: 6px; padding: 10px 20px 0; }
 .flup-tab {
   appearance: none; font: inherit; font-size: 12px; cursor: pointer;
   border: 1px solid var(--dsw-alias-border-l2); border-radius: 6px;
   background: var(--dsw-alias-bg-layer-1); color: var(--dsw-alias-label-primary);
-  padding: 5px 12px;
+  padding: 5px 12px; position: relative; overflow: hidden;
+  transition: background 130ms var(--flup-ease), border-color 130ms var(--flup-ease);
 }
 .flup-tab:hover { background: var(--dsw-alias-bg-layer-2); }
 .flup-tab[aria-selected="true"] {
-  background: var(--dsw-alias-bg-layer-2); font-weight: 500;
+  background: var(--dsw-alias-bg-layer-2); background: var(--flup-wash-brand);
+  font-weight: 500;
   border-color: var(--dsw-alias-brand-primary); box-shadow: inset 0 -2px 0 var(--dsw-alias-brand-primary);
+}
+/* The underline grows from the left on selection, so the eye is carried from
+   the tab that was active to the one that now is. */
+.flup-tab[aria-selected="true"]::after {
+  content: ''; position: absolute; left: 0; right: 0; bottom: 0; height: 2px;
+  background: var(--dsw-alias-brand-primary); transform-origin: left;
+  animation: flup-grow 220ms var(--flup-ease);
 }
 .flup-tab:focus-visible { outline: 2px solid var(--dsw-alias-brand-primary); outline-offset: 1px; }
 .flup-body { flex: 1 1 auto; min-height: 0; overflow: auto; padding: 12px 20px 28px; }
@@ -556,7 +636,14 @@ window.__ModuleLoader__.load({
 .flup-table td { padding: 7px 10px 7px 0; border-bottom: 1px solid var(--dsw-alias-border-l1); }
 .flup-table tr:last-child td { border-bottom: none; }
 .flup-table td:first-child { color: var(--dsw-alias-label-primary); }
-.flup-table-rows tbody tr:hover { background: var(--dsw-alias-bg-layer-1); }
+.flup-table-rows tbody tr { transition: background 110ms var(--flup-ease), box-shadow 110ms var(--flup-ease); }
+/* A hovered row gets a brand edge as well as a fill, so the pointer's position
+   is unambiguous in a dense table where adjacent rows are the same height. */
+.flup-table-rows tbody tr:hover {
+  background: var(--dsw-alias-bg-layer-1);
+  box-shadow: inset 2px 0 0 var(--dsw-alias-border-l2);
+  box-shadow: inset 2px 0 0 var(--flup-edge-brand);
+}
 .flup-btn-sm { padding: 2px 9px; font-size: 11px; }
 /* A row title that opens a drill-in: underlined so it reads as a link, but a
    real button for keyboard and screen-reader users. */
@@ -573,10 +660,15 @@ window.__ModuleLoader__.load({
   border: 1px solid var(--dsw-alias-border-l2); border-radius: 999px;
   background: var(--dsw-alias-bg-layer-1); color: var(--dsw-alias-label-primary);
   padding: 3px 11px; white-space: nowrap;
+  transition: background 120ms var(--flup-ease), border-color 120ms var(--flup-ease),
+    color 120ms var(--flup-ease), transform 120ms var(--flup-ease);
 }
+.flup-chip:active { transform: scale(0.96); }
 .flup-chip:hover { background: var(--dsw-alias-bg-layer-2); }
 .flup-chip[aria-pressed="true"] {
-  border-color: var(--dsw-alias-brand-primary); background: var(--dsw-alias-bg-layer-2); font-weight: 500;
+  border-color: var(--dsw-alias-brand-primary);
+  background: var(--dsw-alias-bg-layer-2); background: var(--flup-wash-brand);
+  color: var(--dsw-alias-brand-primary); font-weight: 500;
 }
 .flup-chip:focus-visible { outline: 2px solid var(--dsw-alias-brand-primary); outline-offset: 1px; }
 /* Task drill-in. */
@@ -586,6 +678,7 @@ window.__ModuleLoader__.load({
 .flup-card {
   border: 1px solid var(--dsw-alias-border-l1); border-radius: 8px;
   padding: 12px 14px; margin-bottom: 10px; background: var(--dsw-alias-bg-layer-1);
+  animation: flup-rise 220ms var(--flup-ease) both;
 }
 .flup-card-title {
   margin: 0 0 8px; font-size: 12px; font-weight: 600; color: var(--dsw-alias-label-primary);
@@ -653,10 +746,57 @@ window.__ModuleLoader__.load({
 }
 .flup-err { color: var(--dsw-alias-state-error-primary); font-size: 12px; }
 .flup-ok { color: var(--dsw-alias-state-success-primary); font-size: 12px; }
-/* A left edge in the state colour, so a card's condition reads before its text. */
-.flup-card-warn { border-left: 3px solid var(--dsw-alias-state-warn-primary); }
-.flup-card-ok { border-left: 3px solid var(--dsw-alias-state-success-primary); }
-.flup-card-accent { border-left: 3px solid var(--dsw-alias-brand-primary); }
+/*
+ * A left edge in the state colour, so a card's condition reads before its
+ * text, now with a matching wash across the surface. The wash is mixed from
+ * the same token as the edge, which keeps the two from drifting apart and
+ * means a card never shows one state at its edge and another in its fill.
+ */
+/*
+ * Each tinted rule states the plain surface first and the mixed one second.
+ * color-mix() needs a recent engine; where it is missing the second
+ * declaration is dropped as invalid and the card keeps its coloured edge on a
+ * plain background, which is exactly how this panel looked before the tints.
+ * The edge, the tag and the text carry the state either way.
+ */
+.flup-card-warn {
+  border-left: 3px solid var(--dsw-alias-state-warn-primary);
+  background: var(--dsw-alias-bg-layer-1); background: var(--flup-wash-warn);
+}
+.flup-card-ok {
+  border-left: 3px solid var(--dsw-alias-state-success-primary);
+  background: var(--dsw-alias-bg-layer-1); background: var(--flup-wash-ok);
+}
+.flup-card-accent {
+  border-left: 3px solid var(--dsw-alias-brand-primary);
+  background: var(--dsw-alias-bg-layer-1); background: var(--flup-wash-brand);
+}
+.flup-card-error {
+  border-left: 3px solid var(--dsw-alias-state-error-primary);
+  background: var(--dsw-alias-bg-layer-1); background: var(--flup-wash-error);
+}
+/*
+ * Placeholder bars shown while a request is in flight, sized like the content
+ * they stand in for so the layout does not jump when real data replaces them.
+ * The sweep is what distinguishes "still loading" from "loaded and empty",
+ * which a static grey block cannot say on its own.
+ */
+.flup-skel-wrap { padding: 4px 0 2px; }
+.flup-skel {
+  border-radius: 5px; height: 11px; margin: 7px 0;
+  background: linear-gradient(90deg,
+    var(--dsw-alias-bg-layer-1) 25%,
+    var(--dsw-alias-bg-layer-2) 37%,
+    var(--dsw-alias-bg-layer-1) 63%);
+  background-size: 200% 100%;
+  animation: flup-sweep 1.3s ease-in-out infinite;
+}
+/* An inline spinner for a button that is waiting on a round trip. */
+.flup-spin {
+  display: inline-block; width: 10px; height: 10px; flex: none;
+  border: 2px solid currentColor; border-right-color: transparent; border-radius: 50%;
+  animation: flup-spin 620ms linear infinite; vertical-align: -1px;
+}
 .flup-form { display: flex; flex-direction: column; gap: 10px; }
 .flup-field { display: flex; flex-direction: column; gap: 3px; }
 .flup-label { font-size: 11px; color: var(--dsw-alias-label-secondary); }
@@ -692,8 +832,45 @@ window.__ModuleLoader__.load({
       return 'var(--dsw-alias-state-idle-primary)'
     }
 
+    /**
+     * Statuses that mean a turn is executing right now.
+     *
+     * Deliberately narrower than the set `statusColor` paints with the brand
+     * accent: `prepared` is brand-coloured because it is healthy, but nothing
+     * is running yet, so it must not pulse. Keeping this list short is what
+     * stops motion from becoming ambient noise.
+     */
+    const LIVE_STATUSES = ['running', 'starting', 'interrupting']
+
     function Dot({ status }) {
-      return h('span', { className: 'flup-dot', style: { background: statusColor(status) }, 'aria-hidden': true })
+      const live = LIVE_STATUSES.includes(String(status || '').toLowerCase())
+      const color = statusColor(status)
+      return h('span', {
+        className: live ? 'flup-dot flup-dot-live' : 'flup-dot',
+        // `color` drives the halo through currentColor; `background` is the dot.
+        style: live ? { background: color, color } : { background: color },
+        'aria-hidden': true,
+      })
+    }
+
+    /**
+     * Placeholder bars for a block that is still loading.
+     *
+     * Announced through `role="status"` with a real label, because the sweep
+     * says "loading" only to someone who can see it. Bars vary in width so a
+     * stack of them reads as content taking shape rather than a progress bar.
+     */
+    function Skeleton({ rows = 3, label }) {
+      const widths = ['92%', '74%', '83%', '61%', '88%']
+      return h('div', { className: 'flup-skel-wrap', role: 'status', 'aria-label': label || undefined },
+        Array.from({ length: Math.max(1, rows) }, (unused, index) =>
+          h('div', { key: index, className: 'flup-skel', style: { width: widths[index % widths.length] } })),
+      )
+    }
+
+    /** A button label that shows a spinner while its request is in flight. */
+    function Pending({ label }) {
+      return h(React.Fragment, null, h('span', { className: 'flup-spin', 'aria-hidden': true }), ` ${label}`)
     }
 
     /** One status cell: a dot plus its word, linked when the source gives a URL. */
@@ -1171,7 +1348,14 @@ window.__ModuleLoader__.load({
             wsError ? h('p', { className: 'flup-err' }, wsError) : null,
           )
           : null,
-        row.error ? h('p', { className: 'flup-err' }, String(row.error)) : null,
+        // A task's own failure message gets the error-tinted card rather than a
+        // bare red line, so it carries the same weight as the sections around
+        // it instead of being the one piece of bad news with no surface.
+        row.error
+          ? h('div', { className: 'flup-card flup-card-error' },
+            h('h4', { className: 'flup-card-title' }, t.error),
+            h('p', { className: 'flup-err-inline', style: { margin: 0 } }, String(row.error)))
+          : null,
         Array.isArray(row.plan) && row.plan.length
           ? h('div', { className: 'flup-card' },
             h('h4', { className: 'flup-card-title' }, t.plan),
@@ -1239,7 +1423,7 @@ window.__ModuleLoader__.load({
           ? h('div', { className: 'flup-card' },
             h('h4', { className: 'flup-card-title' }, t.transcript),
             eventError ? h('p', { className: 'flup-err' }, `${t.error}: ${eventError}`) : null,
-            !events && !eventError ? h('p', { className: 'flup-empty' }, `${t.loading}…`) : null,
+            !events && !eventError ? h(Skeleton, { rows: 4, label: t.loading }) : null,
             events ? h(Transcript, { events, t }) : null,
           )
           : null,
@@ -1466,7 +1650,7 @@ window.__ModuleLoader__.load({
           error
             ? h('p', { className: 'flup-err' }, /branch limit/i.test(error) ? t.branchLimit : `${t.error}: ${error}`)
             : null,
-          !status && !error ? h('p', { className: 'flup-empty' }, `${t.loading}…`) : null,
+          !status && !error ? h(Skeleton, { rows: 5, label: t.loading }) : null,
           tab === 'backends' && status ? h(BackendTable, { status, t }) : null,
           tab === 'devices' ? h(DeviceTable, { devices, t }) : null,
           tab === 'tasks'
@@ -1608,7 +1792,7 @@ window.__ModuleLoader__.load({
                 type: 'button',
                 disabled: busy,
                 onClick: adopt,
-              }, busy ? `${t.loading}…` : t.repoAdopt),
+              }, busy ? h(Pending, { label: t.loading }) : t.repoAdopt),
             ),
         error ? h('p', { className: 'flup-err' }, `${t.error}: ${error}`) : null,
       )
@@ -1718,7 +1902,7 @@ window.__ModuleLoader__.load({
         ),
         h('p', { className: 'flup-meta', style: { marginTop: '6px' } }, t.createIntro),
 
-        !options && !error ? h('p', { className: 'flup-empty' }, `${t.loading}…`) : null,
+        !options && !error ? h(Skeleton, { rows: 3, label: t.loading }) : null,
 
         // No profile carrying a remote workspace means creation cannot work on
         // this deployment at all. Say that once, up front.
@@ -1900,7 +2084,7 @@ window.__ModuleLoader__.load({
             h('span', { className: check('configured') && check('configured').ok ? 'flup-ok' : 'flup-meta' },
               check('configured') && check('configured').ok ? t.deployAlready : t.reqMissing),
           ),
-          !preflight ? h('p', { className: 'flup-empty' }, `${t.loading}…`) : null,
+          !preflight ? h(Skeleton, { rows: 3, label: t.loading }) : null,
           preflight && repoCheck && !repoCheck.ok ? h('p', { className: 'flup-err' }, t.deployNeedRepo) : null,
           preflight && repoCheck && repoCheck.ok && scriptCheck && !scriptCheck.ok
             ? h('p', { className: 'flup-err' }, t.deployNeedScript)
@@ -1962,7 +2146,7 @@ window.__ModuleLoader__.load({
                   type: 'button',
                   disabled: busy || !complete,
                   onClick: submit,
-                }, busy ? t.deployRunning : t.deployRun),
+                }, busy ? h(Pending, { label: t.deployRunning }) : t.deployRun),
               ),
               done ? h('p', { className: 'flup-ok' }, t.deployDone) : null,
               error ? h('p', { className: 'flup-err' }, `${t.error}: ${error}`) : null,
@@ -2099,7 +2283,7 @@ window.__ModuleLoader__.load({
         h('h3', { className: 'flup-card-title' }, t.credTitle),
         h('p', { className: 'flup-meta' }, t.credIntro),
 
-        !state ? h('p', { className: 'flup-empty' }, `${t.loading}…`) : null,
+        !state ? h(Skeleton, { rows: 3, label: t.loading }) : null,
 
         state
           ? h('div', { style: { marginTop: '10px' } },
@@ -2292,7 +2476,7 @@ window.__ModuleLoader__.load({
 
           h('div', { className: 'flup-pane' },
             !state
-              ? h('div', { className: 'flup-body' }, h('p', { className: 'flup-empty' }, `${t.loading}…`))
+              ? h('div', { className: 'flup-body' }, h(Skeleton, { rows: 5, label: t.loading }))
               : selected === 'deploy'
                 ? h(DeployView, { t, onDone: load })
                 : project
@@ -2334,7 +2518,7 @@ window.__ModuleLoader__.load({
      * functions of their props and hold no credential, so exposing them costs
      * nothing; it is what lets the blocking rules be tested without a browser.
      */
-    globalThis.__probe = { TaskDetail, ProjectView, CreateTask, CredentialView, TaskTable, RepoCard, dictFor }
+    globalThis.__probe = { TaskDetail, ProjectView, CreateTask, CredentialView, TaskTable, RepoCard, dictFor, Dot, Skeleton, Pending }
 
     return {
       inject: ['slots'],
