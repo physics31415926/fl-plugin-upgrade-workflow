@@ -69,8 +69,10 @@ window.__ModuleLoader__.load({
         // Deploy flow
         deployTitle: 'Deploy on this machine',
         deployRailSetup: 'Start here: nothing is configured yet',
-        deployRailReady: 'Configure, restart, credentials',
+        deployRailCreds: 'Running, but a key is still missing',
+        deployRailDone: 'Setup and credentials',
         deployIntro: 'This plugin reads a local Python dashboard from the fl-plugin-upgrade-workflow checkout. Configure and start it here.',
+        deployRedoIntro: 'Setup is done. Run this again only to repoint the dashboard at a different checkout or branch.',
         deployNeedRepo: 'This plugin needs a local checkout of fl-plugin-upgrade-workflow, and none is configured yet.',
         deployWhereConfig: 'Clone it, then set repoPath to its absolute path: Plugins → FL adaptation workbench → configure. Reopen this panel afterwards.',
         deployNeedScript: 'The configured directory is not an fl-plugin-upgrade-workflow checkout: it has no scripts/configure.py.',
@@ -274,8 +276,10 @@ window.__ModuleLoader__.load({
         // Deploy flow
         deployTitle: '在本机部署',
         deployRailSetup: '从这里开始：还没有配置',
-        deployRailReady: '配置、重启、凭据',
+        deployRailCreds: '已在运行，但还缺密钥',
+        deployRailDone: '部署与凭据',
         deployIntro: '本插件读取 fl-plugin-upgrade-workflow 检出中的本地 Python 看板。可在此完成配置并启动。',
+        deployRedoIntro: '部署已完成。只有要把看板指向别的检出或分支时才需要再跑一次。',
         deployNeedRepo: '插件需要一份 fl-plugin-upgrade-workflow 的本地检出，现在还没有配置。',
         deployWhereConfig: '先 clone 下来，再把 repoPath 填成它的绝对路径：插件 → FL 适配工作台 → 配置。填完重新打开本面板。',
         deployNeedScript: '配置的目录不是 fl-plugin-upgrade-workflow 的检出：里面没有 scripts/configure.py。',
@@ -617,6 +621,20 @@ window.__ModuleLoader__.load({
   display: block; height: 1px; margin: 8px 10px 4px;
   background: var(--dsw-alias-border-l1);
 }
+/*
+ * The way back to a finished setup screen.
+ *
+ * Quieter than a rail entry on purpose: setup is done, so this is a door
+ * rather than a destination. It replaces the entry in the same bottom
+ * position, which keeps the rail from reflowing when setup completes.
+ */
+.flup-rail-link {
+  appearance: none; background: none; border: 0; cursor: pointer;
+  text-align: left; padding: 8px 10px; font: inherit; font-size: 11px;
+  color: var(--dsw-alias-label-secondary); border-radius: 7px;
+}
+.flup-rail-link:hover { color: var(--dsw-alias-label-primary); background: var(--dsw-alias-bg-layer-2); }
+.flup-rail-link:focus-visible { outline: 2px solid var(--dsw-alias-brand-primary); outline-offset: 1px; }
 .flup-pane { flex: 1 1 auto; min-width: 0; display: flex; flex-direction: column; min-height: 0; }
 .flup-sub {
   display: flex; align-items: center; gap: 6px 14px; flex-wrap: wrap;
@@ -2370,10 +2388,20 @@ window.__ModuleLoader__.load({
       const chosen = Object.entries(picked)
       const complete = chosen.length > 0 && chosen.every(([, value]) => value.repoPath.trim() && value.branch.trim())
 
+      /*
+       * Once the dashboard is configured, the wizard has nothing left to ask
+       * and the credentials are the only outstanding step, so they lead. The
+       * configure card stays below, collapsed into a one-line summary: it is
+       * how a deployment gets repaired or repointed later, but it is no longer
+       * what the screen is about.
+       */
+      const deployed = Boolean(check('configured') && check('configured').ok)
+
       return h('div', { className: 'flup-body' },
+        deployed ? h(CredentialView, { t, project: (preflight && preflight.projects || [])[0] }) : null,
         h('div', { className: 'flup-card' },
           h('h3', { className: 'flup-card-title' }, t.deployTitle),
-          h('p', { className: 'flup-meta' }, t.deployIntro),
+          h('p', { className: 'flup-meta' }, deployed ? t.deployRedoIntro : t.deployIntro),
           h('p', { className: 'flup-meta', style: { marginTop: '8px' } },
             `${t.reqRepo}: `,
             h('span', { className: repoCheck && repoCheck.ok ? 'flup-ok' : 'flup-err' },
@@ -2482,8 +2510,10 @@ window.__ModuleLoader__.load({
           : null,
 
         // Credentials are independent of configure: the repo's own wizard
-        // accepts none, so they are collected separately or not at all.
-        h(CredentialView, { t, project: (preflight && preflight.projects || [])[0] }),
+        // accepts none, so they are collected separately or not at all. Shown
+        // after the wizard only before a deployment exists, where configuring
+        // is the first step; afterwards they lead the screen instead.
+        deployed ? null : h(CredentialView, { t, project: (preflight && preflight.projects || [])[0] }),
       )
     }
 
@@ -2686,21 +2716,34 @@ window.__ModuleLoader__.load({
       const [selected, setSelected] = React.useState(null)
       const [error, setError] = React.useState(null)
       const [busy, setBusy] = React.useState(false)
+      const [setup, setSetup] = React.useState(null)
 
       const load = React.useCallback(async () => {
         try {
           const next = await callJson(`${BASE}state`)
           setState(next)
           setError(null)
+          // Whether setup is still outstanding decides whether its entry
+          // exists. Null until the answer arrives, so the rail does not flash
+          // an entry that is about to disappear.
+          const outstanding = await callJson(`${BASE}setup-state`).catch(() => null)
+          setSetup(outstanding)
           const list = await callJson(`${BASE}projects`).catch(() => null)
           const rows = (list && Array.isArray(list.projects)) ? list.projects : []
           setProjects(rows)
           setSelected(current => {
             // The entries that are not projects keep their selection across a
             // reload: they do not depend on the project list at all.
-            if (current === 'deploy' || current === 'devices') return current
+            if (current === 'devices') return current
+            // Setup is the exception: once it is finished its entry is gone,
+            // so staying on it would leave the user on an unreachable view.
+            if (current === 'deploy') {
+              if (!outstanding || !outstanding.complete) return current
+              return rows.length ? rows[0].id : 'devices'
+            }
             if (current && rows.some(row => row.id === current)) return current
-            return rows.length ? rows[0].id : 'deploy'
+            if (rows.length) return rows[0].id
+            return outstanding && outstanding.complete ? 'devices' : 'deploy'
           })
         } catch (failure) {
           setError(String(failure.message))
@@ -2805,20 +2848,41 @@ window.__ModuleLoader__.load({
               h('span', null, t.tabDevices),
               h('span', { className: 'flup-rail-sub' }, t.devicesRailSub),
             ),
-            // Filled while nothing is configured, because every other view is
-            // empty until this one has been used; outlined once a dashboard
-            // exists, where it is useful but no longer the next step.
-            h('button', {
-              className: `flup-rail-btn ${configured ? 'flup-rail-cta' : 'flup-rail-cta-urgent'}`,
-              type: 'button',
-              'aria-current': selected === 'deploy',
-              onClick: () => setSelected('deploy'),
-              style: { marginTop: 'auto' },
-            },
-              h('span', null, t.deployTitle),
-              h('span', { className: 'flup-rail-sub' },
-                configured ? t.deployRailReady : t.deployRailSetup),
-            ),
+            /*
+             * Setup, only while setup is unfinished.
+             *
+             * It used to sit here permanently, which made a solved problem
+             * occupy a rail slot forever. Once the dashboard runs and the
+             * collectable credentials are in place there is nothing to do in
+             * it, so it goes away — and because it goes away, "finished" has
+             * to include the credentials: a deployment that runs but cannot
+             * start a task would otherwise hide its own remaining step.
+             *
+             * Still reachable afterwards from the running view, for the case
+             * where something breaks later.
+             */
+            setup && !setup.complete
+              ? h('button', {
+                className: `flup-rail-btn ${configured ? 'flup-rail-cta' : 'flup-rail-cta-urgent'}`,
+                type: 'button',
+                'aria-current': selected === 'deploy',
+                onClick: () => setSelected('deploy'),
+                style: { marginTop: 'auto' },
+              },
+                h('span', null, t.deployTitle),
+                h('span', { className: 'flup-rail-sub' },
+                  configured ? t.deployRailCreds : t.deployRailSetup),
+              )
+              : null,
+            // After setup the entry is gone, so this is the way back to it.
+            setup && setup.complete && selected !== 'deploy'
+              ? h('button', {
+                className: 'flup-rail-link',
+                type: 'button',
+                onClick: () => setSelected('deploy'),
+                style: { marginTop: 'auto' },
+              }, t.deployRailDone)
+              : null,
           ),
 
           h('div', { className: 'flup-pane' },
