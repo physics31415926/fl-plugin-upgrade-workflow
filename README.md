@@ -21,11 +21,26 @@
 ## 安装
 
 准备 **Python 3.11+ 和 Git**（看板只用 Python 标准库，不需要 pip 装依赖，也不需要 GPU
-环境）。从 [Releases](../../releases) 下载 `local-fl-upgrade-workflow-<版本>.tgz`，在
-Harness 里安装：
+环境）。从 [Releases](../../releases) 下载 `local-fl-upgrade-workflow-<版本>.tgz`。
+
+**在界面里装**（推荐，不用开终端）：左侧边栏点**插件** → **添加插件**，在「包名或地址」
+里填刚下载的那个 `.tgz` 的**绝对路径**，然后点**安装**：
+
+```text
+C:\Users\<你>\Downloads\local-fl-upgrade-workflow-0.1.0.tgz
+```
+
+这个输入框是文本框，不是文件选择器，所以路径要自己粘进去（在文件管理器里复制文件路径
+即可）。Linux / macOS 同理，填 `/home/<你>/Downloads/...`。
+
+**必须是绝对路径。** `./xxx.tgz` 会被直接拒绝；只填文件名 `xxx.tgz` 更麻烦 —— 它会被
+当成 npm 包名去注册表上找，然后报「未找到相关插件」，看起来像是包坏了，其实只是路径
+没写全。
+
+**或者用命令行**：
 
 ```sh
-dsh plugin install ./local-fl-upgrade-workflow-0.1.0.tgz
+dsh plugin install /绝对路径/local-fl-upgrade-workflow-0.1.0.tgz
 ```
 
 也可以自己打包，产物与发布的一致（纯标准库，不需要 Node）：

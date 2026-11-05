@@ -7,11 +7,17 @@
 
 ## 安装
 
+在界面里装：左侧边栏点**插件** → **添加插件**，在「包名或地址」里填 `.tgz` 的**绝对
+路径**，再点**安装**。那是个文本框而不是文件选择器，路径需要自己粘进去。相对路径会被
+拒绝；只填文件名会被当成 npm 包名，报「未找到」而不是路径错误。
+
+也可以用命令行：
+
 ```
-dsh plugin install ./deepseek-fl-upgrade-workflow-0.1.0.tgz
+dsh plugin install /绝对路径/local-fl-upgrade-workflow-0.1.0.tgz
 ```
 
-或在 Harness 里用插件管理安装这个 tgz。安装后必须填 `repoPath`：
+安装后必须填 `repoPath`：
 
 | 配置项 | 说明 |
 | --- | --- |
