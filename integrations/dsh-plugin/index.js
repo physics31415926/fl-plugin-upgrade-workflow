@@ -899,6 +899,41 @@ export function apply(ctx, rawConfig) {
   }
 
   /**
+   * Whether setup still needs the user, and what for.
+   *
+   * The panel hides the setup entry once nothing is outstanding, so "nothing
+   * is outstanding" has to mean more than "the dashboard runs". A deployment
+   * with no agent credential runs fine and cannot start a task, which is a
+   * worse place to be stranded than an unconfigured one, since the panel looks
+   * finished. Deciding it here keeps the rule in one place.
+   *
+   * Only a missing *collectable* secret counts. Codex authenticates through
+   * its own CLI and GitHub is read from the environment, so neither can be
+   * finished from this panel and neither keeps the entry alive.
+   */
+  async function setupState(projectId) {
+    const preflight = deployPreflight()
+    const outstanding = preflight.checks.filter(check => !check.ok).map(check => check.id)
+    if (preflight.ready) {
+      try {
+        const credentials = await credentialState(projectId || preflight.projects[0].id)
+        const claude = credentials?.claude
+        // An unavailable interpreter is not a missing secret: typing a key
+        // does not install a package, so it must not block completion.
+        if (claude && claude.available && !claude.configured) outstanding.push('claude-key')
+        const jump = credentials?.jumpserver
+        if (credentials?.machineSource === 'jumpserver' && jump?.enabled && !jump.authenticated) {
+          outstanding.push('jumpserver-password')
+        }
+      } catch {
+        // Credential readiness needs the dashboard. If it cannot be asked, the
+        // deployment checks alone decide, rather than reporting a false need.
+      }
+    }
+    return { complete: outstanding.length === 0, outstanding }
+  }
+
+  /**
    * Validate one deploy request field as a safe scalar for argv.
    *
    * argv is passed as an array, never a shell string, so quoting is not the
@@ -1280,6 +1315,19 @@ export function apply(ctx, rawConfig) {
         }
         if (req.method === 'GET' && action === 'deploy-preflight') {
           sendJson(res, 200, deployPreflight())
+          return
+        }
+
+        /*
+         * Whether the panel should still offer its setup entry.
+         *
+         * Separate from `deploy-preflight`, which the setup view polls while
+         * the user works in it. This one is asked once per panel mount to
+         * decide whether that view is reachable at all, so it stays cheap and
+         * carries no project inputs.
+         */
+        if (req.method === 'GET' && action === 'setup-state') {
+          sendJson(res, 200, await setupState(scalar(url.searchParams.get('project'))))
           return
         }
 

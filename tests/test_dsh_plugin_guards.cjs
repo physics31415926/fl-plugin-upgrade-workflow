@@ -65,3 +65,71 @@ test('the panel never renders an upstream field that carries machine identity',(
   const summary=host.slice(host.indexOf('title: taskLabel(task)'),host.indexOf('pending_count:'));
   assert.equal(/worktree|ssh_|remote_workspace|rollout_path/.test(summary),false,'projection must not emit machine identity');
 });
+
+test('setup counts as finished only when nothing is left to type',async()=>{
+  // The panel hides the setup entry on `complete`, so this decides whether a
+  // step can still be reached. The live machine can only ever show the
+  // all-done state, which is the one branch that hides the entry.
+  const vm=require('node:vm');
+  const a=host.indexOf('  async function setupState(');
+  const b=host.indexOf('\n  }',a)+4;
+  assert(a>0&&b>a,'cannot locate setupState');
+  const body=host.slice(a,b);
+  const run=(preflight,credentials)=>{
+    const context={
+      deployPreflight:()=>preflight,
+      credentialState:async()=>{if(credentials==='throw')throw new Error('dashboard down');return credentials;},
+    };
+    vm.createContext(context);
+    vm.runInContext(body+'\nthis.go=setupState;',context);
+    return context.go(null);
+  };
+  const ready={ready:true,checks:[{id:'repo',ok:true},{id:'configure-script',ok:true},{id:'configured',ok:true}],projects:[{id:'vllm'}]};
+  const unready={ready:false,checks:[{id:'repo',ok:false},{id:'configure-script',ok:false},{id:'configured',ok:false}],projects:[{id:'vllm'}]};
+  const done={claude:{available:true,configured:true},machineSource:'jumpserver',jumpserver:{enabled:true,authenticated:true}};
+
+  // Objects built inside the VM have that realm's prototype, so `strict`
+  // deep equality rejects them; compare the fields instead.
+  const shape=async(...args)=>{const r=await run(...args);return {complete:r.complete,outstanding:[...r.outstanding]};};
+
+  assert.deepEqual(await shape(ready,done),{complete:true,outstanding:[]});
+  assert.deepEqual((await shape(unready,done)).outstanding,['repo','configure-script','configured']);
+
+  // A running dashboard with no agent key cannot start a task, so it is not
+  // finished — this is the case that made credentials part of the decision.
+  assert.deepEqual((await shape(ready,{...done,claude:{available:true,configured:false}})).outstanding,['claude-key']);
+  assert.deepEqual((await shape(ready,{...done,jumpserver:{enabled:true,authenticated:false}})).outstanding,['jumpserver-password']);
+
+  // Typing a key does not install a missing interpreter package, so an
+  // unavailable agent must not keep the entry alive forever.
+  assert.equal((await run(ready,{...done,claude:{available:false,configured:false}})).complete,true);
+  // SSH-sourced machines never need a bastion login.
+  assert.equal((await run(ready,{...done,machineSource:'ssh',jumpserver:{enabled:true,authenticated:false}})).complete,true);
+  // Credential readiness needs the dashboard; if it cannot be asked, the
+  // deployment checks alone decide rather than reporting a false need.
+  assert.equal((await run(ready,'throw')).complete,true);
+});
+
+test('a finished setup is still reachable',()=>{
+  // Hiding the entry must not strand a deployment that breaks later.
+  assert(/setup && !setup\.complete/.test(client),'the entry is conditional');
+  assert(/setup && setup\.complete && selected !== 'deploy'/.test(client),'a way back exists');
+  assert(client.includes('deployRailDone'),'the way back is labelled');
+  // Staying on a view whose entry just disappeared would leave the user on an
+  // unreachable screen, so selection moves off it.
+  // Anchor on the updater itself. `} catch (failure)` occurs earlier in the
+  // file, so slicing to it scanned a region that does not contain this logic
+  // and the assertion passed on the wrong text.
+  const open=client.indexOf('setSelected(current => {');
+  assert(open>0,'cannot locate the selection updater');
+  const sel=client.slice(open,client.indexOf('\n          })',open));
+  // Checking that both strings merely appear somewhere in this region is too
+  // weak: `if (current === 'deploy') return current` satisfies it while
+  // stranding the user. The escape has to be inside the deploy branch.
+  const branch=sel.slice(sel.indexOf("if (current === 'deploy')"));
+  assert(branch,'the finished setup view is special-cased');
+  assert.equal(/^if \(current === 'deploy'\) return current/.test(branch),false,
+    'a finished setup view must not keep the selection');
+  assert(/outstanding\.complete/.test(branch.slice(0,240)),
+    'the deploy branch itself consults the setup state');
+});
