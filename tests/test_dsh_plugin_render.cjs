@@ -98,13 +98,28 @@ const MACHINE = {
   id: 'jms-a', label: 'host-alpha', backend: 'cuda', role: 'compute',
   usable: true, hasWorkspace: true, backendVerified: true, configError: null,
 }
-// One GPU host as the device route reports it. Distinct from MACHINE above:
+// GPU hosts as the device route reports them. Distinct from MACHINE above:
 // that is the create-task machine profile, which carries configuration rather
 // than live counters.
+//
+// Verdicts use the upstream vocabulary (free, partial, busy, residual,
+// unknown, down); `accel` carries the per-metric card counts and the model
+// name. Two backends, so the filter has something to separate.
 const HOST = {
-  id: 'jms-a', label: 'host-alpha', backend: 'cuda', verdict: 'ready',
-  stale: false, accel: { free: 4, total: 8 },
+  id: 'jms-a', label: 'host-alpha', backend: 'cuda', verdict: 'free',
+  stale: false, accel: { card_name: 'NVIDIA A100-SXM4-40GB', total: 8, free: 4, busy: 4, unknown: 0, residual: 0 },
 }
+const FLEET = [
+  HOST,
+  {
+    id: 'jms-b', label: 'host-beta', backend: 'cuda', verdict: 'busy',
+    stale: false, accel: { card_name: 'NVIDIA A100-SXM4-40GB', total: 8, free: 0, busy: 8, unknown: 0, residual: 0 },
+  },
+  {
+    id: 'jms-c', label: 'host-gamma', backend: 'ascend', verdict: 'partial',
+    stale: true, accel: { card_name: 'Ascend 910B', total: 16, free: 2, busy: 12, unknown: 2, residual: 0 },
+  },
+]
 const OPTIONS = {
   available: true, defaultBranch: '0.4.0-dev', backends: ['cuda'],
   machines: [MACHINE], policies: {}, takenPairs: [],
@@ -393,7 +408,7 @@ const REPO = {
   // sit beside the per-branch views, and must not carry a branch picker.
   const tree = render(probe.DeviceView, { t, project: { id: 'vllm' }, running: true }, [
     { host_count: 2, updated_at: '2026-01-01T00:00:00Z', hosts: [HOST] },
-    null, false,
+    null, false, null,
   ])
   const body = text(tree)
   check('the device view states why it has no branch', /not tied to a project or a branch/.test(body))
@@ -403,49 +418,126 @@ const REPO = {
   // table is asserted by its presence here and by its own render below.
   check('the device view mounts the host table', find(tree, probe.DeviceTable).length === 1)
 }
+// Device view state order: devices, error, busy, backend.
+const FLEET_BODY = { host_count: 3, updated_at: '2026-01-01T00:00:00Z', hosts: FLEET }
 {
-  // Fleet counters are shown as ratios: "293 free" means nothing without the
-  // total it is drawn from, so a bare count is a regression.
+  // Counters are shown as ratios: "4 free" means nothing without the total it
+  // is drawn from, so a bare count is a regression.
+  const tree = render(probe.DeviceView, { t, project: { id: 'vllm' }, running: true }, [FLEET_BODY, null, false, null])
+  const body = text(tree)
+  // One of three hosts has verdict free and is not stale.
+  check('idle hosts are shown against the total', /1\/3/.test(body))
+  // free 4+0+2 of total 8+8+16.
+  check('free cards are shown against the total', /6\/32/.test(body))
+  check('unreadable cards are called out', body.includes(t.statUnknown) && /\b2\b/.test(body))
+  check('stale hosts are called out', body.includes(t.statStale))
+}
+{
+  // The upstream summary describes the whole fleet, so it must not be used:
+  // it would report 57 hosts above a table of three.
   const tree = render(probe.DeviceView, { t, project: { id: 'vllm' }, running: true }, [
-    {
-      host_count: 57,
-      updated_at: '2026-01-01T00:00:00Z',
-      hosts: [HOST],
-      summary: {
-        hosts: 57, online: 57, free_hosts: 22, total_cards: 576,
-        free_cards: 293, busy_cards: 271, unknown_cards: 12, residual_cards: 6,
-      },
-    },
-    null, false,
+    { ...FLEET_BODY, summary: { hosts: 57, online: 57, free_hosts: 22, total_cards: 576, free_cards: 293, unknown_cards: 99 } },
+    null, false, null,
   ])
   const body = text(tree)
-  check('online hosts are shown against the total', /57\/57/.test(body))
-  check('idle hosts are shown against the total', /22\/57/.test(body))
-  check('free cards are shown against the total', /293\/576/.test(body))
-  check('unreadable cards are called out', body.includes(t.statUnknown) && /12/.test(body))
+  check('the headline ignores the fleet-wide summary', !/57|293\/576/.test(body))
+  check('the headline counts only the hosts on screen', /1\/3/.test(body) && /6\/32/.test(body))
 }
 {
   // Zero unreadable cards is the normal case; a permanent "unknown 0" would
   // train the eye to skip the line, so it is omitted entirely.
   const tree = render(probe.DeviceView, { t, project: { id: 'vllm' }, running: true }, [
-    { host_count: 1, hosts: [HOST], summary: { hosts: 1, online: 1, free_hosts: 1, total_cards: 8, free_cards: 8, unknown_cards: 0 } },
-    null, false,
+    { host_count: 1, hosts: [HOST] }, null, false, null,
   ])
-  check('no unreadable-card notice when there are none', !text(tree).includes(t.statUnknown))
+  const body = text(tree)
+  check('no unreadable-card notice when there are none', !body.includes(t.statUnknown))
+  check('no stale notice when nothing is stale', !body.includes(t.statStale))
 }
 {
-  // A summary the dashboard has not filled in yet must not render "undefined".
+  // An empty or not-yet-populated payload must not render "undefined"/"NaN".
+  for (const [label, payload] of [['empty', { host_count: 0, hosts: [] }], ['bare', {}]]) {
+    const tree = render(probe.DeviceView, { t, project: { id: 'vllm' }, running: true }, [payload, null, false, null])
+    check('a ' + label + ' payload renders no undefined text', !/undefined|NaN/.test(text(tree)))
+  }
+}
+
+// --- the backend filter ---
+{
+  const tree = render(probe.DeviceView, { t, project: { id: 'vllm' }, running: true }, [FLEET_BODY, null, false, null])
+  const chips = find(tree, 'button').filter(b => b.props.className && b.props.className.includes('flup-chip'))
+  const labels = chips.map(c => text(c).trim())
+  check('the filter offers one chip per backend plus all', chips.length === 3)
+  check('the all-hardware chip carries the fleet size', labels.includes(`${t.allBackends} (3)`))
+  // Ordered by host count, so the vendors with most machines come first.
+  check('backend chips carry their host counts', labels[1] === 'cuda (2)' && labels[2] === 'ascend (1)')
+  check('all hardware is selected by default', chips[0].props['aria-pressed'] === true)
+  check('no backend chip is pressed by default', chips.slice(1).every(c => c.props['aria-pressed'] === false))
+}
+{
+  // Selecting a backend narrows the table and the headline together.
+  const tree = render(probe.DeviceView, { t, project: { id: 'vllm' }, running: true }, [FLEET_BODY, null, false, 'ascend'])
+  const body = text(tree)
+  const table = find(tree, probe.DeviceTable)[0]
+  check('a selected backend narrows the host list', table.props.hosts.length === 1)
+  check('a selected backend keeps only its own hosts', table.props.hosts[0].backend === 'ascend')
+  // The one ascend host is partial and stale, so no host counts as idle.
+  check('the headline follows the selection', /0\/1/.test(body) && /2\/16/.test(body))
+  const chips = find(tree, 'button').filter(b => b.props.className && b.props.className.includes('flup-chip'))
+  check('the selected chip is pressed', chips.find(c => text(c).includes('ascend')).props['aria-pressed'] === true)
+  check('the all chip is not pressed while filtering', chips[0].props['aria-pressed'] === false)
+}
+{
+  // A filter pinned to a backend that has left the fleet would show an empty
+  // table with no way to tell why, so it falls back to showing everything.
+  const tree = render(probe.DeviceView, { t, project: { id: 'vllm' }, running: true }, [FLEET_BODY, null, false, 'gone'])
+  const table = find(tree, probe.DeviceTable)[0]
+  check('an unknown backend falls back to the whole fleet', table.props.hosts.length === 3)
+  const chips = find(tree, 'button').filter(b => b.props.className && b.props.className.includes('flup-chip'))
+  check('the all chip is pressed after a fallback', chips[0].props['aria-pressed'] === true)
+}
+{
+  // The bastion labels hardware bilingually ("NVIDIA / 英伟达"), which is fine
+  // in a table cell and far too wide for a chip: thirteen of them wrapped to
+  // six lines at a narrow panel width. Each chip shows the half matching the
+  // active locale, with the full name on the title attribute.
+  const en = probe.dictFor(null)
+  const zh = probe.dictFor({ getSnapshot: () => ({ active: 'zh-CN' }) })
+  check('an english panel keeps the latin half', probe.shortBackend('NVIDIA / 英伟达', en) === 'NVIDIA')
+  check('a chinese panel keeps the CJK half', probe.shortBackend('NVIDIA / 英伟达', zh) === '英伟达')
+  check('a multi-word vendor still splits', probe.shortBackend('Moore Threads / 摩尔线程', en) === 'Moore Threads')
+  // Anything that is not exactly "latin / CJK" is returned untouched, so a
+  // vendor that adds a name or drops the separator is not truncated.
+  for (const odd of ['cuda', '', 'A / B / C', 'NVIDIA /', 'Ascend / 昇腾 / 910']) {
+    check('an unsplittable name passes through: ' + JSON.stringify(odd), probe.shortBackend(odd, zh) === odd)
+  }
   const tree = render(probe.DeviceView, { t, project: { id: 'vllm' }, running: true }, [
-    { host_count: 0, hosts: [] }, null, false,
+    { host_count: 1, hosts: [{ ...HOST, backend: 'NVIDIA / 英伟达' }, { ...HOST, id: 'x', backend: 'Ascend / 昇腾' }] },
+    null, false, null,
   ])
-  check('a missing summary renders no undefined text', !/undefined|NaN/.test(text(tree)))
+  const chips = find(tree, 'button').filter(b => b.props.className && b.props.className.includes('flup-chip'))
+  const vendor = chips.find(c => text(c).includes('NVIDIA'))
+  check('a chip shortens its label', text(vendor).trim() === 'NVIDIA (1)')
+  check('a chip keeps the full name in its title', vendor.props.title === 'NVIDIA / 英伟达')
 }
 {
-  const table = render(probe.DeviceTable, { devices: { hosts: [HOST] }, t })
+  // A single-vendor fleet has nothing to filter, so the row is not drawn.
+  const tree = render(probe.DeviceView, { t, project: { id: 'vllm' }, running: true }, [
+    { host_count: 1, hosts: [HOST] }, null, false, null,
+  ])
+  const chips = find(tree, 'button').filter(b => b.props.className && b.props.className.includes('flup-chip'))
+  check('one backend draws no filter row', chips.length === 0)
+}
+{
+  const table = render(probe.DeviceTable, { hosts: FLEET, t })
   const body = text(table)
-  check('the host table names each host', /host-alpha/.test(body))
-  check('the host table shows free cards', /4\/8/.test(body))
-  check('the host table states each verdict', /ready/.test(body))
+  check('the host table names each host', /host-alpha/.test(body) && /host-gamma/.test(body))
+  check('the host table shows free cards against the total', /4\/8/.test(body))
+  check('the host table states each verdict', /free/.test(body) && /partial/.test(body))
+  check('the host table names the card model', /A100-SXM4-40GB/.test(body))
+  // Stale data looks identical to fresh data otherwise, and acting on a stale
+  // free count is how two tasks land on one machine.
+  check('the host table marks a stale host', body.includes(t.stale))
+  check('an empty host list says so', text(render(probe.DeviceTable, { hosts: [], t })).includes(t.noDevices))
 }
 {
   // A down dashboard must say so rather than render an empty fleet, which
