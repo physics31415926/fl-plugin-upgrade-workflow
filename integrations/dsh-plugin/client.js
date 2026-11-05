@@ -71,8 +71,10 @@ window.__ModuleLoader__.load({
         deployRailSetup: 'Start here: nothing is configured yet',
         deployRailReady: 'Configure, restart, credentials',
         deployIntro: 'This plugin reads a local Python dashboard from the fl-plugin-upgrade-workflow checkout. Configure and start it here.',
-        deployNeedRepo: 'Set repoPath in the plugin configuration to the fl-plugin-upgrade-workflow checkout, then reload.',
-        deployNeedScript: 'That path is not an fl-plugin-upgrade-workflow checkout (scripts/configure.py is missing).',
+        deployNeedRepo: 'This plugin needs a local checkout of fl-plugin-upgrade-workflow, and none is configured yet.',
+        deployWhereConfig: 'Clone it, then set repoPath to its absolute path: Plugins → FL adaptation workbench → configure. Reopen this panel afterwards.',
+        deployNeedScript: 'The configured directory is not an fl-plugin-upgrade-workflow checkout: it has no scripts/configure.py.',
+        deployFoundDir: 'Configured directory',
         deployPickProjects: 'Choose the projects to track, and give each one a local plugin checkout and target branch.',
         deployRepoPath: 'Plugin checkout path',
         deployRemote: 'Remote',
@@ -274,8 +276,10 @@ window.__ModuleLoader__.load({
         deployRailSetup: '从这里开始：还没有配置',
         deployRailReady: '配置、重启、凭据',
         deployIntro: '本插件读取 fl-plugin-upgrade-workflow 检出中的本地 Python 看板。可在此完成配置并启动。',
-        deployNeedRepo: '请在插件配置中把 repoPath 设为 fl-plugin-upgrade-workflow 的检出路径，然后刷新。',
-        deployNeedScript: '该路径不是 fl-plugin-upgrade-workflow 检出（缺少 scripts/configure.py）。',
+        deployNeedRepo: '插件需要一份 fl-plugin-upgrade-workflow 的本地检出，现在还没有配置。',
+        deployWhereConfig: '先 clone 下来，再把 repoPath 填成它的绝对路径：插件 → FL 适配工作台 → 配置。填完重新打开本面板。',
+        deployNeedScript: '配置的目录不是 fl-plugin-upgrade-workflow 的检出：里面没有 scripts/configure.py。',
+        deployFoundDir: '当前配置的目录',
         deployPickProjects: '选择需要跟踪的项目，并为每个项目填写本地插件检出路径和目标分支。',
         deployRepoPath: '插件检出路径',
         deployRemote: 'Remote',
@@ -778,6 +782,25 @@ window.__ModuleLoader__.load({
 .flup-warn {
   margin: 10px 0 0; font-size: 12px; padding: 8px 10px; border-radius: 6px;
   border: 1px solid var(--dsw-alias-state-warn-primary); color: var(--dsw-alias-label-primary);
+}
+.flup-warn p { margin: 0; }
+/*
+ * A blocking setup problem rather than a caution.
+ *
+ * Tinted as well as bordered: this is the one thing on a first-run screen the
+ * user has to act on, so it should read as a stop, not as a footnote. The text
+ * carries the instruction, so the colour is never the only signal.
+ */
+.flup-warn-err {
+  border-color: var(--dsw-alias-state-error-primary);
+  background: var(--dsw-alias-bg-layer-2);
+  background: color-mix(in srgb, var(--dsw-alias-state-error-primary) 7%, var(--dsw-alias-bg-layer-1));
+}
+.flup-warn-lead { font-weight: 600; }
+.flup-code-inline {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 11px; padding: 1px 5px; border-radius: 4px;
+  background: var(--dsw-alias-bg-layer-2); word-break: break-all;
 }
 .flup-events {
   margin: 0; padding: 0; list-style: none; font-size: 12px; line-height: 1.55;
@@ -2361,9 +2384,36 @@ window.__ModuleLoader__.load({
               check('configured') && check('configured').ok ? t.deployAlready : t.reqMissing),
           ),
           !preflight ? h(Skeleton, { rows: 3, label: t.loading }) : null,
-          preflight && repoCheck && !repoCheck.ok ? h('p', { className: 'flup-err' }, t.deployNeedRepo) : null,
+          /*
+           * What is wrong, and where to fix it.
+           *
+           * `repoPath` lives in the plugin's own configuration, which is a
+           * file most people have never opened, so naming the setting alone
+           * leaves them stuck. The route reports which of the two distinct
+           * failures happened — no path at all, or a path that is not this
+           * project — and each gets its own instruction.
+           */
+          preflight && repoCheck && !repoCheck.ok
+            ? h('div', { className: 'flup-warn flup-warn-err' },
+              h('p', { className: 'flup-warn-lead' }, t.deployNeedRepo),
+              h('p', { className: 'flup-meta', style: { marginTop: '6px' } }, t.deployWhereConfig),
+              // The clone is the actual first step, so give the command rather
+              // than leaving the user to find the repository themselves. Shown
+              // as copyable text: the plugin never runs a clone itself.
+              h('code', { className: 'flup-code' },
+                'git clone https://github.com/physics31415926/fl-plugin-upgrade-workflow'),
+            )
+            : null,
           preflight && repoCheck && repoCheck.ok && scriptCheck && !scriptCheck.ok
-            ? h('p', { className: 'flup-err' }, t.deployNeedScript)
+            ? h('div', { className: 'flup-warn flup-warn-err' },
+              h('p', { className: 'flup-warn-lead' }, t.deployNeedScript),
+              // The directory name is the one identifying detail the browser
+              // is allowed, and it is what tells the user they picked wrong.
+              repoCheck.detail
+                ? h('p', { className: 'flup-meta', style: { marginTop: '6px' } },
+                  `${t.deployFoundDir}: `, h('code', { className: 'flup-code-inline' }, String(repoCheck.detail)))
+                : null,
+            )
             : null,
         ),
 

@@ -609,6 +609,15 @@ export function apply(ctx, rawConfig) {
   let current = null
   let lastError = null
 
+  /*
+   * The dashboard's own stdout and stderr, as diagnostics for a failed start.
+   *
+   * Redacted, because this is the least predictable text the plugin forwards.
+   * A Python traceback names every file on the way down, a config error quotes
+   * the path it could not read, and an SSH failure can name a host — none of
+   * which the browser needs in order to show that the process died. Keeping
+   * the message while dropping the path is the whole point of `redactText`.
+   */
   function readOutput(handle) {
     const parts = []
     for (const reader of [handle.collected?.stdout, handle.collected?.stderr]) {
@@ -620,7 +629,7 @@ export function apply(ctx, rawConfig) {
         // A reader that cannot be read yields no diagnostics; keep the rest.
       }
     }
-    return parts.join('\n').slice(-8000)
+    return redactText(parts.join('\n').slice(-8000), 8000) ?? ''
   }
 
   /**
@@ -665,10 +674,18 @@ export function apply(ctx, rawConfig) {
     const launch = resolveLaunch(config)
     return {
       port: config.port,
-      repoPath: config.repoPath,
+      /*
+       * Whether a checkout is configured, never where it is.
+       *
+       * The panel only ever needs the boolean: it decides whether to show the
+       * setup prompt. Sending the path put an absolute filesystem path — and
+       * the account name inside it — into every browser payload, which is
+       * exactly what this plugin says it does not do. `expected` is dropped
+       * for the same reason; the panel names the file, not its location.
+       */
+      repoConfigured: Boolean(config.repoPath),
       configured: launch.configured === true,
       configReason: launch.configured ? null : (launch.reason ?? 'unknown'),
-      configExpected: launch.expected ?? null,
       launchSource: launch.source ?? null,
       // An adopted dashboard is reachable but not owned, so the panel offers
       // no stop control for it.
@@ -863,7 +880,9 @@ export function apply(ctx, rawConfig) {
   function deployPreflight() {
     const checks = []
     const repoOk = Boolean(config.repoPath) && existsSync(config.repoPath)
-    checks.push({ id: 'repo', ok: repoOk, detail: config.repoPath || null })
+    // The directory's own name is enough to recognise the checkout; the path
+    // to it is not the browser's business.
+    checks.push({ id: 'repo', ok: repoOk, detail: repoOk ? basename(config.repoPath) : null })
     const entry = repoOk ? join(config.repoPath, 'scripts', 'configure.py') : ''
     checks.push({ id: 'configure-script', ok: Boolean(entry) && existsSync(entry) })
     const launch = resolveLaunch(config)

@@ -65,3 +65,59 @@ test('transcript events expose agent prose only',()=>{
   // An event with no prose still reaches the panel, which labels it.
   assert.equal(out[1].text,null);
 });
+
+test('the plugin does not send its own configured paths to the browser',()=>{
+  // Redaction covers agent prose, but the plugin's own payloads were building
+  // `repoPath` straight from config. An absolute path carries the account name
+  // in it, so these two routes are where that rule has to hold.
+  const snapshot=host.slice(host.indexOf('function snapshot()'),host.indexOf('async function syncAdoption'));
+  assert.equal(/repoPath: config\.repoPath/.test(snapshot),false,
+    'the state payload must not carry the configured path');
+  assert(/repoConfigured: Boolean\(config\.repoPath\)/.test(snapshot),
+    'a boolean answers the only question the panel asks');
+  // `expected` was an absolute path to a file that does not exist yet.
+  assert.equal(/configExpected/.test(snapshot),false,'must not name an expected path');
+
+  const preflight=host.slice(host.indexOf('function deployPreflight()'),host.indexOf('* Validate one deploy request field'));
+  assert.equal(/detail: config\.repoPath/.test(preflight),false,
+    'the preflight must not carry the configured path');
+  assert(/basename\(config\.repoPath\)/.test(preflight),
+    'the directory name is the identifying detail the browser may have');
+});
+
+test('dashboard output reaches the browser redacted',()=>{
+  // This is the least predictable text the plugin forwards: a Python traceback
+  // names every file on the way down, and it was going out raw.
+  const read=host.slice(host.indexOf('function readOutput(handle)'),host.indexOf('const disposeStop'));
+  assert(/redactText\(/.test(read),'the process output must be redacted');
+
+  const {redactText}=lift('function redactText(','function taskLabel(',['redactText']);
+  const traceback=[
+    'Traceback (most recent call last):',
+    '  File "C:\\Users\\someone\\repo\\scripts\\flflow.py", line 12, in <module>',
+    'SystemExit: 1',
+  ].join('\n');
+  const out=redactText(traceback,8000);
+  // The diagnosis has to survive; only the location goes.
+  assert.equal(out.includes('C:\\Users'),false,'the path must not survive');
+  assert(out.includes('Traceback (most recent call last):'),'keeps the first line');
+  assert(out.includes('SystemExit: 1'),'keeps the error');
+  assert(out.includes('line 12'),'keeps the line number');
+});
+
+test('a first run says what is wrong and what to do about it',()=>{
+  const client=fs.readFileSync(path.join(__dirname,'..','integrations/dsh-plugin/client.js'),'utf8');
+  // The two failures are distinct and need different instructions: no checkout
+  // configured at all, versus a configured directory that is the wrong one.
+  for(const key of ['deployNeedRepo','deployWhereConfig','deployNeedScript','deployFoundDir'])
+    assert(client.includes(key+':'),'missing locale key '+key);
+  // Naming the setting alone leaves someone stuck in a file they have never
+  // opened, so the path to the setting is spelled out.
+  for(const dict of ['Plugins → FL adaptation workbench → configure','插件 → FL 适配工作台 → 配置'])
+    assert(client.includes(dict),'the guidance must say where the setting lives');
+  // Cloning is the real first step, and the plugin never runs it itself.
+  assert(/git clone https:\/\/github\.com\/[\w-]+\/fl-plugin-upgrade-workflow/.test(client),
+    'offers the clone command as copyable text');
+  // The wrong-directory case names the directory, never its path.
+  assert(/repoCheck\.detail/.test(client),'shows the configured directory name');
+});
