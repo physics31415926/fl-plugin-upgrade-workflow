@@ -46,6 +46,8 @@ window.__ModuleLoader__.load({
         statUnknown: 'Unreadable cards',
         statStale: 'Stale hosts',
         allBackends: 'All hardware',
+        // Marks which half of a bilingual vendor name this dictionary wants.
+        cjkNames: false,
         devicesNote: 'The GPU fleet is not tied to a project or a branch: every project draws from the same machines, so this view has no branch selector.',
         host: 'Host',
         verdict: 'State',
@@ -248,6 +250,7 @@ window.__ModuleLoader__.load({
         statUnknown: '读不到状态的卡',
         statStale: '数据已过期的机器',
         allBackends: '全部硬件',
+        cjkNames: true,
         devicesNote: '设备不属于某个项目或某个分支：所有项目用的是同一批机器，所以这个视图没有分支选择。',
         host: '机器',
         verdict: '状态',
@@ -437,6 +440,26 @@ window.__ModuleLoader__.load({
         ? String(locale.getSnapshot().active || 'en')
         : 'en'
       return active.toLowerCase().startsWith('zh') ? TEXT.zh : TEXT.en
+    }
+
+    /**
+     * Shorten a bilingual vendor name to the half that matches the dictionary.
+     *
+     * The bastion labels its hardware "NVIDIA / 英伟达", which is helpful in a
+     * table cell and far too wide for a filter chip: thirteen of them wrapped
+     * to six lines at a narrow panel width. Showing one half halves the row.
+     *
+     * Only an exact "latin / CJK" shape is split. Anything else is returned
+     * untouched, so a vendor that adds a third name or drops the separator
+     * keeps its full label rather than being silently truncated.
+     */
+    function shortBackend(name, t) {
+      const text = String(name || '')
+      const parts = text.split('/').map(part => part.trim()).filter(Boolean)
+      if (parts.length !== 2) return text
+      const cjk = parts.findIndex(part => /[\u4e00-\u9fff]/.test(part))
+      if (cjk < 0) return text
+      return t.cjkNames ? parts[cjk] : parts[1 - cjk]
     }
 
     const CSS = `
@@ -1180,8 +1203,12 @@ window.__ModuleLoader__.load({
               className: 'flup-chip',
               type: 'button',
               'aria-pressed': active === name,
+              // The chip shows one half of the bilingual name to keep the row
+              // short; the title carries the full one the bastion reports, so
+              // nothing is lost for anyone checking which vendor this is.
+              title: String(name),
               onClick: () => setBackend(active === name ? null : name),
-            }, `${name} (${count})`)),
+            }, `${shortBackend(name, t)} (${count})`)),
           )
           : null,
         h('div', { className: 'flup-body' },
@@ -2751,7 +2778,7 @@ window.__ModuleLoader__.load({
      * functions of their props and hold no credential, so exposing them costs
      * nothing; it is what lets the blocking rules be tested without a browser.
      */
-    globalThis.__probe = { TaskDetail, ProjectView, CreateTask, CredentialView, TaskTable, RepoCard, dictFor, Dot, Skeleton, Pending, DeviceView, DeviceTable }
+    globalThis.__probe = { TaskDetail, ProjectView, CreateTask, CredentialView, TaskTable, RepoCard, dictFor, Dot, Skeleton, Pending, DeviceView, DeviceTable, shortBackend }
 
     return {
       inject: ['slots'],

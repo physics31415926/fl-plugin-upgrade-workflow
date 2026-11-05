@@ -496,6 +496,30 @@ const FLEET_BODY = { host_count: 3, updated_at: '2026-01-01T00:00:00Z', hosts: F
   check('the all chip is pressed after a fallback', chips[0].props['aria-pressed'] === true)
 }
 {
+  // The bastion labels hardware bilingually ("NVIDIA / 英伟达"), which is fine
+  // in a table cell and far too wide for a chip: thirteen of them wrapped to
+  // six lines at a narrow panel width. Each chip shows the half matching the
+  // active locale, with the full name on the title attribute.
+  const en = probe.dictFor(null)
+  const zh = probe.dictFor({ getSnapshot: () => ({ active: 'zh-CN' }) })
+  check('an english panel keeps the latin half', probe.shortBackend('NVIDIA / 英伟达', en) === 'NVIDIA')
+  check('a chinese panel keeps the CJK half', probe.shortBackend('NVIDIA / 英伟达', zh) === '英伟达')
+  check('a multi-word vendor still splits', probe.shortBackend('Moore Threads / 摩尔线程', en) === 'Moore Threads')
+  // Anything that is not exactly "latin / CJK" is returned untouched, so a
+  // vendor that adds a name or drops the separator is not truncated.
+  for (const odd of ['cuda', '', 'A / B / C', 'NVIDIA /', 'Ascend / 昇腾 / 910']) {
+    check('an unsplittable name passes through: ' + JSON.stringify(odd), probe.shortBackend(odd, zh) === odd)
+  }
+  const tree = render(probe.DeviceView, { t, project: { id: 'vllm' }, running: true }, [
+    { host_count: 1, hosts: [{ ...HOST, backend: 'NVIDIA / 英伟达' }, { ...HOST, id: 'x', backend: 'Ascend / 昇腾' }] },
+    null, false, null,
+  ])
+  const chips = find(tree, 'button').filter(b => b.props.className && b.props.className.includes('flup-chip'))
+  const vendor = chips.find(c => text(c).includes('NVIDIA'))
+  check('a chip shortens its label', text(vendor).trim() === 'NVIDIA (1)')
+  check('a chip keeps the full name in its title', vendor.props.title === 'NVIDIA / 英伟达')
+}
+{
   // A single-vendor fleet has nothing to filter, so the row is not drawn.
   const tree = render(probe.DeviceView, { t, project: { id: 'vllm' }, running: true }, [
     { host_count: 1, hosts: [HOST] }, null, false, null,
