@@ -41,10 +41,11 @@ window.__ModuleLoader__.load({
         noDevices: 'No device reported.',
         noTasks: 'No task is recorded.',
         devicesRailSub: 'shared by all projects',
-        statHosts: 'Online',
         statFreeHosts: 'Idle hosts',
         statFreeCards: 'Free cards',
         statUnknown: 'Unreadable cards',
+        statStale: 'Stale hosts',
+        allBackends: 'All hardware',
         devicesNote: 'The GPU fleet is not tied to a project or a branch: every project draws from the same machines, so this view has no branch selector.',
         host: 'Host',
         verdict: 'State',
@@ -242,10 +243,11 @@ window.__ModuleLoader__.load({
         noDevices: '暂无设备数据。',
         noTasks: '暂无任务记录。',
         devicesRailSub: '所有项目共用',
-        statHosts: '在线',
         statFreeHosts: '空闲机器',
         statFreeCards: '空闲卡',
         statUnknown: '读不到状态的卡',
+        statStale: '数据已过期的机器',
+        allBackends: '全部硬件',
         devicesNote: '设备不属于某个项目或某个分支：所有项目用的是同一批机器，所以这个视图没有分支选择。',
         host: '机器',
         verdict: '状态',
@@ -677,6 +679,10 @@ window.__ModuleLoader__.load({
 .flup-link:focus-visible { outline: 2px solid var(--dsw-alias-brand-primary); outline-offset: 2px; }
 /* Branch filter chips above the task list. */
 .flup-filter { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; padding-bottom: 12px; }
+/* The same row used outside a body block, which supplies its own gutter. */
+.flup-filter-inset { padding: 2px 20px 0; }
+/* A second line inside a table cell: the card model under its host name. */
+.flup-cell-sub { display: block; }
 .flup-chip {
   appearance: none; font: inherit; font-size: 11px; cursor: pointer;
   border: 1px solid var(--dsw-alias-border-l2); border-radius: 999px;
@@ -1030,6 +1036,10 @@ window.__ModuleLoader__.load({
       const [devices, setDevices] = React.useState(null)
       const [error, setError] = React.useState(null)
       const [busy, setBusy] = React.useState(false)
+      // null means every backend. Filtering happens here because the device
+      // route rejects any query key but `project`, so there is nothing to
+      // delegate: the fleet arrives whole and is narrowed on arrival.
+      const [backend, setBackend] = React.useState(null)
 
       const load = React.useCallback(async () => {
         if (!running || !project) return
@@ -1083,31 +1093,58 @@ window.__ModuleLoader__.load({
         return h('div', { className: 'flup-body' }, h('p', { className: 'flup-empty' }, t.dashboardDown))
       }
 
+      const allHosts = (devices && Array.isArray(devices.hosts)) ? devices.hosts : []
+      // Backends in fleet order of size, so the vendors with most machines
+      // come first rather than in whatever order the bastion listed them.
+      const backends = [...allHosts.reduce((seen, host) => {
+        const key = host.backend || ''
+        if (key) seen.set(key, (seen.get(key) || 0) + 1)
+        return seen
+      }, new Map())].sort((a, b) => b[1] - a[1] || String(a[0]).localeCompare(String(b[0])))
+      // A filter pinned to a backend that has left the fleet would show an
+      // empty table with no way to tell why, so fall back to showing all.
+      const known = backends.some(([name]) => name === backend)
+      const active = known ? backend : null
+      const hosts = active ? allHosts.filter(host => host.backend === active) : allHosts
+
       /*
-       * The fleet in one line.
+       * The fleet in one line, recomputed from the hosts on screen.
        *
-       * The upstream summary carries eight counters; these are the four worth
-       * a glance. Each is a ratio rather than a bare number, because "293
-       * free" means nothing without the 576 it is drawn from, and a count of
-       * online hosts only reads as healthy next to the total.
+       * The upstream summary describes the whole fleet, so it cannot be used
+       * once a backend is selected: it would report 57 hosts above a table of
+       * four. Every field it carries is derivable from the host list, and I
+       * verified each one against the live payload, so recomputing keeps the
+       * headline and the table describing the same machines.
+       *
+       * One field is not derivable: `online` counts hosts the collector
+       * reached, and the `reachable` flag behind it is stripped before the
+       * payload leaves the dashboard. Rather than approximate it from the
+       * verdict, the headline reports stale hosts instead — a host whose data
+       * is old is the thing worth acting on, and that flag does ship.
        */
-      const summary = (devices && devices.summary) || {}
+      const cards = metric => hosts.reduce((total, host) => total + Math.max(0, Number((host.accel && host.accel[metric]) || 0)), 0)
+      const freeHosts = hosts.filter(host => host.verdict === 'free' && !host.stale).length
+      const staleHosts = hosts.filter(host => host.stale).length
+      const unknownCards = cards('unknown')
+
       const stats = [
-        [t.statHosts, summary.online, summary.hosts],
-        [t.statFreeHosts, summary.free_hosts, summary.hosts],
-        [t.statFreeCards, summary.free_cards, summary.total_cards],
+        [t.statFreeHosts, freeHosts, hosts.length],
+        [t.statFreeCards, cards('free'), cards('total')],
       ]
 
       return h(React.Fragment, null,
         h('div', { className: 'flup-sub' },
           stats.map(([label, value, total]) => h('span', { key: label },
             `${label} `,
-            h('b', null, `${value ?? '—'}/${total ?? '—'}`))),
-          // Cards whose state could not be read. Worth stating only when
-          // there are some, since zero is the normal case and a permanent
-          // "unknown 0" would train the eye to skip the whole line.
-          summary.unknown_cards
-            ? h('span', { className: 'flup-warn' }, `${t.statUnknown} `, h('b', null, String(summary.unknown_cards)))
+            h('b', null, `${value}/${total}`))),
+          // Cards whose state could not be read, and hosts whose data is old.
+          // Both are stated only when non-zero: zero is the normal case, and a
+          // permanent "unknown 0" trains the eye to skip the whole line.
+          unknownCards
+            ? h('span', { className: 'flup-warn' }, `${t.statUnknown} `, h('b', null, String(unknownCards)))
+            : null,
+          staleHosts
+            ? h('span', { className: 'flup-warn' }, `${t.statStale} `, h('b', null, String(staleHosts)))
             : null,
           h('span', null, `${t.collected} ${(devices && localTime(devices.updated_at)) || t.never}`),
           devices && devices.refreshing ? h('span', { className: 'flup-tag flup-tag-active' }, t.refreshing) : null,
@@ -1121,16 +1158,48 @@ window.__ModuleLoader__.load({
           }, busy ? h(Pending, { label: t.refreshDevices }) : t.refreshDevices),
         ),
         h('p', { className: 'flup-note' }, t.devicesNote),
+        /*
+         * Backend filter.
+         *
+         * Hardware is the axis that matters here, and the one axis the fleet
+         * genuinely has: a machine belongs to a vendor permanently, where it
+         * belongs to no project and no branch. Each chip carries its host
+         * count, so the fleet's shape is readable before anything is clicked
+         * and an empty vendor is visibly empty rather than a dead end.
+         */
+        backends.length > 1
+          ? h('div', { className: 'flup-filter flup-filter-inset', role: 'group', 'aria-label': t.backend },
+            h('button', {
+              className: 'flup-chip',
+              type: 'button',
+              'aria-pressed': active === null,
+              onClick: () => setBackend(null),
+            }, `${t.allBackends} (${allHosts.length})`),
+            backends.map(([name, count]) => h('button', {
+              key: name,
+              className: 'flup-chip',
+              type: 'button',
+              'aria-pressed': active === name,
+              onClick: () => setBackend(active === name ? null : name),
+            }, `${name} (${count})`)),
+          )
+          : null,
         h('div', { className: 'flup-body' },
           error ? h('p', { className: 'flup-err' }, `${t.error}: ${error}`) : null,
           !devices && !error ? h(Skeleton, { rows: 6, label: t.loading }) : null,
-          devices ? h(DeviceTable, { devices, t }) : null,
+          devices ? h(DeviceTable, { hosts, t }) : null,
         ),
       )
     }
 
-    function DeviceTable({ devices, t }) {
-      const hosts = (devices && Array.isArray(devices.hosts)) ? devices.hosts : []
+    /**
+     * One row per GPU host.
+     *
+     * Takes the hosts to show rather than the whole payload, so the caller
+     * owns the filtering and this cannot disagree with the counts above it.
+     */
+    function DeviceTable({ hosts: rows, t }) {
+      const hosts = Array.isArray(rows) ? rows : []
       if (!hosts.length) return h('p', { className: 'flup-empty' }, t.noDevices)
       return h('table', { className: 'flup-table' },
         h('thead', null, h('tr', null,
@@ -1140,9 +1209,21 @@ window.__ModuleLoader__.load({
           h('th', null, t.cards),
         )),
         h('tbody', null, hosts.map(host => h('tr', { key: String(host.id) },
-          h('td', null, String(host.label || host.id)),
+          h('td', null,
+            String(host.label || host.id),
+            // The card model is the detail that makes a host choosable: four
+            // free cards means something different on an A100 than elsewhere.
+            host.accel && host.accel.card_name
+              ? h('span', { className: 'flup-meta flup-cell-sub' }, String(host.accel.card_name))
+              : null,
+          ),
           h('td', { className: 'flup-meta' }, String(host.backend || '—')),
-          h('td', null, h('span', { className: 'flup-pill' }, h(Dot, { status: host.verdict }), String(host.verdict || '—'))),
+          h('td', null,
+            h('span', { className: 'flup-pill' }, h(Dot, { status: host.verdict }), String(host.verdict || '—')),
+            // Stale data looks identical to fresh data otherwise, and acting
+            // on a stale free count is how two tasks land on one machine.
+            host.stale ? h('span', { className: 'flup-tag flup-tag-warn' }, t.stale) : null,
+          ),
           h('td', { className: 'flup-num' }, `${(host.accel && host.accel.free) ?? 0}/${(host.accel && host.accel.total) ?? 0}`),
         ))),
       )
