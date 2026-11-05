@@ -40,6 +40,12 @@ window.__ModuleLoader__.load({
         noBackends: 'No backend status yet.',
         noDevices: 'No device reported.',
         noTasks: 'No task is recorded.',
+        devicesRailSub: 'shared by all projects',
+        statHosts: 'Online',
+        statFreeHosts: 'Idle hosts',
+        statFreeCards: 'Free cards',
+        statUnknown: 'Unreadable cards',
+        devicesNote: 'The GPU fleet is not tied to a project or a branch: every project draws from the same machines, so this view has no branch selector.',
         host: 'Host',
         verdict: 'State',
         cards: 'Free',
@@ -235,6 +241,12 @@ window.__ModuleLoader__.load({
         noBackends: '暂无后端状态。',
         noDevices: '暂无设备数据。',
         noTasks: '暂无任务记录。',
+        devicesRailSub: '所有项目共用',
+        statHosts: '在线',
+        statFreeHosts: '空闲机器',
+        statFreeCards: '空闲卡',
+        statUnknown: '读不到状态的卡',
+        devicesNote: '设备不属于某个项目或某个分支：所有项目用的是同一批机器，所以这个视图没有分支选择。',
         host: '机器',
         verdict: '状态',
         cards: '空闲卡',
@@ -539,6 +551,16 @@ window.__ModuleLoader__.load({
 .flup-rail-cta-urgent:hover { background: var(--dsw-alias-brand-primary); filter: brightness(1.08); }
 .flup-rail-cta-urgent .flup-rail-sub { color: var(--flup-on-brand); opacity: 0.85; }
 .flup-rail-sub { font-size: 11px; color: var(--dsw-alias-label-secondary); font-weight: 400; }
+/*
+ * Separates the project entries from the fleet entry below them. The two
+ * groups answer different questions — one project on one branch, versus the
+ * machines shared by all of them — and a rule is what says they are not
+ * siblings in the same list.
+ */
+.flup-rail-divider {
+  display: block; height: 1px; margin: 8px 10px 4px;
+  background: var(--dsw-alias-border-l1);
+}
 .flup-pane { flex: 1 1 auto; min-width: 0; display: flex; flex-direction: column; min-height: 0; }
 .flup-sub {
   display: flex; align-items: center; gap: 6px 14px; flex-wrap: wrap;
@@ -986,6 +1008,124 @@ window.__ModuleLoader__.load({
             h('td', { className: 'flup-num' }, gate && gate.total ? `${gate.passed ?? 0}/${gate.total}` : '—'),
           )
         })),
+      )
+    }
+
+    /**
+     * The GPU fleet, as its own view.
+     *
+     * Devices sit on a different axis from everything else in this panel. A
+     * backend's PRs and a task's progress both belong to one project on one
+     * branch; a machine belongs to neither. The dashboard confirms this: the
+     * device payload is byte-identical across projects, and the route takes no
+     * branch at all. So this reads the fleet once rather than appearing under
+     * each project, where a branch picker sat above data the branch did not
+     * affect.
+     *
+     * It still needs a project id to call through, because the dashboard
+     * namespaces its routes that way, but which project is asked makes no
+     * difference to the answer.
+     */
+    function DeviceView({ t, project, running }) {
+      const [devices, setDevices] = React.useState(null)
+      const [error, setError] = React.useState(null)
+      const [busy, setBusy] = React.useState(false)
+
+      const load = React.useCallback(async () => {
+        if (!running || !project) return
+        try {
+          const body = await callJson(readPath('/api/devices', { project: project.id }))
+          setDevices(body)
+          setError(body && body.error ? String(body.error) : null)
+        } catch (failure) {
+          setError(String(failure.message))
+        }
+      }, [project && project.id, running])
+
+      React.useEffect(() => {
+        let alive = true
+        // Skip a round while the panel is not on screen: this reaches the
+        // dashboard, which in turn holds counters for 57 hosts.
+        const tick = () => { if (alive && !document.hidden) load() }
+        tick()
+        const timer = setInterval(tick, 30_000)
+        return () => {
+          alive = false
+          clearInterval(timer)
+        }
+      }, [load])
+
+      /*
+       * Force a collection round now.
+       *
+       * This opens SSH sessions to every GPU host, so it stays an explicit
+       * button. Background collection already runs inside the dashboard on a
+       * fixed interval and cannot be switched off from here.
+       */
+      const refresh = React.useCallback(async () => {
+        if (!project) return
+        setBusy(true)
+        try {
+          await callJson(`${BASE}refresh`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ path: '/api/devices/refresh', project: project.id }),
+          })
+          await load()
+        } catch (failure) {
+          setError(String(failure.message))
+        } finally {
+          setBusy(false)
+        }
+      }, [project && project.id, load])
+
+      if (!running) {
+        return h('div', { className: 'flup-body' }, h('p', { className: 'flup-empty' }, t.dashboardDown))
+      }
+
+      /*
+       * The fleet in one line.
+       *
+       * The upstream summary carries eight counters; these are the four worth
+       * a glance. Each is a ratio rather than a bare number, because "293
+       * free" means nothing without the 576 it is drawn from, and a count of
+       * online hosts only reads as healthy next to the total.
+       */
+      const summary = (devices && devices.summary) || {}
+      const stats = [
+        [t.statHosts, summary.online, summary.hosts],
+        [t.statFreeHosts, summary.free_hosts, summary.hosts],
+        [t.statFreeCards, summary.free_cards, summary.total_cards],
+      ]
+
+      return h(React.Fragment, null,
+        h('div', { className: 'flup-sub' },
+          stats.map(([label, value, total]) => h('span', { key: label },
+            `${label} `,
+            h('b', null, `${value ?? '—'}/${total ?? '—'}`))),
+          // Cards whose state could not be read. Worth stating only when
+          // there are some, since zero is the normal case and a permanent
+          // "unknown 0" would train the eye to skip the whole line.
+          summary.unknown_cards
+            ? h('span', { className: 'flup-warn' }, `${t.statUnknown} `, h('b', null, String(summary.unknown_cards)))
+            : null,
+          h('span', null, `${t.collected} ${(devices && localTime(devices.updated_at)) || t.never}`),
+          devices && devices.refreshing ? h('span', { className: 'flup-tag flup-tag-active' }, t.refreshing) : null,
+          h('span', { className: 'flup-spacer' }),
+          h('button', {
+            className: 'flup-btn flup-btn-accent',
+            type: 'button',
+            disabled: busy,
+            title: t.refreshDevicesHint,
+            onClick: refresh,
+          }, busy ? h(Pending, { label: t.refreshDevices }) : t.refreshDevices),
+        ),
+        h('p', { className: 'flup-note' }, t.devicesNote),
+        h('div', { className: 'flup-body' },
+          error ? h('p', { className: 'flup-err' }, `${t.error}: ${error}`) : null,
+          !devices && !error ? h(Skeleton, { rows: 6, label: t.loading }) : null,
+          devices ? h(DeviceTable, { devices, t }) : null,
+        ),
       )
     }
 
@@ -1470,7 +1610,6 @@ window.__ModuleLoader__.load({
       const [branch, setBranch] = React.useState(null)
       const [branches, setBranches] = React.useState([])
       const [status, setStatus] = React.useState(null)
-      const [devices, setDevices] = React.useState(null)
       const [tasks, setTasks] = React.useState(null)
       const [error, setError] = React.useState(null)
       const [busy, setBusy] = React.useState(false)
@@ -1488,7 +1627,6 @@ window.__ModuleLoader__.load({
         setTaskBranch(null)
         setBranches([])
         setStatus(null)
-        setDevices(null)
         setTasks(null)
         setError(null)
         setTab('backends')
@@ -1520,11 +1658,9 @@ window.__ModuleLoader__.load({
           setError(String(failure.message))
           return
         }
-        const [deviceBody, taskBody] = await Promise.all([
-          callJson(readPath('/api/devices', { project: project.id })).catch(() => null),
-          callJson(readPath('/api/adaptation-tasks', { project: project.id })).catch(() => null),
-        ])
-        setDevices(deviceBody)
+        // Devices are fetched by their own view, not here: this request is
+        // per-branch, and the fleet does not change with the branch.
+        const taskBody = await callJson(readPath('/api/adaptation-tasks', { project: project.id })).catch(() => null)
         setTasks(taskBody && Array.isArray(taskBody.tasks) ? taskBody.tasks : [])
       }, [project.id, branch, running])
 
@@ -1541,25 +1677,22 @@ window.__ModuleLoader__.load({
       }, [load])
 
       /*
-       * Force one collection round now.
+       * Force one branch collection round now.
        *
-       * Background collection is already running inside the dashboard (it
-       * starts with the process and cannot be started or stopped separately),
-       * so these are "don't wait for the next round" actions, not switches.
-       * Both are synchronous upstream and both reach outside this machine:
-       * a branch refresh runs `git fetch` against the configured remote, and a
-       * device refresh opens SSH sessions to the GPU hosts. Hence an explicit
-       * button rather than anything automatic.
+       * Background collection already runs inside the dashboard (it starts
+       * with the process and cannot be switched on or off separately), so this
+       * means "don't wait for the next round" rather than "start collecting".
+       * It runs `git fetch` against the configured remote, so it reaches
+       * outside this machine and stays an explicit button. The device
+       * equivalent lives in the device view, with its own fleet.
        */
-      const refresh = React.useCallback(async kind => {
+      const refresh = React.useCallback(async () => {
         setBusy(true)
         try {
           await callJson(`${BASE}refresh`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify(kind === 'devices'
-              ? { path: '/api/devices/refresh', project: project.id }
-              : { path: '/api/branch-refresh', project: project.id, branch: branch || undefined }),
+            body: JSON.stringify({ path: '/api/branch-refresh', project: project.id, branch: branch || undefined }),
           })
           await load()
         } catch (failure) {
@@ -1584,9 +1717,11 @@ window.__ModuleLoader__.load({
       const tag = collection && collection.refreshing ? t.refreshing
         : (collection && collection.cached && collection.stale ? t.stale : null)
 
+      // Devices are deliberately absent: they are not scoped to a project or a
+      // branch, so they live in their own rail entry rather than under a
+      // branch picker that does not affect them.
       const tabs = [
         ['backends', t.tabBackends],
-        ['devices', t.tabDevices],
         ['tasks', t.tabTasks],
       ]
 
@@ -1616,21 +1751,14 @@ window.__ModuleLoader__.load({
           h('span', null, `${t.collected} ${(status && localTime(status.observed_at)) || t.never}`),
           tag ? h('span', { className: 'flup-tag' }, tag) : null,
           h('span', { className: 'flup-spacer' }),
-          // Background collection runs on its own; these force a round early.
+          // Background collection runs on its own; this forces a round early.
           h('button', {
-            className: 'flup-btn',
+            className: 'flup-btn flup-btn-accent',
             type: 'button',
             disabled: busy,
             title: t.refreshBranchHint,
-            onClick: () => refresh('branch'),
-          }, t.refreshBranch),
-          h('button', {
-            className: 'flup-btn',
-            type: 'button',
-            disabled: busy,
-            title: t.refreshDevicesHint,
-            onClick: () => refresh('devices'),
-          }, t.refreshDevices),
+            onClick: refresh,
+          }, busy ? h(Pending, { label: t.refreshBranch }) : t.refreshBranch),
         ),
         // Collection has no start/stop: it begins with the dashboard process
         // and runs on fixed intervals. Say so, so the absent button is not
@@ -1652,7 +1780,6 @@ window.__ModuleLoader__.load({
             : null,
           !status && !error ? h(Skeleton, { rows: 5, label: t.loading }) : null,
           tab === 'backends' && status ? h(BackendTable, { status, t }) : null,
-          tab === 'devices' ? h(DeviceTable, { devices, t }) : null,
           tab === 'tasks'
             ? h(React.Fragment, null,
               h(RepoCard, { t, project }),
@@ -2370,8 +2497,10 @@ window.__ModuleLoader__.load({
           const rows = (list && Array.isArray(list.projects)) ? list.projects : []
           setProjects(rows)
           setSelected(current => {
-            if (current && current !== 'deploy' && rows.some(row => row.id === current)) return current
-            if (current === 'deploy') return current
+            // The entries that are not projects keep their selection across a
+            // reload: they do not depend on the project list at all.
+            if (current === 'deploy' || current === 'devices') return current
+            if (current && rows.some(row => row.id === current)) return current
             return rows.length ? rows[0].id : 'deploy'
           })
         } catch (failure) {
@@ -2458,6 +2587,25 @@ window.__ModuleLoader__.load({
               row.default_branch ? h('span', { className: 'flup-rail-sub' }, String(row.default_branch)) : null,
             )),
             !projects.length && state ? h('p', { className: 'flup-empty', style: { padding: '0 10px' } }, t.noProjects) : null,
+            /*
+             * The GPU fleet, below a divider.
+             *
+             * It sits outside the project list on purpose. The entries above
+             * each scope the view to one project and one branch; the fleet is
+             * shared by all of them and changes with neither. Keeping it here
+             * rather than as a third tab inside a project means it is never
+             * shown underneath a branch picker that does not apply to it.
+             */
+            projects.length ? h('span', { className: 'flup-rail-divider', role: 'separator' }) : null,
+            h('button', {
+              className: 'flup-rail-btn',
+              type: 'button',
+              'aria-current': selected === 'devices',
+              onClick: () => setSelected('devices'),
+            },
+              h('span', null, t.tabDevices),
+              h('span', { className: 'flup-rail-sub' }, t.devicesRailSub),
+            ),
             // Filled while nothing is configured, because every other view is
             // empty until this one has been used; outlined once a dashboard
             // exists, where it is useful but no longer the next step.
@@ -2479,9 +2627,13 @@ window.__ModuleLoader__.load({
               ? h('div', { className: 'flup-body' }, h(Skeleton, { rows: 5, label: t.loading }))
               : selected === 'deploy'
                 ? h(DeployView, { t, onDone: load })
-                : project
-                  ? h(ProjectView, { key: project.id, project, running, t })
-                  : h('div', { className: 'flup-body' }, h('p', { className: 'flup-empty' }, t.noProjects)),
+                : selected === 'devices'
+                  // Any project reaches the same fleet, so the first one is
+                  // passed purely to satisfy the route's namespacing.
+                  ? h(DeviceView, { t, project: projects[0] || null, running })
+                  : project
+                    ? h(ProjectView, { key: project.id, project, running, t })
+                    : h('div', { className: 'flup-body' }, h('p', { className: 'flup-empty' }, t.noProjects)),
           ),
         ),
 
@@ -2518,7 +2670,7 @@ window.__ModuleLoader__.load({
      * functions of their props and hold no credential, so exposing them costs
      * nothing; it is what lets the blocking rules be tested without a browser.
      */
-    globalThis.__probe = { TaskDetail, ProjectView, CreateTask, CredentialView, TaskTable, RepoCard, dictFor, Dot, Skeleton, Pending }
+    globalThis.__probe = { TaskDetail, ProjectView, CreateTask, CredentialView, TaskTable, RepoCard, dictFor, Dot, Skeleton, Pending, DeviceView, DeviceTable }
 
     return {
       inject: ['slots'],

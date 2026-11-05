@@ -98,6 +98,13 @@ const MACHINE = {
   id: 'jms-a', label: 'host-alpha', backend: 'cuda', role: 'compute',
   usable: true, hasWorkspace: true, backendVerified: true, configError: null,
 }
+// One GPU host as the device route reports it. Distinct from MACHINE above:
+// that is the create-task machine profile, which carries configuration rather
+// than live counters.
+const HOST = {
+  id: 'jms-a', label: 'host-alpha', backend: 'cuda', verdict: 'ready',
+  stale: false, accel: { free: 4, total: 8 },
+}
 const OPTIONS = {
   available: true, defaultBranch: '0.4.0-dev', backends: ['cuda'],
   machines: [MACHINE], policies: {}, takenPairs: [],
@@ -377,6 +384,97 @@ const REPO = {
   const pending = render(probe.Pending, { label: 'Deploying' })
   check('a pending button keeps its label', text(pending).includes('Deploying'))
   check('a pending button shows a spinner', classes(pending).has('flup-spin'))
+}
+
+// --- devices are independent of project and branch ---
+{
+  // The fleet is shared: the dashboard returns a byte-identical payload for
+  // every project and its route takes no branch. So the device view must not
+  // sit beside the per-branch views, and must not carry a branch picker.
+  const tree = render(probe.DeviceView, { t, project: { id: 'vllm' }, running: true }, [
+    { host_count: 2, updated_at: '2026-01-01T00:00:00Z', hosts: [HOST] },
+    null, false,
+  ])
+  const body = text(tree)
+  check('the device view states why it has no branch', /not tied to a project or a branch/.test(body))
+  check('the device view has no branch selector', find(tree, 'select').length === 0)
+  check('the device view offers its own refresh', body.includes(t.refreshDevices))
+  // The stand-in records child components without rendering them, so the
+  // table is asserted by its presence here and by its own render below.
+  check('the device view mounts the host table', find(tree, probe.DeviceTable).length === 1)
+}
+{
+  // Fleet counters are shown as ratios: "293 free" means nothing without the
+  // total it is drawn from, so a bare count is a regression.
+  const tree = render(probe.DeviceView, { t, project: { id: 'vllm' }, running: true }, [
+    {
+      host_count: 57,
+      updated_at: '2026-01-01T00:00:00Z',
+      hosts: [HOST],
+      summary: {
+        hosts: 57, online: 57, free_hosts: 22, total_cards: 576,
+        free_cards: 293, busy_cards: 271, unknown_cards: 12, residual_cards: 6,
+      },
+    },
+    null, false,
+  ])
+  const body = text(tree)
+  check('online hosts are shown against the total', /57\/57/.test(body))
+  check('idle hosts are shown against the total', /22\/57/.test(body))
+  check('free cards are shown against the total', /293\/576/.test(body))
+  check('unreadable cards are called out', body.includes(t.statUnknown) && /12/.test(body))
+}
+{
+  // Zero unreadable cards is the normal case; a permanent "unknown 0" would
+  // train the eye to skip the line, so it is omitted entirely.
+  const tree = render(probe.DeviceView, { t, project: { id: 'vllm' }, running: true }, [
+    { host_count: 1, hosts: [HOST], summary: { hosts: 1, online: 1, free_hosts: 1, total_cards: 8, free_cards: 8, unknown_cards: 0 } },
+    null, false,
+  ])
+  check('no unreadable-card notice when there are none', !text(tree).includes(t.statUnknown))
+}
+{
+  // A summary the dashboard has not filled in yet must not render "undefined".
+  const tree = render(probe.DeviceView, { t, project: { id: 'vllm' }, running: true }, [
+    { host_count: 0, hosts: [] }, null, false,
+  ])
+  check('a missing summary renders no undefined text', !/undefined|NaN/.test(text(tree)))
+}
+{
+  const table = render(probe.DeviceTable, { devices: { hosts: [HOST] }, t })
+  const body = text(table)
+  check('the host table names each host', /host-alpha/.test(body))
+  check('the host table shows free cards', /4\/8/.test(body))
+  check('the host table states each verdict', /ready/.test(body))
+}
+{
+  // A down dashboard must say so rather than render an empty fleet, which
+  // would read as "no machines" instead of "not connected".
+  const tree = render(probe.DeviceView, { t, project: { id: 'vllm' }, running: false })
+  check('a stopped dashboard explains the empty fleet', text(tree).includes(t.dashboardDown))
+}
+{
+  // Devices used to be a third tab next to backends and tasks. Guard the
+  // separation so it is not quietly reintroduced.
+  const project = render(probe.ProjectView, { project: { id: 'vllm', label: 'vLLM' }, running: true, t }, [
+    '0.4.0-dev', ['0.4.0-dev'], { backends: [] }, [], null, false, 'backends', null, null, true,
+  ])
+  const labels = find(project, 'button').map(b => text(b).trim())
+  check('the project view no longer tabs to devices', !labels.includes(t.tabDevices))
+  check('the project view keeps its backend tab', labels.includes(t.tabBackends))
+  check('the project view keeps its task tab', labels.includes(t.tabTasks))
+  check('the project view no longer refreshes devices', !labels.some(l => l.includes(t.refreshDevices)))
+  check('the project view keeps its branch refresh', labels.some(l => l.includes(t.refreshBranch)))
+}
+{
+  // The per-branch load must not fetch the fleet: that request is the
+  // expensive one and it would repeat on every branch change. Slice from
+  // ProjectView specifically, since the device view has a `load` of its own.
+  const from = src.indexOf('function ProjectView(')
+  const load = src.slice(src.indexOf('const load = React.useCallback', from), src.indexOf('// Poll while mounted', from))
+  check('the branch load exists to be checked', load.length > 0 && load.length < 2000)
+  check('the branch load does not fetch devices', !load.includes('/api/devices'))
+  check('the branch load still fetches tasks', load.includes('/api/adaptation-tasks'))
 }
 
 // --- invariants ---
