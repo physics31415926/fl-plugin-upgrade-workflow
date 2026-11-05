@@ -252,8 +252,16 @@ function resolveProjectRepo(config, projectId) {
     path: repoPath,
     branch,
     githubRepo,
-    // A sidebar title the user can recognise, with no path in it.
-    title: `${entry?.label || projectId}${branch ? ` · ${branch}` : ''}`,
+    /*
+     * A sidebar title the user can recognise, with no path in it.
+     *
+     * Deliberately free of the branch. A workspace is a directory, and the
+     * branch checked out in it changes with any `git checkout` the user or the
+     * dashboard performs — a title claiming "0.4.0-dev" survives that change
+     * and starts lying. The branch belongs on the conversations inside the
+     * workspace, where each one really is about one branch.
+     */
+    title: entry?.label || projectId,
   }
 }
 
@@ -350,6 +358,29 @@ function comparePaths(left, right) {
   const a = normalize(left)
   const b = normalize(right)
   return process.platform === 'win32' ? a.toLowerCase() === b.toLowerCase() : a === b
+}
+
+/**
+ * Drop a branch suffix an earlier version of this plugin wrote into a title.
+ *
+ * `create` reuses an existing registration without touching its title, so a
+ * workspace adopted before the naming changed keeps "label · branch" forever.
+ * This corrects exactly that one shape and nothing else: a title the user
+ * renamed themselves, or one that never carried the branch, is left alone.
+ *
+ * Renaming is best-effort. A failure here must not make adoption fail, since
+ * the registration itself already succeeded and is the thing the caller asked
+ * for.
+ */
+async function retitleBranchNamed(workspace, resolved) {
+  const branch = typeof resolved?.branch === 'string' ? resolved.branch : ''
+  if (!branch || !resolved.title) return
+  if (workspace.title !== `${resolved.title} · ${branch}`) return
+  try {
+    await workspace.setTitle(resolved.title)
+  } catch {
+    // Keep the stale title rather than failing the adoption.
+  }
 }
 
 function taskLabel(task) {
@@ -1515,6 +1546,7 @@ export function apply(ctx, rawConfig) {
             // `create` is idempotent per canonical path, so adopting twice
             // returns the same workspace instead of adding a duplicate.
             const workspace = await registry.create(resolved.path, resolved.title)
+            await retitleBranchNamed(workspace, resolved)
             // The id is what the Client needs to open the workspace and start
             // a conversation in it. It is an opaque uuid, not a path, and the
             // Client service offers no way to enumerate workspaces, so the
@@ -1620,6 +1652,18 @@ export function apply(ctx, rawConfig) {
               return
             }
             try {
+              /*
+               * A task worktree keeps the branch in its title, unlike a
+               * project checkout.
+               *
+               * The difference is real, not an inconsistency. A project
+               * checkout is a long-lived directory whose branch changes with
+               * any `git checkout`, so a branch in its name goes stale. A task
+               * worktree is created by the dashboard for one branch on one
+               * backend and is pruned when that task ends — the branch is part
+               * of what the directory permanently is, so naming it is what
+               * distinguishes two sibling worktrees in the sidebar.
+               */
               const workspace = await ctx.get('workspaceRegistry').create(path, taskLabel(task))
               sendJson(res, 200, { ok: true, title: workspace.title })
             } catch (failure) {

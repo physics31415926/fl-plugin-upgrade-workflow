@@ -188,6 +188,57 @@ test('a project repository is detected, never typed in', () => {
   }
 });
 
+test('a project workspace is named without its branch', () => {
+  // A workspace is a directory, and the branch checked out in it changes with
+  // any `git checkout`. A title carrying the branch survives that change and
+  // starts lying, so the branch belongs on the conversations inside instead.
+  const resolver = host.slice(host.indexOf('function resolveProjectRepo'), host.indexOf('* Read an upstream dashboard response'));
+  assert(/title: entry\?\.label \|\| projectId/.test(resolver), 'the title is the project label alone');
+  assert.equal(/title:.*\$\{branch\}/.test(resolver), false, 'the title must not interpolate the branch');
+
+  // A workspace adopted before this change keeps its old title, because
+  // `create` reuses a registration without retitling it.
+  assert(/async function retitleBranchNamed/.test(host), 'old titles are corrected');
+  const retitle = host.slice(host.indexOf('async function retitleBranchNamed'), host.indexOf('function taskLabel'));
+  // Only the exact shape this plugin used to write is rewritten; a title the
+  // user chose themselves must survive untouched.
+  assert(/workspace\.title !== `\$\{resolved\.title\} · \$\{branch\}`/.test(retitle), 'matches only its own old shape');
+  assert(/return$/m.test(retitle), 'leaves anything else alone');
+  assert(/catch/.test(retitle), 'a failed rename does not fail the adoption');
+});
+
+test('a task worktree keeps the branch in its title', () => {
+  // The two cases differ for a reason: a task worktree is created for one
+  // branch on one backend and pruned when the task ends, so the branch is part
+  // of what that directory permanently is.
+  const label = host.slice(host.indexOf('function taskLabel'), host.indexOf('/** Reduce one backend row'));
+  assert(/\$\{backend\} · \$\{branch\}/.test(label), 'names backend and branch');
+  const adopt = route('adopt-workspace', 'forget-workspace');
+  assert(/taskLabel\(task\)/.test(adopt), 'the worktree title comes from the task');
+  // The distinction must be written down, or it reads as an inconsistency.
+  // Block-comment prose wraps and each continuation line starts with a `*`,
+  // so drop those markers before collapsing whitespace.
+  const prose = adopt.replace(/^\s*\*/gm, ' ').replace(/\s+/g, ' ');
+  assert(prose.includes('branch is part of what the directory permanently is'),
+    'the difference from a project checkout is explained');
+});
+
+test('a conversation is named after the branch', () => {
+  // The version belongs on the conversation: it is about one branch at one
+  // moment, where the workspace outlives any single branch.
+  const start = client.slice(client.indexOf('const startSession = async'), client.indexOf('const forget ='));
+  assert(/connectWorkspace/.test(client), 'resolves the session id first');
+  assert(/renameSession\(ctx, sessionId, branch\)/.test(client), 'renames it to the branch');
+
+  const rename = client.slice(client.indexOf('async function renameSession'), client.indexOf('Shorten a bilingual vendor name'));
+  // A held reference must be released even when the rename throws.
+  assert(/sessions\.using\(/.test(rename), 'releases the reference');
+  assert(/source: 'gateway'/.test(rename), 'uses a declared reference source');
+  // Naming is cosmetic; a failure must not stop the conversation opening.
+  assert(/catch \{/.test(rename), 'a failed rename is not fatal');
+  assert(/slice\(0, 200\)/.test(rename), 'bounds the title length');
+});
+
 test('cloning is never performed by the plugin', () => {
   // Cloning writes to disk and reaches the network, so it stays a command the
   // user runs. Nothing in the plugin may spawn it.
