@@ -55,6 +55,78 @@ python -B dashboard.py start
 
 设备资源页支持两种来源：在本机页面登录 JumpServer 后直接同步授权机器，或沿用已有 SSH 档案。无需安装 TUI。控制服务每 5 分钟在后台采集设备读数，关闭设备页也会更新。打开或切回页面即可读取最近结果。机器列表可按需手动同步。数据过期、重启后尚未核验或驱动异常时，不计为空闲。JumpServer 登录用于获取资产，实时资源采集还需可用的 SSH 网关认证；详见[设备配置](docs/REFERENCE.md#设备资源与-jms-top)。普通 LAN 地址可直接查看适配进展、设备及进程明细，并手动刷新资源。多个访客共用同一份缓存，手动刷新共用 30 秒冷却。任务操作仍需本机或有效管理分享权限，JumpServer 登录与配置仅限本机。
 
+## 在 DeepSeek Harness 侧边栏里使用
+
+除了浏览器页面，本项目还提供一个 [DeepSeek Harness](https://github.com/deepseek-ai) 插件，
+把适配工作台搬进 Harness 左侧边栏：原生面板，跟随主题和语言，不用 iframe。
+源码在 [integrations/dsh-plugin/](integrations/dsh-plugin/)，那里的
+[README](integrations/dsh-plugin/README.md) 写了完整的安全边界和已知限制。
+
+### 安装
+
+从 [Releases](../../releases) 下载 `local-fl-upgrade-workflow-<版本>.tgz`，在 Harness 里安装：
+
+```sh
+dsh plugin install ./local-fl-upgrade-workflow-0.1.0.tgz
+```
+
+也可以自己打包，产物与发布的一致（纯标准库，不需要 Node）：
+
+```sh
+python -B scripts/pack_dsh_plugin.py --output-dir dist
+```
+
+打包是可复现的：条目排序固定、时间戳固定、换行统一为 LF，所以同一份源码在任何平台
+打出的包字节一致，发布的 sha256 才有意义。
+
+### 配置
+
+安装后必须填 `repoPath`，面板在这之前什么也做不了：
+
+| 配置项 | 说明 |
+| --- | --- |
+| `repoPath` | **必填**，本项目检出的绝对路径 |
+| `port` | 看板监听的回环端口，默认 `8766` |
+| `pythonPath` | 留空则用 PATH 上的 `python`，需要 3.11+ |
+| `projectsConfig` | 留空则依次找 `runs/configured/projects.json`、`projects.json` |
+| `autoStart` | 插件激活时是否自动拉起看板进程，默认 `false` |
+
+还没有配置过看板也没关系：面板里「在本机部署」是高亮的入口，勾选项目、填检出路径和
+目标分支，它会调用本项目自带的 `configure.py` 和启动器完成配置并启动，不重新实现一套
+配置逻辑。看板已经在跑（包括你自己在终端里起的）时，插件会识别并接管显示，不会重复启动。
+
+### 面板能做什么
+
+- 项目和分支切换，后端视图（合入、CI、验收、门禁）、设备视图、任务视图
+- 任务详情：计划、最新消息、进展摘要和对话记录，可发送后续消息
+- 新建任务：**只准备不启动**。上游带 `start` 的那次请求会同时创建并启动，也就是立刻
+  开始烧模型额度、在远端机器上执行命令，所以启动留在看板里做。准备本身也会建 worktree
+  并占用机器，这件事写在按钮上方
+- 项目仓库：按看板配置自动识别检出目录，一键加入 Harness 工作区，并在该工作区里新建
+  一个带好上下文的对话。只登记已存在的目录，不执行 `git clone` —— 仓库不在本地时只给
+  一条可复制的命令
+- 凭据：显示 Claude / JumpServer / GitHub / SSH 各自是否就绪。只有前两个能在面板里填，
+  因为只有它们在看板侧有加密落盘的位置；GitHub token 看板只从环境变量读，SSH 私钥只按
+  路径引用从不读取内容，给它们做表单等于让插件为密钥自己发明存储
+
+任务列表默认只显示从插件创建的任务。上游不记录任务由谁创建（没有这类字段，未知字段还
+会被静默丢弃），所以插件把创建时返回的 id 记在 `runs/` 下（已被 git 忽略，只存 id），
+想看全部可以一键切换。
+
+### 安全边界（摘要）
+
+- 浏览器不直连看板，所有读取走插件在 Harness 上的代理，**只放行一份只读白名单**。
+  `/api/codex-sessions`、`/api/jumpserver`、`/api/agent-settings` 这些带机器身份和凭据
+  位置的接口全部拒绝
+- 出站前裁剪字段，并对 agent 写的自由文本额外脱敏（绝对路径、主机、账号、IP）
+- 机器列表只保留 id、脱敏标签、后端、角色和「有没有远端工作目录」这个布尔值
+- 凭据只走 POST 请求体。原因很具体：看板的控制服务器会把每个请求行写进明文日志，
+  密钥出现在 query string 就等于落盘。插件自己不保存、不回显、不写浏览器存储
+- 浏览器拿不到文件系统路径，目录只以名字出现
+- 创建任务和填凭据只能由人在面板里操作，不进 agent 工具
+
+完整清单见[插件 README](integrations/dsh-plugin/README.md#安全边界)。
+
 ## 更多配置
 
 - [部署指南](docs/DEPLOYMENT.md)：配置向导、无人值守配置、HTTPS、免登录只读和后台常驻。

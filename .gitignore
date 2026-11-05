@@ -10,3 +10,8 @@ runs/
 projects.json
 branch-monitor.sglang.json
 .idea/
+# Packed plugin artifacts. The tarball is built from committed sources and
+# published to Releases, so committing it would only add a second copy that can
+# fall out of step with the source it was built from.
+dist/
+*.tgz
