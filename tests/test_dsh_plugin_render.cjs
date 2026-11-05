@@ -316,6 +316,69 @@ const REPO = {
   check('the seeded prompt names the project and branch', prompt.includes('vLLM-Plugin-FL') && prompt.includes('0.4.0-dev'))
 }
 
+// --- status dot, placeholders and pending labels ---
+{
+  // The pulsing class is what tells a reader which rows are live, so it has to
+  // appear for executing work and stay off everything that has settled.
+  for (const status of ['running', 'starting', 'interrupting']) {
+    const on = classes(render(probe.Dot, { status }))
+    check('a ' + status + ' task pulses', on.has('flup-dot-live'))
+  }
+  for (const status of ['completed', 'failed', 'interrupted', 'prepared', 'unknown', '']) {
+    const off = classes(render(probe.Dot, { status }))
+    check('a ' + (status || 'blank') + ' task does not pulse', !off.has('flup-dot-live'))
+  }
+}
+{
+  // The halo is drawn with currentColor, so `color` has to be set alongside
+  // the dot's own background or the ring renders in the inherited text colour.
+  const live = render(probe.Dot, { status: 'running' })
+  check('a live dot sets color for its halo', typeof live.props.style.color === 'string')
+  check('a live dot still sets its own fill', typeof live.props.style.background === 'string')
+  const idle = render(probe.Dot, { status: 'completed' })
+  check('a settled dot sets no halo colour', idle.props.style.color === undefined)
+}
+{
+  // A dot is decoration beside a word that already states the status.
+  const dot = render(probe.Dot, { status: 'running' })
+  check('a dot is hidden from assistive technology', dot.props['aria-hidden'] === true)
+}
+{
+  const skeleton = render(probe.Skeleton, { rows: 4, label: t.loading })
+  const bars = []
+  const walk = n => {
+    if (!n || typeof n !== 'object') return
+    if (Array.isArray(n)) return n.forEach(walk)
+    if (n.props && n.props.className === 'flup-skel') bars.push(n)
+    ;[n.props && n.props.children, n.children].flat(Infinity).forEach(walk)
+  }
+  walk(skeleton)
+  check('a skeleton renders the requested number of bars', bars.length === 4)
+  check('a skeleton announces itself as a status', skeleton.props.role === 'status')
+  check('a skeleton carries a readable label', skeleton.props['aria-label'] === t.loading)
+  check('skeleton bars vary in width', new Set(bars.map(b => b.props.style.width)).size > 1)
+  // Guard the degenerate case: a caller asking for nothing still shows
+  // something, otherwise the block collapses and the layout jumps.
+  check('a skeleton never renders zero bars', (() => {
+    const none = []
+    const w = n => {
+      if (!n || typeof n !== 'object') return
+      if (Array.isArray(n)) return n.forEach(w)
+      if (n.props && n.props.className === 'flup-skel') none.push(n)
+      ;[n.props && n.props.children, n.children].flat(Infinity).forEach(w)
+    }
+    w(render(probe.Skeleton, { rows: 0 }))
+    return none.length === 1
+  })())
+}
+{
+  // A spinner replaces nothing: the label stays, so the button keeps saying
+  // what it is doing rather than becoming a bare animation.
+  const pending = render(probe.Pending, { label: 'Deploying' })
+  check('a pending button keeps its label', text(pending).includes('Deploying'))
+  check('a pending button shows a spinner', classes(pending).has('flup-spin'))
+}
+
 // --- invariants ---
 check('no browser storage anywhere', !/localStorage|sessionStorage|document\.cookie/.test(src))
 check('no secret in any client URL', !/\$\{BASE\}[^`]*(secret|api_key|password)/.test(src))
