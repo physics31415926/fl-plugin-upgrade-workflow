@@ -59,6 +59,8 @@ window.__ModuleLoader__.load({
         fleet: 'hosts, free cards',
         // Deploy flow
         deployTitle: 'Deploy on this machine',
+        deployRailSetup: 'Start here: nothing is configured yet',
+        deployRailReady: 'Configure, restart, credentials',
         deployIntro: 'This plugin reads a local Python dashboard from the fl-plugin-upgrade-workflow checkout. Configure and start it here.',
         deployNeedRepo: 'Set repoPath in the plugin configuration to the fl-plugin-upgrade-workflow checkout, then reload.',
         deployNeedScript: 'That path is not an fl-plugin-upgrade-workflow checkout (scripts/configure.py is missing).',
@@ -252,6 +254,8 @@ window.__ModuleLoader__.load({
         fleet: '台在线，空闲卡',
         // Deploy flow
         deployTitle: '在本机部署',
+        deployRailSetup: '从这里开始：还没有配置',
+        deployRailReady: '配置、重启、凭据',
         deployIntro: '本插件读取 fl-plugin-upgrade-workflow 检出中的本地 Python 看板。可在此完成配置并启动。',
         deployNeedRepo: '请在插件配置中把 repoPath 设为 fl-plugin-upgrade-workflow 的检出路径，然后刷新。',
         deployNeedScript: '该路径不是 fl-plugin-upgrade-workflow 检出（缺少 scripts/configure.py）。',
@@ -426,6 +430,12 @@ window.__ModuleLoader__.load({
   display: flex; flex-direction: column; height: 100%; min-height: 0;
   background: var(--dsw-alias-bg-base); color: var(--dsw-alias-label-primary);
   font-size: 13px; line-height: 1.5;
+  /*
+   * The one colour not taken from a theme token: the foreground that sits on
+   * the brand fill. The brand colour is the same in both themes, so a token
+   * that flips with the theme would break contrast on it.
+   */
+  --flup-on-brand: #fff;
 }
 .flup-head {
   display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
@@ -454,6 +464,25 @@ window.__ModuleLoader__.load({
   border-color: var(--dsw-alias-brand-primary);
 }
 .flup-rail-btn:focus-visible { outline: 2px solid var(--dsw-alias-brand-primary); outline-offset: 1px; }
+/*
+ * The deploy entry sits apart from the project list, because it acts on the
+ * dashboard itself rather than on a project. It carries the brand fill while
+ * nothing is configured, since the panel is empty until it is used, and falls
+ * back to an outline once a dashboard exists and it is merely available.
+ */
+.flup-rail-cta {
+  border-color: var(--dsw-alias-brand-primary);
+  color: var(--dsw-alias-brand-primary);
+  font-weight: 500;
+}
+.flup-rail-cta-urgent {
+  background: var(--dsw-alias-brand-primary);
+  border-color: var(--dsw-alias-brand-primary);
+  color: var(--flup-on-brand);
+  font-weight: 500;
+}
+.flup-rail-cta-urgent:hover { background: var(--dsw-alias-brand-primary); filter: brightness(1.08); }
+.flup-rail-cta-urgent .flup-rail-sub { color: var(--flup-on-brand); opacity: 0.85; }
 .flup-rail-sub { font-size: 11px; color: var(--dsw-alias-label-secondary); font-weight: 400; }
 .flup-pane { flex: 1 1 auto; min-width: 0; display: flex; flex-direction: column; min-height: 0; }
 .flup-sub {
@@ -481,7 +510,7 @@ window.__ModuleLoader__.load({
  */
 .flup-btn-primary {
   border-color: transparent; background: var(--dsw-alias-brand-primary);
-  color: #fff; font-weight: 500;
+  color: var(--flup-on-brand); font-weight: 500;
 }
 .flup-btn-primary:hover:not(:disabled) { filter: brightness(1.08); background: var(--dsw-alias-brand-primary); }
 .flup-btn-accent {
@@ -2245,13 +2274,20 @@ window.__ModuleLoader__.load({
               row.default_branch ? h('span', { className: 'flup-rail-sub' }, String(row.default_branch)) : null,
             )),
             !projects.length && state ? h('p', { className: 'flup-empty', style: { padding: '0 10px' } }, t.noProjects) : null,
+            // Filled while nothing is configured, because every other view is
+            // empty until this one has been used; outlined once a dashboard
+            // exists, where it is useful but no longer the next step.
             h('button', {
-              className: 'flup-rail-btn',
+              className: `flup-rail-btn ${configured ? 'flup-rail-cta' : 'flup-rail-cta-urgent'}`,
               type: 'button',
               'aria-current': selected === 'deploy',
               onClick: () => setSelected('deploy'),
               style: { marginTop: 'auto' },
-            }, h('span', null, t.deployTitle)),
+            },
+              h('span', null, t.deployTitle),
+              h('span', { className: 'flup-rail-sub' },
+                configured ? t.deployRailReady : t.deployRailSetup),
+            ),
           ),
 
           h('div', { className: 'flup-pane' },
