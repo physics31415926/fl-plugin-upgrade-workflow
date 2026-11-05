@@ -10,7 +10,8 @@
 
 import { request as httpRequest } from 'node:http'
 import { existsSync, readFileSync } from 'node:fs'
-import { join, resolve as resolvePath } from 'node:path'
+import { realpath, writeFile } from 'node:fs/promises'
+import { basename, dirname, isAbsolute, join, resolve as resolvePath } from 'node:path'
 import { createServer as createSocketServer } from 'node:net'
 
 /*
@@ -207,6 +208,56 @@ function readProjectsFromDisk(config) {
 }
 
 /**
+ * Where one project's source checkout lives, read from the dashboard's own
+ * config rather than asked for.
+ *
+ * `projects.json` points each project at a branch-monitor config, and that
+ * file's `repo` names the checkout — usually relative to the dashboard repo,
+ * which is why it is resolved against `repoPath` rather than the process cwd.
+ *
+ * Returns `null` when nothing is configured, so a caller can say "unknown"
+ * instead of guessing a path and acting on it.
+ */
+function resolveProjectRepo(config, projectId) {
+  if (!config.repoPath) return null
+  const discovered = readProjectsFromDisk(config)
+  if (!discovered.source) return null
+  let entry = null
+  try {
+    const parsed = JSON.parse(readFileSync(discovered.source, 'utf8'))
+    entry = (Array.isArray(parsed?.projects) ? parsed.projects : [])
+      .find(p => p && p.id === projectId) ?? null
+  } catch {
+    return null
+  }
+  const monitorRef = typeof entry?.monitor_config === 'string' ? entry.monitor_config : ''
+  if (!monitorRef) return null
+  // The monitor path is itself relative to the config that named it.
+  const monitorPath = isAbsolute(monitorRef)
+    ? monitorRef
+    : join(dirname(discovered.source), monitorRef)
+  if (!existsSync(monitorPath)) return null
+  let monitor
+  try {
+    monitor = JSON.parse(readFileSync(monitorPath, 'utf8'))
+  } catch {
+    return null
+  }
+  const repoRef = typeof monitor?.repo === 'string' ? monitor.repo.trim() : ''
+  if (!repoRef) return null
+  const repoPath = isAbsolute(repoRef) ? repoRef : resolvePath(join(dirname(monitorPath), repoRef))
+  const branch = typeof monitor?.branch === 'string' ? monitor.branch : null
+  const githubRepo = typeof monitor?.github_repo === 'string' ? monitor.github_repo : null
+  return {
+    path: repoPath,
+    branch,
+    githubRepo,
+    // A sidebar title the user can recognise, with no path in it.
+    title: `${entry?.label || projectId}${branch ? ` · ${branch}` : ''}`,
+  }
+}
+
+/**
  * Read an upstream dashboard response, capped and decoded as text.
  *
  * `timeoutMs` exists because a few endpoints block on a cold cache rather than
@@ -286,6 +337,21 @@ function redactText(value, limit) {
  * which is unreadable and identical-looking between rows. `backend` and
  * `branch` are always present and are what actually distinguishes a task.
  */
+/**
+ * Compare two already-canonical directory paths.
+ *
+ * Windows paths are case-insensitive, so a registration made as `C:\Users`
+ * must still match a `c:\users` spelling of the same directory. Separators are
+ * normalized because the registry stores whatever `realpath` returned.
+ */
+function comparePaths(left, right) {
+  if (typeof left !== 'string' || typeof right !== 'string') return false
+  const normalize = value => value.replace(/[\\/]+$/, '').replace(/\//g, '\\')
+  const a = normalize(left)
+  const b = normalize(right)
+  return process.platform === 'win32' ? a.toLowerCase() === b.toLowerCase() : a === b
+}
+
 function taskLabel(task) {
   const given = task?.title ?? task?.thread_name
   if (typeof given === 'string' && given.trim()) return given.trim().slice(0, 200)
@@ -913,6 +979,110 @@ export function apply(ctx, rawConfig) {
     })
   }
 
+  /**
+   * Where the ids of tasks this plugin created are remembered.
+   *
+   * Upstream records nothing about which client created a task: there is no
+   * `created_by`, no client id, and unknown request fields are silently
+   * dropped, so a tag cannot be smuggled in. The only durable handle is the id
+   * the create call returns, so it is kept here and the panel filters on it.
+   *
+   * Kept under the dashboard checkout's `runs/` directory, which the repo
+   * already git-ignores, so the record never becomes a tracked file. It holds
+   * ids and nothing else: no paths, no credentials, no machine identity.
+   */
+  const createdStorePath = config.repoPath
+    ? join(config.repoPath, 'runs', 'dsh-plugin-created-tasks.json')
+    : null
+
+  /** Ids this plugin created, per project. Shape: `{ [projectId]: string[] }`. */
+  const readCreated = () => {
+    if (!createdStorePath) return {}
+    try {
+      const parsed = JSON.parse(readFileSync(createdStorePath, 'utf8'))
+      return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : {}
+    } catch {
+      // No file yet, or an unreadable one: an empty record is the safe answer,
+      // because this only ever narrows what the panel shows.
+      return {}
+    }
+  }
+
+  const rememberCreated = async (projectId, taskId) => {
+    if (!createdStorePath) return
+    const all = readCreated()
+    const ids = Array.isArray(all[projectId]) ? all[projectId] : []
+    if (ids.includes(taskId)) return
+    ids.push(taskId)
+    all[projectId] = ids
+    await writeFile(createdStorePath, `${JSON.stringify(all, null, 2)}\n`, 'utf8')
+  }
+
+  /**
+   * Which credentials the dashboard considers configured.
+   *
+   * Booleans and provider names only. Every source route carries values this
+   * must not forward: `/api/jumpserver` returns a base URL, a username, an
+   * identity-file path and the whole asset inventory, and the agent routes
+   * name a third-party base URL. The panel needs to know what is missing, not
+   * what the values are.
+   *
+   * A GitHub token is deliberately absent: no upstream route reports one,
+   * because it is read from the dashboard's own process environment and never
+   * stored. Claiming to detect it would be a lie, so the panel explains the
+   * `gh auth login` path instead.
+   */
+  const credentialState = async projectId => {
+    const query = `?project=${encodeURIComponent(projectId)}`
+    const read = async path => {
+      try {
+        const reply = await callUpstream(config.port, 'GET', `${path}${query}`)
+        if (reply.status >= 400) return null
+        return JSON.parse(reply.text)
+      } catch {
+        // A credential view must not fail just because one probe did.
+        return null
+      }
+    }
+    const [providers, jump, caps] = await Promise.all([
+      read('/api/agent-providers'),
+      read('/api/jumpserver'),
+      read('/api/capabilities'),
+    ])
+    const agent = name => {
+      const row = providers?.providers?.[name]
+      if (!row) return null
+      return {
+        available: row.available === true,
+        configured: row.configured === true,
+        // `authenticated` is null for a key-based provider, which is not the
+        // same as "not authenticated".
+        authenticated: row.authenticated === true,
+        // A provider can be configured and still unusable, so carry the
+        // reason — redacted, since it can name an interpreter path.
+        error: redactText(row.error, 200),
+      }
+    }
+    return {
+      codex: agent('codex'),
+      claude: agent('claude'),
+      flagscale: agent('flagscale'),
+      // Which machine source is active decides whether JumpServer credentials
+      // matter at all.
+      machineSource: scalar(caps?.machine_source) || null,
+      jumpserver: jump
+        ? {
+          enabled: jump.enabled === true,
+          authenticated: jump.authenticated === true,
+          passwordSaved: jump.password_saved === true,
+          canRemember: jump.can_remember_password === true,
+          assetCount: Number.isFinite(jump.asset_count) ? jump.asset_count : 0,
+          error: redactText(jump.error, 200),
+        }
+        : null,
+    }
+  }
+
   const disposeRoute = ctx.webServer.register({
     kind: 'prefix',
     path: ROUTE_PREFIX,
@@ -938,6 +1108,126 @@ export function apply(ctx, rawConfig) {
           return
         }
 
+        /*
+         * Credential readiness for the deploy view. A GET with no secret in
+         * it, by design: the upstream server logs request lines to a plaintext
+         * file, so this route only ever carries a project id.
+         */
+        if (req.method === 'GET' && action === 'credentials') {
+          const projectId = scalar(url.searchParams.get('project'))
+          if (!projectId) {
+            sendJson(res, 400, { error: 'project is required' })
+            return
+          }
+          sendJson(res, 200, await credentialState(projectId))
+          return
+        }
+        /*
+         * What a new task could be created with, and what currently blocks it.
+         *
+         * Every guard is resolved here from upstream rather than in the
+         * browser, so a stale panel cannot offer an option the dashboard will
+         * refuse. The reply names machines by id and label only: the source
+         * route also carries SSH aliases, connection details and identity-file
+         * paths, none of which the panel needs.
+         */
+        if (req.method === 'GET' && action === 'task-options') {
+          const projectId = scalar(url.searchParams.get('project'))
+          if (!projectId) {
+            sendJson(res, 400, { error: 'project is required' })
+            return
+          }
+          if (!current && !(await syncAdoption())) {
+            sendJson(res, 503, { error: 'dashboard is not running' })
+            return
+          }
+          let cards
+          try {
+            const reply = await callUpstream(
+              config.port,
+              'GET',
+              `/api/codex-sessions?view=cards&project=${encodeURIComponent(projectId)}`,
+              undefined,
+              SLOW_UPSTREAM_TIMEOUT_MS,
+            )
+            if (reply.status >= 400) {
+              sendJson(res, 502, { error: 'cannot read the machine list' })
+              return
+            }
+            cards = JSON.parse(reply.text)
+          } catch (failure) {
+            sendJson(res, 502, { error: redactText(failure.message, 300) ?? 'cannot read the machine list' })
+            return
+          }
+          let tasks = []
+          try {
+            tasks = await listTasks(projectId)
+          } catch {
+            // The pair guard degrades to "unknown" rather than blocking the
+            // whole view; upstream enforces it again on create anyway.
+          }
+          // A (backend, branch) pair that already has a live task cannot take
+          // another one. Soft-deleted tasks free their pair, and they are
+          // already absent from this list.
+          const taken = new Set()
+          for (const task of tasks) {
+            if (task?.backend && task?.branch) taken.add(`${task.backend}\u0000${task.branch}`)
+          }
+          const policies = {}
+          for (const [backend, policy] of Object.entries(cards?.backend_task_policies ?? {})) {
+            if (!policy || typeof policy !== 'object') continue
+            policies[backend] = {
+              mode: scalar(policy.mode) || null,
+              // A policy only bites when its branch matches the requested one.
+              branch: scalar(policy.branch) || null,
+              reason: redactText(policy.reason, 300),
+              pr: typeof policy.pr === 'number' ? policy.pr : null,
+              pr_url: typeof policy.pr_url === 'string' ? policy.pr_url : null,
+            }
+          }
+          const machines = (Array.isArray(cards?.machine_profiles) ? cards.machine_profiles : [])
+            .filter(row => row && typeof row.id === 'string')
+            .map(row => ({
+              id: row.id,
+              // A label is operator-written and can name a host, so redact it.
+              label: redactText(row.label, 120) ?? row.id.slice(0, 12),
+              backend: scalar(row.backend) || null,
+              role: scalar(row.role) || null,
+              // Upstream rejects a non-compute machine for an adaptation task.
+              usable: (scalar(row.role) || 'compute') === 'compute' && !row.configuration_error,
+              // Every profile on this deployment has an empty remote_workspace,
+              // which manual creation requires. Report it so the panel can say
+              // why, instead of letting the user hit a 400.
+              hasWorkspace: typeof row.remote_workspace === 'string' && row.remote_workspace.trim() !== '',
+              // Name-inferred backends are not hardware-verified; automatic
+              // mode re-detects over SSH and may disagree.
+              backendVerified: !/推断|infer/i.test(String(row.backend_source ?? '')),
+              configError: redactText(row.configuration_error, 200),
+            }))
+          sendJson(res, 200, {
+            // `available` false means sessions are not configured at all.
+            available: cards?.available === true,
+            defaultBranch: scalar(cards?.default_branch) || null,
+            backends: Array.isArray(cards?.backends) ? cards.backends.filter(b => typeof b === 'string') : [],
+            machines,
+            policies,
+            takenPairs: [...taken].map(key => {
+              const [backend, branch] = key.split('\u0000')
+              return { backend, branch }
+            }),
+            providers: Object.entries(cards?.providers ?? {}).reduce((out, [name, row]) => {
+              out[name] = {
+                available: row?.available === true,
+                error: redactText(row?.error, 200),
+              }
+              return out
+            }, {}),
+            // No profile having a workspace means manual creation cannot work
+            // on this deployment at all, which the panel must say plainly.
+            anyManualPossible: machines.some(m => m.usable && m.hasWorkspace),
+          })
+          return
+        }
         if (req.method === 'GET' && action === 'deploy-preflight') {
           sendJson(res, 200, deployPreflight())
           return
@@ -1003,7 +1293,18 @@ export function apply(ctx, rawConfig) {
           // strip that field and leave the panel with a shapeless object.
           if (upstream.status < 400 && url.searchParams.get('full') !== 'true') {
             try {
-              text = JSON.stringify(summarizeUpstream(path, JSON.parse(upstream.text)))
+              const summary = summarizeUpstream(path, JSON.parse(upstream.text))
+              // Mark which tasks this plugin created. Upstream records no
+              // creator at all, so this local record is the only source, and
+              // the panel uses it to default to its own tasks.
+              if (path === '/api/adaptation-tasks' && Array.isArray(summary?.tasks)) {
+                const mine = new Set(readCreated()[project] ?? [])
+                summary.created_here = mine.size
+                for (const task of summary.tasks) {
+                  task.created_here = mine.has(task.id)
+                }
+              }
+              text = JSON.stringify(summary)
             } catch {
               // Not JSON (or unparseable): forward it unchanged.
             }
@@ -1076,6 +1377,164 @@ export function apply(ctx, rawConfig) {
         }
 
         /*
+         * What the sidebar currently holds for one worktree path.
+         *
+         * `resolveByPath` canonicalizes through `realpath` before it looks
+         * anything up, so a path that no longer exists REJECTS rather than
+         * returning undefined. The dashboard prunes a worktree when its task
+         * finishes, which means a registration made earlier becomes
+         * unresolvable by path even though it is still in the sidebar. Asking
+         * the registry for its own list avoids the filesystem entirely, and
+         * each entity reports `missing-dir` itself, so a stale row can be
+         * labelled instead of silently reading as "never adopted".
+         */
+        const describeWorkspace = async path => {
+          const registry = ctx.get('workspaceRegistry')
+          let canonical = null
+          try {
+            canonical = await realpath(path)
+          } catch {
+            // The worktree is not on disk: either not created yet, or pruned.
+            // Which one it is depends on whether a registration survives.
+          }
+          for (const workspace of registry.list()) {
+            // `list()` paths are already canonical, so compare case-insensitively
+            // on Windows and exactly elsewhere.
+            const same = canonical
+              ? comparePaths(workspace.path, canonical)
+              : comparePaths(workspace.path, path)
+            if (!same) continue
+            const status = await workspace.status()
+            return {
+              exists: true,
+              // An opaque uuid, which the Client needs to open the workspace
+              // and start a conversation in it. Its service cannot enumerate
+              // workspaces, so this is the only way it can learn the id.
+              workspace: workspace.id,
+              title: workspace.title,
+              // A registration whose directory is gone is worse than no
+              // registration: it sits in the sidebar and opens nothing.
+              stale: status === 'missing-dir',
+              missing: false,
+            }
+          }
+          return { exists: false, workspace: null, title: null, stale: false, missing: canonical === null }
+        }
+
+        /*
+         * Which project repositories exist on disk, and whether each is
+         * already in the sidebar.
+         *
+         * The dashboard's own branch-monitor config names each project's
+         * checkout, usually relative to the dashboard repo, so the path can be
+         * derived rather than asked for. The browser receives booleans and a
+         * display name only: the resolved path stays here.
+         */
+        if (req.method === 'GET' && action === 'repos') {
+          if (!ctx.get('workspaceRegistry')) {
+            sendJson(res, 200, { supported: false, repos: [] })
+            return
+          }
+          const repos = []
+          for (const project of readProjectsFromDisk(config).projects) {
+            const resolved = resolveProjectRepo(config, project.id)
+            if (!resolved) {
+              repos.push({
+                project: project.id,
+                label: project.label,
+                // Without a config entry there is nothing to detect, and the
+                // panel must not offer to clone a repo it cannot name.
+                known: false,
+                present: false,
+                adopted: false,
+                name: null,
+                remote: null,
+              })
+              continue
+            }
+            const described = await describeWorkspace(resolved.path)
+            repos.push({
+              project: project.id,
+              label: project.label,
+              known: true,
+              present: existsSync(resolved.path),
+              adopted: described.exists,
+              workspace: described.workspace,
+              stale: described.stale,
+              // The directory's own name, not its path: enough to recognise
+              // the checkout without disclosing where it sits.
+              name: basename(resolved.path),
+              branch: resolved.branch,
+              // A clone needs a source, and the configured GitHub repo is
+              // already public information in the dashboard's config.
+              remote: resolved.githubRepo,
+            })
+          }
+          sendJson(res, 200, { supported: true, repos })
+          return
+        }
+
+        /*
+         * Put one project's repository in the sidebar.
+         *
+         * Registration only: the directory must already exist. Cloning is a
+         * separate, separately-confirmed action, because it writes to disk and
+         * reaches the network.
+         */
+        if (req.method === 'POST' && action === 'adopt-repo') {
+          const registry = ctx.get('workspaceRegistry')
+          if (!registry) {
+            sendJson(res, 501, { error: 'this Harness build has no workspace sidebar' })
+            return
+          }
+          const raw = await readBody(req)
+          let parsed = {}
+          if (raw.trim()) {
+            try {
+              parsed = JSON.parse(raw)
+            } catch {
+              sendJson(res, 400, { error: 'body must be JSON' })
+              return
+            }
+          }
+          const projectId = scalar(parsed?.project)
+          if (!projectId) {
+            sendJson(res, 400, { error: 'project is required' })
+            return
+          }
+          const resolved = resolveProjectRepo(config, projectId)
+          if (!resolved) {
+            sendJson(res, 404, { error: 'this project has no repository configured' })
+            return
+          }
+          if (!existsSync(resolved.path)) {
+            sendJson(res, 409, { error: 'this repository is not on disk yet', present: false })
+            return
+          }
+          try {
+            // `create` is idempotent per canonical path, so adopting twice
+            // returns the same workspace instead of adding a duplicate.
+            const workspace = await registry.create(resolved.path, resolved.title)
+            // The id is what the Client needs to open the workspace and start
+            // a conversation in it. It is an opaque uuid, not a path, and the
+            // Client service offers no way to enumerate workspaces, so the
+            // Host has to hand it over explicitly.
+            sendJson(res, 200, {
+              ok: true,
+              workspace: workspace.id,
+              title: workspace.title,
+              name: basename(resolved.path),
+            })
+          } catch (failure) {
+            sendJson(res, 400, {
+              ok: false,
+              error: redactText(failure.message, 300) ?? 'this directory could not be added',
+            })
+          }
+          return
+        }
+
+        /*
          * Which tasks already have a Harness workspace.
          *
          * The browser never sends or receives a filesystem path: it names a
@@ -1103,22 +1562,7 @@ export function apply(ctx, rawConfig) {
           for (const task of tasks) {
             const path = typeof task?.worktree === 'string' ? task.worktree : null
             if (!path) continue
-            let workspace
-            try {
-              workspace = await ctx.get('workspaceRegistry').resolveByPath(path)
-            } catch {
-              // A worktree the agent has not created yet, or one already
-              // pruned: not an error, just nothing to adopt.
-              rows.push({ task: task.id, exists: false, missing: true })
-              continue
-            }
-            rows.push({
-              task: task.id,
-              exists: Boolean(workspace),
-              // A title is safe to show; the path it points at is not.
-              title: workspace ? workspace.title : null,
-              missing: false,
-            })
+            rows.push({ task: task.id, ...await describeWorkspace(path) })
           }
           sendJson(res, 200, { supported: true, tasks: rows })
           return
@@ -1179,12 +1623,82 @@ export function apply(ctx, rawConfig) {
               const workspace = await ctx.get('workspaceRegistry').create(path, taskLabel(task))
               sendJson(res, 200, { ok: true, title: workspace.title })
             } catch (failure) {
-              // `create` rejects a path that is missing or not a directory.
+              // `create` rejects a path that is missing or not a directory,
+              // which for a task worktree means the dashboard has not created
+              // it yet or has already pruned it. Say which, because the two
+              // need opposite actions from the user.
+              const existing = await describeWorkspace(path)
               sendJson(res, 409, {
                 ok: false,
-                error: redactText(failure.message, 400) ?? 'the worktree could not be registered',
+                stale: existing.stale,
+                error: existing.stale
+                  ? 'the worktree this task was registered under no longer exists'
+                  : redactText(failure.message, 400) ?? 'the worktree could not be registered',
               })
             }
+            return
+          }
+          /*
+           * Drop a sidebar registration whose directory is gone.
+           *
+           * Deliberately limited to that case: the route refuses while the
+           * directory still exists, so it cannot be used to unregister a
+           * workspace the user is working in. Deleting a registration keeps
+           * the directory and every session log, so nothing is destroyed.
+           */
+          if (action === 'forget-workspace') {
+            const registry = ctx.get('workspaceRegistry')
+            if (!registry) {
+              sendJson(res, 501, { error: 'this Harness build has no workspace registry' })
+              return
+            }
+            const raw = await readBody(req)
+            let parsed = {}
+            if (raw.trim()) {
+              try {
+                parsed = JSON.parse(raw)
+              } catch {
+                sendJson(res, 400, { error: 'body must be JSON' })
+                return
+              }
+            }
+            const projectId = scalar(parsed?.project)
+            const taskId = scalar(parsed?.task)
+            if (!projectId || !taskId) {
+              sendJson(res, 400, { error: 'project and task are required' })
+              return
+            }
+            let tasks
+            try {
+              tasks = await listTasks(projectId)
+            } catch (failure) {
+              sendJson(res, 502, { error: redactText(failure.message, 400) ?? 'cannot read the task list' })
+              return
+            }
+            const task = tasks.find(row => row?.id === taskId)
+            if (!task) {
+              sendJson(res, 404, { error: 'no such task in this project' })
+              return
+            }
+            const path = typeof task.worktree === 'string' ? task.worktree : ''
+            if (!path) {
+              sendJson(res, 409, { error: 'this task has no local worktree yet' })
+              return
+            }
+            let target
+            for (const workspace of registry.list()) {
+              if (comparePaths(workspace.path, path)) { target = workspace; break }
+            }
+            if (!target) {
+              sendJson(res, 404, { error: 'this task has no sidebar entry' })
+              return
+            }
+            if (await target.status() !== 'missing-dir') {
+              sendJson(res, 409, { error: 'this workspace still exists; remove it from the sidebar instead' })
+              return
+            }
+            await registry.delete(target.id)
+            sendJson(res, 200, { ok: true })
             return
           }
           if (action === 'start') {
@@ -1207,6 +1721,209 @@ export function apply(ctx, rawConfig) {
               }
             }
             sendJson(res, 200, await deploy(parsed))
+            return
+          }
+          /*
+           * Hand one credential to the dashboard's own encrypted store.
+           *
+           * This route never persists anything itself and never returns a
+           * secret. The dashboard already owns a correct sink for each type it
+           * accepts: both are POST bodies, sealed with Windows DPAPI under the
+           * current user, written into a git-ignored directory, and read back
+           * only as a boolean. Reimplementing any of that here would be
+           * strictly worse, so this is a thin forwarder.
+           *
+           * Deliberately NOT accepted:
+           *  - a GitHub token, because the dashboard has no store for one. It
+           *    reads GITHUB_TOKEN/GH_TOKEN from its own environment and prefers
+           *    an authenticated `gh`, so a field here would force this plugin
+           *    to invent persistence for a secret. The panel detects and
+           *    instructs instead.
+           *  - an SSH private key or passphrase. That design is
+           *    reference-only: config and key files are named by path and their
+           *    bytes are never read. Accepting key material would break the
+           *    invariant the dashboard maintains.
+           *
+           * The secret travels in the request body for a concrete reason: the
+           * upstream control server logs every request LINE to a plaintext
+           * file, so anything in a query string or path segment would be
+           * written to disk unencrypted.
+           */
+          if (action === 'credential') {
+            const raw = await readBody(req)
+            let parsed = {}
+            if (raw.trim()) {
+              try {
+                parsed = JSON.parse(raw)
+              } catch {
+                sendJson(res, 400, { error: 'body must be JSON' })
+                return
+              }
+            }
+            const kind = scalar(parsed?.kind)
+            const secret = typeof parsed?.secret === 'string' ? parsed.secret : ''
+            if (kind !== 'claude' && kind !== 'jumpserver') {
+              sendJson(res, 400, { error: 'kind must be claude or jumpserver' })
+              return
+            }
+            if (!secret) {
+              sendJson(res, 400, { error: 'secret must be a non-empty string' })
+              return
+            }
+            // Upstream caps both at 4096 and rejects control characters.
+            if (secret.length > 4096 || /[\u0000-\u001f]/.test(secret)) {
+              sendJson(res, 400, { error: 'this value is not a valid credential' })
+              return
+            }
+            const projectId = scalar(parsed?.project)
+            if (!projectId) {
+              sendJson(res, 400, { error: 'project is required' })
+              return
+            }
+            const target = kind === 'claude'
+              ? { path: '/api/agent-settings', payload: { provider: 'claude', api_key: secret } }
+              : {
+                path: '/api/jumpserver/login',
+                payload: {
+                  password: secret,
+                  // Persisting the password is the user's explicit choice, and
+                  // only Windows can seal it. Default to memory-only.
+                  remember_password: parsed?.remember === true,
+                },
+              }
+            try {
+              const reply = await callUpstream(
+                config.port,
+                'POST',
+                `${target.path}?project=${encodeURIComponent(projectId)}`,
+                JSON.stringify(target.payload),
+                SLOW_UPSTREAM_TIMEOUT_MS,
+              )
+              if (reply.status >= 400) {
+                // Upstream error text is written for an operator and may name a
+                // host or a key path, so it is redacted before it is shown.
+                let message = 'the dashboard rejected this credential'
+                try {
+                  const body = JSON.parse(reply.text)
+                  message = redactText(body?.error, 300) ?? message
+                } catch { /* a non-JSON failure body says nothing useful */ }
+                sendJson(res, 400, { ok: false, error: message })
+                return
+              }
+              // Confirm from the dashboard's own read route rather than
+              // trusting the write. Neither reply contains the secret.
+              sendJson(res, 200, { ok: true, state: await credentialState(projectId) })
+            } catch (failure) {
+              sendJson(res, 502, {
+                ok: false,
+                error: redactText(failure.message, 300) ?? 'the dashboard could not be reached',
+              })
+            }
+            return
+          }
+          /*
+           * Create an adaptation task. Prepare only; never start.
+           *
+           * `start` is deliberately never forwarded, under any input. Sending
+           * it would make one request both create the task AND launch an agent
+           * turn, spending model tokens and running commands on a remote GPU
+           * host. Starting stays in the dashboard, where the user sees the full
+           * context of what is about to run.
+           *
+           * Even prepare-only is not free: upstream adds a git worktree and
+           * takes a cross-project machine lease, so the panel confirms first.
+           *
+           * Only `profile_id`, `branch`, `goal` and `provider` are forwarded.
+           * The machine's SSH alias, connection details, remote workspace and
+           * model paths are all derived upstream from the profile, so the
+           * browser never sends or sees machine identity. `ssh_connection` is
+           * never forwarded: upstream validates it against the saved profile
+           * anyway and its presence forces a live SSH preflight.
+           */
+          if (action === 'create-task') {
+            const raw = await readBody(req)
+            let parsed = {}
+            if (raw.trim()) {
+              try {
+                parsed = JSON.parse(raw)
+              } catch {
+                sendJson(res, 400, { error: 'body must be JSON' })
+                return
+              }
+            }
+            const projectId = scalar(parsed?.project)
+            const profileId = scalar(parsed?.profile)
+            const branch = scalar(parsed?.branch)
+            const provider = scalar(parsed?.provider) || 'codex'
+            const goal = typeof parsed?.goal === 'string' ? parsed.goal.trim() : ''
+            if (!projectId || !profileId) {
+              sendJson(res, 400, { error: 'project and profile are required' })
+              return
+            }
+            if (!branch) {
+              sendJson(res, 400, { error: 'branch is required' })
+              return
+            }
+            // Upstream rejects a branch with whitespace or a leading dash, and
+            // caps the goal at 6000.
+            if (branch.length > 200 || /\s/.test(branch) || branch.startsWith('-')) {
+              sendJson(res, 400, { error: 'branch is not a valid git ref' })
+              return
+            }
+            if (goal.length > 6000) {
+              sendJson(res, 400, { error: 'goal is too long (6000 characters maximum)' })
+              return
+            }
+            if (provider !== 'codex' && provider !== 'claude') {
+              // `flagscale` is a real upstream provider but reports itself
+              // unavailable here, and a provider cannot be changed after
+              // creation, so offering it would strand the task.
+              sendJson(res, 400, { error: 'provider must be codex or claude' })
+              return
+            }
+            if (!current && !(await syncAdoption())) {
+              sendJson(res, 503, { error: 'dashboard is not running' })
+              return
+            }
+            const query = `?project=${encodeURIComponent(projectId)}`
+            try {
+              const reply = await callUpstream(
+                config.port,
+                'POST',
+                `/api/codex-sessions${query}`,
+                // Note the absent `start`: see the comment above.
+                JSON.stringify({ profile_id: profileId, branch, provider, goal }),
+                SLOW_UPSTREAM_TIMEOUT_MS,
+              )
+              if (reply.status >= 400) {
+                let message = 'the dashboard refused to create this task'
+                try {
+                  message = redactText(JSON.parse(reply.text)?.error, 400) ?? message
+                } catch { /* a non-JSON failure body says nothing useful */ }
+                sendJson(res, 400, { ok: false, error: message })
+                return
+              }
+              // The reply echoes the whole session, including the worktree
+              // path and SSH alias. Keep the id, and let the projecting task
+              // route supply everything the panel displays.
+              const created = JSON.parse(reply.text)
+              const taskId = scalar(created?.id)
+              if (!taskId) {
+                sendJson(res, 502, { ok: false, error: 'the dashboard did not return a task id' })
+                return
+              }
+              // Upstream records no creator, so this is the only way the panel
+              // can tell its own tasks apart later.
+              await rememberCreated(projectId, taskId)
+              sendJson(res, 200, { ok: true, task: taskId })
+            } catch (failure) {
+              // A timed-out create may still have succeeded upstream, and
+              // there is no idempotency key, so never retry automatically.
+              sendJson(res, 502, {
+                ok: false,
+                error: redactText(failure.message, 300) ?? 'the dashboard could not be reached',
+              })
+            }
             return
           }
           /*
