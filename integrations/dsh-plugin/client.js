@@ -443,6 +443,33 @@ window.__ModuleLoader__.load({
     }
 
     /**
+     * Give a conversation a readable title.
+     *
+     * A session is named by holding a reference to it and calling `rename`.
+     * The reference must be released, so `using` does that even if the rename
+     * throws. `source` has to be one of the known reference sources; `gateway`
+     * is the one that fits a UI-initiated operation.
+     *
+     * Naming is best-effort: it is cosmetic, and the conversation itself is
+     * already usable. A failure must not stop the session from opening, so it
+     * is swallowed rather than surfaced as an error the user cannot act on.
+     */
+    async function renameSession(ctx, sessionId, title) {
+      const sessions = ctx && ctx.get('sessions')
+      if (!sessions || !sessionId || !title) return false
+      try {
+        return await sessions.using(sessionId, { source: 'gateway' }, async reference => {
+          const binding = await reference.ready
+          const result = await binding.session.rename(String(title).slice(0, 200))
+          // `rename` reports refusal in its result rather than by throwing.
+          return Boolean(result && result.ok !== false)
+        })
+      } catch {
+        return false
+      }
+    }
+
+    /**
      * Shorten a bilingual vendor name to the half that matches the dictionary.
      *
      * The bastion labels its hardware "NVIDIA / 英伟达", which is helpful in a
@@ -1961,6 +1988,12 @@ window.__ModuleLoader__.load({
        * The workspace id comes from the Host, because the Client workspace
        * service cannot enumerate workspaces and the browser never learns the
        * path it would otherwise match on.
+       *
+       * The conversation is named after the branch, not the workspace. The
+       * workspace is the directory and keeps a stable name; a conversation is
+       * about one branch at one moment, so that is where a version belongs.
+       * `connectWorkspace` resolves the session id first so it can be renamed
+       * before the draft opens, which `startSession` alone cannot do.
        */
       const startSession = async () => {
         const uiWorkspace = ctx && ctx.get('uiWorkspace')
@@ -1970,12 +2003,20 @@ window.__ModuleLoader__.load({
         }
         setBusy(true)
         setError(null)
+        const branch = repo.branch || t.repoTrackedBranch
         try {
-          await uiWorkspace.startSession(repo.workspace, {
+          const options = {
             prompt: t.repoSessionPrompt
               .replace('{project}', project.label)
-              .replace('{branch}', repo.branch || t.repoTrackedBranch),
-          })
+              .replace('{branch}', branch),
+          }
+          // Naming needs the id up front; without `connectWorkspace` the only
+          // way in is `startSession`, which returns nothing to rename.
+          if (typeof uiWorkspace.connectWorkspace === 'function') {
+            const sessionId = await uiWorkspace.connectWorkspace(repo.workspace)
+            await renameSession(ctx, sessionId, branch)
+          }
+          await uiWorkspace.startSession(repo.workspace, options)
         } catch (failure) {
           setError(String(failure.message))
         } finally {
