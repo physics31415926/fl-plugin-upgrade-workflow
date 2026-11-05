@@ -73,6 +73,33 @@ class DocLinkTests(unittest.TestCase):
         for needle in ("dashboard.py configure", "/access-shares", "/monitor?project="):
             self.assertNotIn(needle, home, f"{needle} belongs in docs/STANDALONE.md")
 
+    def test_install_instructions_use_an_absolute_path(self) -> None:
+        """The Harness installer refuses a relative spec, so the docs must not show one.
+
+        A bare filename is worse than refused: it parses as an npm package name
+        and fails with "not found", which reads like a broken package rather
+        than an incomplete path. Both READMEs point at the GUI dialog first,
+        because installing should not require opening a terminal.
+        """
+        for name in ("README.md", "integrations/dsh-plugin/README.md"):
+            text = (REPO / name).read_text(encoding="utf-8")
+            self.assertIn("添加插件", text, f"{name}: must describe the GUI install entry")
+            self.assertIn("绝对", text, f"{name}: must require an absolute path")
+            # A relative spec in a copyable command is the trap being avoided.
+            self.assertNotIn(
+                "install ./",
+                text,
+                f"{name}: a relative path is refused by the installer",
+            )
+            # The published asset is local-*, never deepseek-*.
+            self.assertNotIn(
+                "deepseek-fl-upgrade-workflow",
+                text,
+                f"{name}: stale artifact name",
+            )
+            if "dsh plugin install" in text:
+                self.assertIn("local-fl-upgrade-workflow", text, f"{name}: names the real asset")
+
     def test_standalone_doc_is_self_contained(self) -> None:
         """Someone who never installs Harness must be able to start from it alone."""
         alone = (REPO / "docs" / "STANDALONE.md").read_text(encoding="utf-8")
