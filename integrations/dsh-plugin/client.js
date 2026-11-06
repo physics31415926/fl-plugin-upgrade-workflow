@@ -521,7 +521,52 @@ window.__ModuleLoader__.load({
   --flup-wash-error: color-mix(in srgb, var(--dsw-alias-state-error-primary) 10%, var(--dsw-alias-bg-layer-1));
   --flup-edge-brand: color-mix(in srgb, var(--dsw-alias-brand-primary) 38%, transparent);
   --flup-ease: cubic-bezier(0.22, 0.61, 0.36, 1);
+
+  /*
+   * One spacing scale, and one radius scale.
+   *
+   * These replace a long tail of ad-hoc values: eighteen distinct spacings
+   * under 40px and seven radii, most of them written inline, a few pixels
+   * apart and chosen one element at a time. Nothing lined up with anything
+   * else, which is what made the panel feel untidy without any single thing
+   * being wrong. Four steps and three radii cover every case here, and being
+   * few is the point — a scale no one can hold in their head gets ignored.
+   */
+  --flup-s1: 4px;
+  --flup-s2: 8px;
+  --flup-s3: 12px;
+  --flup-s4: 20px;
+  --flup-r1: 5px;
+  --flup-r2: 8px;
+  --flup-r3: 999px;
 }
+/*
+ * Vertical rhythm as classes, so markup stops carrying inline margins.
+ *
+ * An inline style silently outranks every rule in this stylesheet, so each one
+ * was a small hole in the design system; these close them while keeping the
+ * markup readable about its own spacing.
+ */
+.flup-mt2 { margin-top: var(--flup-s2); }
+.flup-mt3 { margin-top: var(--flup-s3); }
+.flup-mb2 { margin-bottom: var(--flup-s2); }
+.flup-pb3 { padding-bottom: var(--flup-s3); }
+.flup-flat { margin: 0; }
+.flup-row { margin: var(--flup-s1) 0; }
+/* A label and its value on one line, used wherever a row needs a leading dot. */
+.flup-line { display: flex; align-items: center; gap: var(--flup-s2); }
+.flup-inline-note { margin-left: var(--flup-s1); font-size: 11px; }
+/* Fields that belong to the checkbox above them, indented to say so. */
+.flup-nest { margin-left: var(--flup-s4); }
+.flup-rail-empty { padding: 0 var(--flup-s3); }
+/*
+ * A cell that spaces its own tags.
+ *
+ * Each tag used to carry its own left margin, so adding one meant remembering
+ * the number; a gap here cannot drift. Baseline alignment keeps the tags on
+ * the text's own line rather than floating against the cell's box.
+ */
+.flup-tags { display: flex; align-items: baseline; gap: var(--flup-s1); flex-wrap: wrap; }
 
 /*
  * Motion is used for three things only: to show that something is genuinely
@@ -578,7 +623,7 @@ window.__ModuleLoader__.load({
    which survives a theme where layer backgrounds sit close together. */
 .flup-rail-btn {
   appearance: none; font: inherit; text-align: left; cursor: pointer;
-  border: 1px solid var(--dsw-alias-border-l2); border-radius: 6px;
+  border: 1px solid var(--dsw-alias-border-l2); border-radius: var(--flup-r2);
   background: var(--dsw-alias-bg-layer-1); color: var(--dsw-alias-label-primary);
   padding: 7px 10px 7px 9px; border-left-width: 3px;
   display: flex; flex-direction: column; gap: 1px; width: 100%;
@@ -631,13 +676,13 @@ window.__ModuleLoader__.load({
 .flup-rail-link {
   appearance: none; background: none; border: 0; cursor: pointer;
   text-align: left; padding: 8px 10px; font: inherit; font-size: 11px;
-  color: var(--dsw-alias-label-secondary); border-radius: 7px;
+  color: var(--dsw-alias-label-secondary); border-radius: var(--flup-r2);
 }
 .flup-rail-link:hover { color: var(--dsw-alias-label-primary); background: var(--dsw-alias-bg-layer-2); }
 .flup-rail-link:focus-visible { outline: 2px solid var(--dsw-alias-brand-primary); outline-offset: 1px; }
 .flup-pane { flex: 1 1 auto; min-width: 0; display: flex; flex-direction: column; min-height: 0; }
 .flup-sub {
-  display: flex; align-items: center; gap: 6px 14px; flex-wrap: wrap;
+  display: flex; align-items: center; gap: 8px 14px; flex-wrap: wrap;
   padding: 8px 20px; color: var(--dsw-alias-label-secondary); font-size: 12px;
   border-bottom: 1px solid var(--dsw-alias-border-l1);
 }
@@ -645,7 +690,7 @@ window.__ModuleLoader__.load({
 .flup-btn {
   appearance: none; border: 1px solid var(--dsw-alias-border-l2);
   background: var(--dsw-alias-bg-layer-1); color: var(--dsw-alias-label-primary);
-  border-radius: 6px; padding: 4px 11px; font: inherit; font-size: 12px; cursor: pointer;
+  border-radius: var(--flup-r2); padding: 4px 11px; font: inherit; font-size: 12px; cursor: pointer;
   text-decoration: none; white-space: nowrap;
   transition: background 130ms var(--flup-ease), border-color 130ms var(--flup-ease),
     transform 130ms var(--flup-ease), filter 130ms var(--flup-ease);
@@ -678,7 +723,7 @@ window.__ModuleLoader__.load({
   background: var(--dsw-alias-bg-layer-2); border-color: var(--dsw-alias-state-error-primary);
 }
 .flup-select, .flup-input {
-  font: inherit; font-size: 12px; border-radius: 6px; padding: 4px 8px;
+  font: inherit; font-size: 12px; border-radius: var(--flup-r2); padding: 4px 8px;
   border: 1px solid var(--dsw-alias-border-l2); background: var(--dsw-alias-bg-layer-1);
   color: var(--dsw-alias-label-primary); max-width: 100%;
 }
@@ -699,11 +744,11 @@ window.__ModuleLoader__.load({
   content: ''; position: absolute; inset: 0; border-radius: 50%;
   color: inherit; animation: flup-halo 1.6s var(--flup-ease) infinite;
 }
-.flup-state { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; color: var(--dsw-alias-label-secondary); }
-.flup-tabs { display: flex; gap: 6px; padding: 10px 20px 0; }
+.flup-state { display: inline-flex; align-items: center; gap: 8px; font-size: 12px; color: var(--dsw-alias-label-secondary); }
+.flup-tabs { display: flex; gap: 8px; padding: 10px 20px 0; }
 .flup-tab {
   appearance: none; font: inherit; font-size: 12px; cursor: pointer;
-  border: 1px solid var(--dsw-alias-border-l2); border-radius: 6px;
+  border: 1px solid var(--dsw-alias-border-l2); border-radius: var(--flup-r2);
   background: var(--dsw-alias-bg-layer-1); color: var(--dsw-alias-label-primary);
   padding: 5px 12px; position: relative; overflow: hidden;
   transition: background 130ms var(--flup-ease), border-color 130ms var(--flup-ease);
@@ -722,7 +767,24 @@ window.__ModuleLoader__.load({
   animation: flup-grow 220ms var(--flup-ease);
 }
 .flup-tab:focus-visible { outline: 2px solid var(--dsw-alias-brand-primary); outline-offset: 1px; }
-.flup-body { flex: 1 1 auto; min-height: 0; overflow: auto; padding: 12px 20px 28px; }
+/*
+ * Switching rail entries slides the new view in.
+ *
+ * Without it the pane swaps instantly and two screens are hard to tell apart
+ * at a glance, especially between projects whose layouts match. The movement
+ * is small and horizontal, which reads as "a different thing in the same
+ * place" rather than as a page load. The body is keyed on the selected entry
+ * in the markup, so React remounts it and the animation re-runs per switch.
+ */
+@keyframes flup-slide {
+  from { opacity: 0; transform: translateX(6px); }
+  to { opacity: 1; transform: none; }
+}
+.flup-body {
+  flex: 1 1 auto; min-height: 0; overflow: auto;
+  padding: var(--flup-s3) var(--flup-s4) 28px;
+  animation: flup-slide 200ms var(--flup-ease) both;
+}
 .flup-table { width: 100%; border-collapse: collapse; font-size: 12px; }
 .flup-table th {
   text-align: left; font-weight: 500; color: var(--dsw-alias-label-secondary);
@@ -733,6 +795,23 @@ window.__ModuleLoader__.load({
 .flup-table tr:last-child td { border-bottom: none; }
 .flup-table td:first-child { color: var(--dsw-alias-label-primary); }
 .flup-table-rows tbody tr { transition: background 110ms var(--flup-ease), box-shadow 110ms var(--flup-ease); }
+/*
+ * Rows fade in as they arrive.
+ *
+ * Tables here refill from a poll, so without this the whole body blinks and
+ * the user cannot tell a refresh from a change. The stagger is per row and
+ * capped at six, which covers a first screenful; later rows share the last
+ * delay so a long list does not animate in slow motion.
+ *
+ * The fill-mode matters: the row must hold its opening state during its
+ * delay, otherwise it flashes at full opacity first and then starts.
+ */
+.flup-table-rows tbody tr { animation: flup-rise 180ms var(--flup-ease) both; }
+.flup-table-rows tbody tr:nth-child(2) { animation-delay: 25ms; }
+.flup-table-rows tbody tr:nth-child(3) { animation-delay: 50ms; }
+.flup-table-rows tbody tr:nth-child(4) { animation-delay: 75ms; }
+.flup-table-rows tbody tr:nth-child(5) { animation-delay: 100ms; }
+.flup-table-rows tbody tr:nth-child(n+6) { animation-delay: 125ms; }
 /* A hovered row gets a brand edge as well as a fill, so the pointer's position
    is unambiguous in a dense table where adjacent rows are the same height. */
 .flup-table-rows tbody tr:hover {
@@ -750,14 +829,14 @@ window.__ModuleLoader__.load({
 }
 .flup-link:focus-visible { outline: 2px solid var(--dsw-alias-brand-primary); outline-offset: 2px; }
 /* Branch filter chips above the task list. */
-.flup-filter { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; padding-bottom: 12px; }
+.flup-filter { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; padding-bottom: 12px; }
 /* The same row used outside a body block, which supplies its own gutter. */
 .flup-filter-inset { padding: 2px 20px 0; }
 /* A second line inside a table cell: the card model under its host name. */
 .flup-cell-sub { display: block; }
 .flup-chip {
   appearance: none; font: inherit; font-size: 11px; cursor: pointer;
-  border: 1px solid var(--dsw-alias-border-l2); border-radius: 999px;
+  border: 1px solid var(--dsw-alias-border-l2); border-radius: var(--flup-r3);
   background: var(--dsw-alias-bg-layer-1); color: var(--dsw-alias-label-primary);
   padding: 3px 11px; white-space: nowrap;
   transition: background 120ms var(--flup-ease), border-color 120ms var(--flup-ease),
@@ -776,17 +855,30 @@ window.__ModuleLoader__.load({
 .flup-detail-title { margin: 0 0 4px; font-size: 14px; font-weight: 600; color: var(--dsw-alias-label-primary); }
 .flup-sub-flush { padding-left: 0; padding-right: 0; }
 .flup-card {
-  border: 1px solid var(--dsw-alias-border-l1); border-radius: 8px;
-  padding: 12px 14px; margin-bottom: 10px; background: var(--dsw-alias-bg-layer-1);
+  border: 1px solid var(--dsw-alias-border-l1); border-radius: var(--flup-r2);
+  padding: var(--flup-s3) 14px; margin-bottom: var(--flup-s3);
+  background: var(--dsw-alias-bg-layer-1);
   animation: flup-rise 220ms var(--flup-ease) both;
 }
+/*
+ * Cards arrive in sequence rather than all at once.
+ *
+ * Identical timing on every card reads as one block flashing into place, which
+ * is what made an otherwise animated panel feel static. A small stagger lets
+ * the eye follow the order the screen is actually in. It stops at the fourth
+ * card: past roughly 120ms of total delay the last one feels late rather than
+ * sequenced, and a long screen would spend its first half-second empty.
+ */
+.flup-card:nth-child(2) { animation-delay: 40ms; }
+.flup-card:nth-child(3) { animation-delay: 80ms; }
+.flup-card:nth-child(n+4) { animation-delay: 120ms; }
 .flup-card-title {
   margin: 0 0 8px; font-size: 12px; font-weight: 600; color: var(--dsw-alias-label-primary);
 }
 .flup-pre {
   margin: 0; font-size: 12px; line-height: 1.55; white-space: pre-wrap; word-break: break-word;
   color: var(--dsw-alias-label-primary); max-height: 320px; overflow: auto;
-  background: var(--dsw-alias-bg-layer-2); border-radius: 6px; padding: 8px 10px;
+  background: var(--dsw-alias-bg-layer-2); border-radius: var(--flup-r2); padding: 8px 10px;
 }
 .flup-plan { margin: 0; padding-left: 20px; font-size: 12px; line-height: 1.8; }
 .flup-plan-done { color: var(--dsw-alias-label-secondary); }
@@ -798,7 +890,7 @@ window.__ModuleLoader__.load({
   color: var(--dsw-alias-label-secondary); border-bottom: 1px solid var(--dsw-alias-border-l1);
 }
 .flup-warn {
-  margin: 10px 0 0; font-size: 12px; padding: 8px 10px; border-radius: 6px;
+  margin: 10px 0 0; font-size: 12px; padding: 8px 10px; border-radius: var(--flup-r2);
   border: 1px solid var(--dsw-alias-state-warn-primary); color: var(--dsw-alias-label-primary);
 }
 .flup-warn p { margin: 0; }
@@ -817,17 +909,17 @@ window.__ModuleLoader__.load({
 .flup-warn-lead { font-weight: 600; }
 .flup-code-inline {
   font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
-  font-size: 11px; padding: 1px 5px; border-radius: 4px;
+  font-size: 11px; padding: 1px 5px; border-radius: var(--flup-r1);
   background: var(--dsw-alias-bg-layer-2); word-break: break-all;
 }
 .flup-events {
   margin: 0; padding: 0; list-style: none; font-size: 12px; line-height: 1.55;
-  max-height: 380px; overflow: auto; display: flex; flex-direction: column; gap: 6px;
+  max-height: 380px; overflow: auto; display: flex; flex-direction: column; gap: 8px;
 }
 .flup-event { display: flex; gap: 8px; align-items: baseline; }
 .flup-event-bare { opacity: 0.7; }
 .flup-event-text { white-space: pre-wrap; word-break: break-word; min-width: 0; }
-.flup-pill { display: inline-flex; align-items: center; gap: 5px; white-space: nowrap; }
+.flup-pill { display: inline-flex; align-items: center; gap: var(--flup-s1); white-space: nowrap; }
 .flup-num { font-variant-numeric: tabular-nums; color: var(--dsw-alias-label-secondary); }
 /*
  * A tag states a fact about a row, so its colour has to mean something: a
@@ -836,7 +928,7 @@ window.__ModuleLoader__.load({
  * tag keeps its text label — colour is never the only signal.
  */
 .flup-tag {
-  border-radius: 4px; padding: 1px 6px; font-size: 11px;
+  border-radius: var(--flup-r1); padding: 1px 6px; font-size: 11px;
   background: var(--dsw-alias-bg-layer-2); color: var(--dsw-alias-label-secondary);
   border: 1px solid transparent;
 }
@@ -859,9 +951,9 @@ window.__ModuleLoader__.load({
 .flup-meta { color: var(--dsw-alias-label-secondary); font-size: 12px; }
 .flup-empty { color: var(--dsw-alias-label-secondary); font-size: 12px; padding: 6px 0; }
 .flup-code {
-  display: block; background: var(--dsw-alias-bg-layer-2); border-radius: 6px;
+  display: block; background: var(--dsw-alias-bg-layer-2); border-radius: var(--flup-r2);
   padding: 8px 10px; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
-  font-size: 11px; white-space: pre-wrap; word-break: break-all; margin: 6px 0 0;
+  font-size: 11px; white-space: pre-wrap; word-break: break-all; margin: 8px 0 0;
 }
 .flup-err { color: var(--dsw-alias-state-error-primary); font-size: 12px; }
 .flup-ok { color: var(--dsw-alias-state-success-primary); font-size: 12px; }
@@ -902,7 +994,7 @@ window.__ModuleLoader__.load({
  */
 .flup-skel-wrap { padding: 4px 0 2px; }
 .flup-skel {
-  border-radius: 5px; height: 11px; margin: 7px 0;
+  border-radius: var(--flup-r1); height: 11px; margin: 8px 0;
   background: linear-gradient(90deg,
     var(--dsw-alias-bg-layer-1) 25%,
     var(--dsw-alias-bg-layer-2) 37%,
@@ -919,7 +1011,7 @@ window.__ModuleLoader__.load({
 .flup-form { display: flex; flex-direction: column; gap: 10px; }
 .flup-field { display: flex; flex-direction: column; gap: 3px; }
 .flup-label { font-size: 11px; color: var(--dsw-alias-label-secondary); }
-.flup-check { display: flex; align-items: center; gap: 7px; font-size: 13px; font-weight: 500; }
+.flup-check { display: flex; align-items: center; gap: 8px; font-size: 13px; font-weight: 500; }
 .flup-grid { display: grid; grid-template-columns: 2fr 1fr 1fr; gap: 8px; }
 @media (max-width: 720px) { .flup-grid { grid-template-columns: 1fr; } }
 `
@@ -1086,8 +1178,7 @@ window.__ModuleLoader__.load({
               String(backend.label || backend.id),
               backend.pr && backend.pr.url
                 ? h('a', {
-                  className: 'flup-link',
-                  style: { marginLeft: '6px', fontSize: '11px' },
+                  className: 'flup-link flup-inline-note',
                   href: String(backend.pr.url),
                   target: '_blank',
                   rel: 'noreferrer noopener',
@@ -1408,22 +1499,24 @@ window.__ModuleLoader__.load({
           }, String(task.title || task.id || '—'))),
           h('td', { className: 'flup-meta' }, String(task.branch || '—')),
           h('td', null, h('span', { className: 'flup-pill' }, h(Dot, { status: task.status }), String(task.status || '—'))),
-          h('td', { className: 'flup-meta' },
+          // The cell spaces its own tags, so each tag no longer carries a
+          // margin of its own and they cannot drift apart from one another.
+          h('td', { className: 'flup-meta flup-tags' },
             String(task.source_label || task.provider || ''),
             // Why a row cannot be driven, stated in the list so the user does
             // not have to open each task to find out.
             task.policy_mode === 'monitor'
-              ? h('span', { className: 'flup-tag flup-tag-warn', style: { marginLeft: '6px' } }, t.monitorOnly)
+              ? h('span', { className: 'flup-tag flup-tag-warn' }, t.monitorOnly)
               : task.desktop_owned
-                ? h('span', { className: 'flup-tag', style: { marginLeft: '6px' } }, t.taskDesktopTag)
+                ? h('span', { className: 'flup-tag' }, t.taskDesktopTag)
                 : !task.controllable
-                  ? h('span', { className: 'flup-tag', style: { marginLeft: '6px' } }, t.taskObserverTag)
+                  ? h('span', { className: 'flup-tag' }, t.taskObserverTag)
                   : null,
             task.pending_count
-              ? h('span', { className: 'flup-tag flup-tag-error', style: { marginLeft: '6px' } }, `⚠ ${task.pending_count}`)
+              ? h('span', { className: 'flup-tag flup-tag-error' }, `⚠ ${task.pending_count}`)
               : null,
             task.turn_active
-              ? h('span', { className: 'flup-tag flup-tag-active', style: { marginLeft: '6px' } }, t.turnActive)
+              ? h('span', { className: 'flup-tag flup-tag-active' }, t.turnActive)
               : null,
           ),
           h('td', { className: 'flup-num' }, h('button', {
@@ -1635,7 +1728,7 @@ window.__ModuleLoader__.load({
             // so and offer to drop it, rather than showing a reassuring tick.
             workspace.stale
               ? h(React.Fragment, null,
-                h('p', { className: 'flup-meta', style: { marginBottom: '8px' } },
+                h('p', { className: 'flup-meta flup-mb2' },
                   h('span', { className: 'flup-tag flup-tag-warn' }, t.workspaceStaleTag),
                   ' ',
                   t.workspaceStale),
@@ -1660,7 +1753,7 @@ window.__ModuleLoader__.load({
                       title: t.workspaceAddHint,
                       onClick: adopt,
                     }, wsBusy ? `${t.workspaceAdding}…` : t.workspaceAdd),
-                    h('p', { className: 'flup-meta', style: { marginTop: '8px' } }, t.workspaceAddHint)),
+                    h('p', { className: 'flup-meta flup-mt2' }, t.workspaceAddHint)),
             wsError ? h('p', { className: 'flup-err' }, wsError) : null,
           )
           : null,
@@ -1670,7 +1763,7 @@ window.__ModuleLoader__.load({
         row.error
           ? h('div', { className: 'flup-card flup-card-error' },
             h('h4', { className: 'flup-card-title' }, t.error),
-            h('p', { className: 'flup-err-inline', style: { margin: 0 } }, String(row.error)))
+            h('p', { className: 'flup-err-inline flup-flat' }, String(row.error)))
           : null,
         Array.isArray(row.plan) && row.plan.length
           ? h('div', { className: 'flup-card' },
@@ -2092,7 +2185,7 @@ window.__ModuleLoader__.load({
           : repo.adopted
             ? h('div', null,
               h('p', { className: 'flup-ok' }, `✓ ${t.repoAdopted}`),
-              h('div', { style: { marginTop: '8px' } },
+              h('div', { className: 'flup-mt2' },
                 h('button', {
                   className: 'flup-btn flup-btn-sm flup-btn-accent',
                   type: 'button',
@@ -2100,7 +2193,7 @@ window.__ModuleLoader__.load({
                   onClick: startSession,
                 }, t.repoStartSession),
               ),
-              h('p', { className: 'flup-meta', style: { marginTop: '6px' } }, t.repoSessionHint),
+              h('p', { className: 'flup-meta flup-mt2' }, t.repoSessionHint),
             )
             : h('div', null,
               h('p', { className: 'flup-meta' }, t.repoNotAdopted),
@@ -2198,7 +2291,7 @@ window.__ModuleLoader__.load({
       }
 
       if (!open) {
-        return h('div', { style: { paddingBottom: '12px' } },
+        return h('div', { className: 'flup-pb3' },
           h('button', {
             className: 'flup-btn flup-btn-primary',
             type: 'button',
@@ -2208,8 +2301,8 @@ window.__ModuleLoader__.load({
       }
 
       return h('div', { className: 'flup-card flup-card-accent' },
-        h('div', { style: { display: 'flex', alignItems: 'center' } },
-          h('h3', { className: 'flup-card-title', style: { margin: 0 } }, t.createTitle),
+        h('div', { className: 'flup-line' },
+          h('h3', { className: 'flup-card-title flup-flat' }, t.createTitle),
           h('span', { className: 'flup-spacer' }),
           h('button', {
             className: 'flup-btn flup-btn-sm',
@@ -2217,18 +2310,18 @@ window.__ModuleLoader__.load({
             onClick: () => setOpen(false),
           }, t.createClose),
         ),
-        h('p', { className: 'flup-meta', style: { marginTop: '6px' } }, t.createIntro),
+        h('p', { className: 'flup-meta flup-mt2' }, t.createIntro),
 
         !options && !error ? h(Skeleton, { rows: 3, label: t.loading }) : null,
 
         // No profile carrying a remote workspace means creation cannot work on
         // this deployment at all. Say that once, up front.
         options && !options.anyManualPossible
-          ? h('p', { className: 'flup-warn', style: { marginTop: '8px' } }, `⚠ ${t.createNoWorkspaces}`)
+          ? h('p', { className: 'flup-warn flup-mt2' }, `⚠ ${t.createNoWorkspaces}`)
           : null,
 
         options
-          ? h('div', { className: 'flup-form', style: { marginTop: '10px' } },
+          ? h('div', { className: 'flup-form flup-mt3' },
             h('div', { className: 'flup-field' },
               h('span', { className: 'flup-label' }, t.createMachine),
               h('select', {
@@ -2287,11 +2380,10 @@ window.__ModuleLoader__.load({
                 `⚠ ${t.createMonitorOnly}`,
                 policy.pr_url
                   ? h('a', {
-                    className: 'flup-link',
+                    className: 'flup-link flup-inline-note',
                     href: policy.pr_url,
                     target: '_blank',
                     rel: 'noreferrer noopener',
-                    style: { marginLeft: '6px' },
                   }, policy.pr ? `PR #${policy.pr}` : 'PR')
                   : null,
                 policy.reason ? h('span', { className: 'flup-meta' }, ` ${policy.reason}`) : null)
@@ -2304,7 +2396,7 @@ window.__ModuleLoader__.load({
               : null,
 
             h('p', { className: 'flup-meta' }, t.createCost),
-            h('div', { style: { display: 'flex', alignItems: 'center', gap: '9px' } },
+            h('div', { className: 'flup-line' },
               h('button', {
                 className: 'flup-btn flup-btn-primary',
                 type: 'button',
@@ -2402,7 +2494,7 @@ window.__ModuleLoader__.load({
         h('div', { className: 'flup-card' },
           h('h3', { className: 'flup-card-title' }, t.deployTitle),
           h('p', { className: 'flup-meta' }, deployed ? t.deployRedoIntro : t.deployIntro),
-          h('p', { className: 'flup-meta', style: { marginTop: '8px' } },
+          h('p', { className: 'flup-meta flup-mt2' },
             `${t.reqRepo}: `,
             h('span', { className: repoCheck && repoCheck.ok ? 'flup-ok' : 'flup-err' },
               repoCheck && repoCheck.ok ? t.reqReady : t.reqMissing),
@@ -2424,7 +2516,7 @@ window.__ModuleLoader__.load({
           preflight && repoCheck && !repoCheck.ok
             ? h('div', { className: 'flup-warn flup-warn-err' },
               h('p', { className: 'flup-warn-lead' }, t.deployNeedRepo),
-              h('p', { className: 'flup-meta', style: { marginTop: '6px' } }, t.deployWhereConfig),
+              h('p', { className: 'flup-meta flup-mt2' }, t.deployWhereConfig),
               // The clone is the actual first step, so give the command rather
               // than leaving the user to find the repository themselves. Shown
               // as copyable text: the plugin never runs a clone itself.
@@ -2438,7 +2530,7 @@ window.__ModuleLoader__.load({
               // The directory name is the one identifying detail the browser
               // is allowed, and it is what tells the user they picked wrong.
               repoCheck.detail
-                ? h('p', { className: 'flup-meta', style: { marginTop: '6px' } },
+                ? h('p', { className: 'flup-meta flup-mt2' },
                   `${t.deployFoundDir}: `, h('code', { className: 'flup-code-inline' }, String(repoCheck.detail)))
                 : null,
             )
@@ -2448,7 +2540,7 @@ window.__ModuleLoader__.load({
         preflight && scriptCheck && scriptCheck.ok
           ? h('div', { className: 'flup-card' },
             h('p', { className: 'flup-meta' }, t.deployPickProjects),
-            h('div', { className: 'flup-form', style: { marginTop: '10px' } },
+            h('div', { className: 'flup-form flup-mt3' },
               (preflight.projects || []).map(project => h('div', { key: project.id },
                 h('label', { className: 'flup-check' },
                   h('input', {
@@ -2459,7 +2551,9 @@ window.__ModuleLoader__.load({
                   String(project.label),
                 ),
                 picked[project.id]
-                  ? h('div', { className: 'flup-grid', style: { marginTop: '7px', marginLeft: '24px' } },
+                  // Indented under its checkbox, so the fields read as
+                  // belonging to the project above them.
+                  ? h('div', { className: 'flup-grid flup-mt2 flup-nest' },
                     h('div', { className: 'flup-field' },
                       h('span', { className: 'flup-label' }, t.deployRepoPath),
                       h('input', {
@@ -2591,10 +2685,7 @@ window.__ModuleLoader__.load({
       if (!projectId) return null
 
       /** One readiness line: a coloured dot, a verdict, and why it matters. */
-      const row = (label, ok, detail, warn) => h('p', {
-        className: 'flup-meta',
-        style: { display: 'flex', alignItems: 'center', gap: '7px', margin: '5px 0' },
-      },
+      const row = (label, ok, detail, warn) => h('p', { className: 'flup-meta flup-line flup-row' },
         h('span', {
           className: 'flup-dot',
           style: { background: ok ? 'var(--dsw-alias-state-success-primary)' : warn ? 'var(--dsw-alias-state-warn-primary)' : 'var(--dsw-alias-state-error-primary)' },
@@ -2609,7 +2700,7 @@ window.__ModuleLoader__.load({
       const jumpMatters = state && state.machineSource === 'jumpserver'
 
       /** A write-only secret field with its own save button. */
-      const field = (kind, label, hint, extra) => h('div', { style: { marginTop: '10px' } },
+      const field = (kind, label, hint, extra) => h('div', { className: 'flup-mt3' },
         h('div', { className: 'flup-field' },
           h('span', { className: 'flup-label' }, label),
           h('input', {
@@ -2623,7 +2714,7 @@ window.__ModuleLoader__.load({
           }),
         ),
         extra,
-        h('div', { style: { marginTop: '7px', display: 'flex', alignItems: 'center', gap: '8px' } },
+        h('div', { className: 'flup-line flup-mt2' },
           h('button', {
             className: 'flup-btn flup-btn-sm flup-btn-accent',
             type: 'button',
@@ -2632,7 +2723,7 @@ window.__ModuleLoader__.load({
           }, busy === kind ? `${t.credSaving}…` : t.credSave),
           saved === kind ? h('span', { className: 'flup-ok' }, `✓ ${t.credSaved}`) : null,
         ),
-        h('p', { className: 'flup-meta', style: { marginTop: '6px' } }, hint),
+        h('p', { className: 'flup-meta flup-mt2' }, hint),
       )
 
       return h('div', { className: 'flup-card flup-card-accent' },
@@ -2642,7 +2733,7 @@ window.__ModuleLoader__.load({
         !state ? h(Skeleton, { rows: 3, label: t.loading }) : null,
 
         state
-          ? h('div', { style: { marginTop: '10px' } },
+          ? h('div', { className: 'flup-mt3' },
             // Codex needs no input here: it authenticates through its own CLI.
             state.codex
               ? row('Codex', state.codex.authenticated, state.codex.authenticated ? t.credCodexOk : t.credCodexNo)
@@ -2678,13 +2769,13 @@ window.__ModuleLoader__.load({
         claude && !claude.configured
           ? field('claude', t.credClaudeLabel, t.credClaudeHint)
           : claude
-            ? h('p', { className: 'flup-meta', style: { marginTop: '10px' } }, `✓ ${t.credClaudeDone}`)
+            ? h('p', { className: 'flup-meta flup-mt3' }, `✓ ${t.credClaudeDone}`)
             : null,
 
         jumpMatters && jump && !jump.authenticated
           ? field('jumpserver', t.credJumpLabel, t.credJumpHint,
             jump.canRemember
-              ? h('label', { className: 'flup-check', style: { marginTop: '7px' } },
+              ? h('label', { className: 'flup-check flup-mt2' },
                 h('input', {
                   type: 'checkbox',
                   checked: remember,
@@ -2694,10 +2785,10 @@ window.__ModuleLoader__.load({
               : null)
           : null,
 
-        h('p', { className: 'flup-meta', style: { marginTop: '12px' } }, t.credGithubHint),
+        h('p', { className: 'flup-meta flup-mt3' }, t.credGithubHint),
         h('code', { className: 'flup-code' }, 'gh auth login'),
-        h('p', { className: 'flup-meta', style: { marginTop: '10px' } }, t.credSshHint),
-        h('p', { className: 'flup-meta', style: { marginTop: '10px' } }, t.credSafety),
+        h('p', { className: 'flup-meta flup-mt3' }, t.credSshHint),
+        h('p', { className: 'flup-meta flup-mt3' }, t.credSafety),
         error ? h('p', { className: 'flup-err' }, `${t.error}: ${error}`) : null,
       )
     }
@@ -2828,7 +2919,7 @@ window.__ModuleLoader__.load({
               h('span', null, String(row.label || row.id)),
               row.default_branch ? h('span', { className: 'flup-rail-sub' }, String(row.default_branch)) : null,
             )),
-            !projects.length && state ? h('p', { className: 'flup-empty', style: { padding: '0 10px' } }, t.noProjects) : null,
+            !projects.length && state ? h('p', { className: 'flup-empty flup-rail-empty' }, t.noProjects) : null,
             /*
              * The GPU fleet, below a divider.
              *
@@ -2885,18 +2976,24 @@ window.__ModuleLoader__.load({
               : null,
           ),
 
+          /*
+           * Each branch carries a key, so switching entries remounts the body
+           * and its slide-in runs again. Without distinct keys React reuses
+           * the same element across a switch, the animation never restarts,
+           * and the pane changes content with no transition at all.
+           */
           h('div', { className: 'flup-pane' },
             !state
-              ? h('div', { className: 'flup-body' }, h(Skeleton, { rows: 5, label: t.loading }))
+              ? h('div', { className: 'flup-body', key: 'loading' }, h(Skeleton, { rows: 5, label: t.loading }))
               : selected === 'deploy'
-                ? h(DeployView, { t, onDone: load })
+                ? h(DeployView, { key: 'deploy', t, onDone: load })
                 : selected === 'devices'
                   // Any project reaches the same fleet, so the first one is
                   // passed purely to satisfy the route's namespacing.
-                  ? h(DeviceView, { t, project: projects[0] || null, running })
+                  ? h(DeviceView, { key: 'devices', t, project: projects[0] || null, running })
                   : project
                     ? h(ProjectView, { key: project.id, project, running, t })
-                    : h('div', { className: 'flup-body' }, h('p', { className: 'flup-empty' }, t.noProjects)),
+                    : h('div', { className: 'flup-body', key: 'empty' }, h('p', { className: 'flup-empty' }, t.noProjects)),
           ),
         ),
 
