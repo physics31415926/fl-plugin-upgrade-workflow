@@ -82,19 +82,60 @@ test('colours come from theme tokens so the panel follows the active theme', () 
 });
 
 test('the panel palette is derived from theme tokens, not fixed hues', () => {
-  // The panel adds its own richer surfaces, but each one has to be mixed from
-  // a theme token. A literal hue would stay put when the user switches theme
-  // while everything around it moved, so it would be wrong in one of the two.
-  const custom = [...new Set([...css.matchAll(/--flup-[a-z-]+(?=:)/g)].map(m => m[0]))];
-  assert(custom.length > 0, 'expected the panel to define its own variables');
-  for (const name of custom) {
-    const value = css.slice(css.indexOf(name + ':') + name.length + 1).split('\n')[0];
-    if (name === '--flup-on-brand') continue; // Documented exception.
-    if (name === '--flup-ease') continue;     // An easing curve, not a colour.
-    assert(
-      /var\(--dsw-/.test(value),
-      name + ' must reference a theme token, got: ' + value.trim(),
-    );
+  /*
+   * Every colour the panel defines has to trace back to a theme token, or it
+   * stays put when the user switches theme while everything around it moves.
+   *
+   * Derivation is now a chain rather than one hop: the accent comes from a
+   * theme token, the surfaces come from the accent, and the plates mix into
+   * the surfaces. So this resolves transitively and requires the chain to
+   * terminate at a theme token, which is the actual invariant. Demanding a
+   * direct reference would reject a correct two-step derivation and, worse,
+   * would pass a token that merely mentioned a theme token somewhere.
+   */
+  const definitions = new Map();
+  for (const m of css.matchAll(/(--flup-[a-z0-9-]+):\s*([^;]+);/g)) {
+    // A later declaration of the same name is a deliberate override; keep the
+    // last one, which is what the browser uses.
+    definitions.set(m[1], m[2].trim());
+  }
+  assert(definitions.size > 0, 'expected the panel to define its own variables');
+
+  const EXEMPT = new Set([
+    '--flup-on-brand', // Documented: white on a fill that does not change.
+    '--flup-ease',     // An easing curve, not a colour.
+    '--flup-s1', '--flup-s2', '--flup-s3', '--flup-s4',
+    '--flup-r1', '--flup-r2', '--flup-r3',
+  ]);
+
+  const rootedInTheme = (name, seen = new Set()) => {
+    if (seen.has(name)) return false; // A cycle resolves to nothing at all.
+    seen.add(name);
+    const value = definitions.get(name);
+    if (!value) return false;
+    if (/var\(--dsw-/.test(value)) return true;
+    const refs = [...value.matchAll(/var\((--flup-[a-z0-9-]+)\)/g)].map(m => m[1]);
+    return refs.length > 0 && refs.every(ref => rootedInTheme(ref, new Set(seen)));
+  };
+
+  for (const [name, value] of definitions) {
+    if (EXEMPT.has(name)) continue;
+    // --flup-chip-hue is supplied per element from the markup, not defined here.
+    if (name === '--flup-chip-hue') continue;
+    assert(rootedInTheme(name), name + ' does not derive from a theme token: ' + value);
+    // A literal colour anywhere in the chain defeats the point.
+    assert(!/#[0-9a-fA-F]{3,8}/.test(value), name + ' contains a literal colour: ' + value);
+  }
+
+  // And the chain must be shallow enough to reason about.
+  const depth = (name, d = 0) => {
+    const value = definitions.get(name) || '';
+    const refs = [...value.matchAll(/var\((--flup-[a-z0-9-]+)\)/g)].map(m => m[1]);
+    return refs.length ? Math.max(...refs.map(r => depth(r, d + 1))) : d;
+  };
+  for (const name of definitions.keys()) {
+    if (EXEMPT.has(name) || name === '--flup-chip-hue') continue;
+    assert(depth(name) <= 2, name + ' is derived through too many steps to follow');
   }
 });
 
@@ -110,9 +151,14 @@ test('every mixed colour has a plain fallback declared before it', () => {
       const mixed = decls.findIndex(d => /--flup-(wash|edge)-/.test(d));
       if (mixed < 0) continue;
       assert(mixed > 0, prop + ' uses a mix with no fallback before it: ' + body.trim().slice(0, 80));
+      // The fallback may be a theme token or one of the panel's own surface
+      // tokens, which are themselves theme-derived and resolve on any engine
+      // that can do color-mix at all. What it must not be is another mix of
+      // the same kind, which would fail in exactly the same engines.
+      const fallback = decls[mixed - 1];
       assert(
-        /var\(--dsw-/.test(decls[mixed - 1]),
-        prop + ' fallback must be a theme token, got: ' + decls[mixed - 1],
+        /var\(--dsw-/.test(fallback) || /var\(--flup-surface(-\d)?\)/.test(fallback),
+        prop + ' fallback must resolve without a wash mix, got: ' + fallback,
       );
     }
   }
@@ -374,8 +420,11 @@ test('the hue wheel renders twelve colours a person can tell apart', () => {
     assert(block, selector + ' not found');
     const fill = /background:\s*([^;]+);/.exec(block[1]);
     assert(fill, selector + ' has no background');
-    assert(/^color-mix\(in srgb, var\(--flup-chip-hue\) \d+%, var\(--dsw-alias-bg-/.test(fill[1].trim()),
-      selector + ' must mix its hue into a theme surface, not fill with it: ' + fill[1].trim());
+    // The surface may be a raw theme background or the panel's tinted
+    // derivative of one; what matters is that the hue is mixed INTO a
+    // surface rather than used as a flat fill.
+    assert(/^color-mix\(in srgb, var\(--flup-chip-hue\) \d+%, var\((?:--dsw-alias-bg-|--flup-surface)/.test(fill[1].trim()),
+      selector + ' must mix its hue into a surface, not fill with it: ' + fill[1].trim());
   }
   // A dot is not a plate: the previous attempt was too small to register.
   assert(Number(chipMix[1]) >= 50, 'the chip plate is too faint: ' + chipMix[1] + '%');
@@ -438,4 +487,164 @@ test('views and lists animate on change, and the OS can turn it off', () => {
   // Every animation here is decoration over a state that is also stated in
   // text, so dropping it removes polish and no information.
   assert(/@media \(prefers-reduced-motion: reduce\)/.test(cssText), 'motion is not optional');
+});
+
+test('nothing inside the stylesheet can terminate its template literal', () => {
+  /*
+   * The CSS is a JS template literal, so a backtick in comment prose ends it
+   * early and the file stops parsing. This has broken the build three times
+   * while writing these styles, always in an explanatory comment quoting a
+   * token name. A syntax check catches it, but only after a confusing failure
+   * some distance from the cause, so name the cause here.
+   *
+   * ${ would be worse: it interpolates silently instead of failing.
+   */
+  const BACKTICK = String.fromCharCode(96);
+  /*
+   * Scan the raw source from the opening delimiter to the stylesheet's final
+   * rule, not the `cssText` slice used elsewhere. That slice ends at the
+   * first line consisting of a lone backtick, so a stray delimiter moves the
+   * end and takes the offending line out of range — the scan would look only
+   * at text that is fine and report nothing. Anchoring on a known last rule
+   * instead keeps the whole region in view however it is broken.
+   */
+  /*
+   * Scan the CSS by its own structure rather than by hunting for an end
+   * marker, because every marker I tried was wrong in a way that made the
+   * test pass while the bug was present. A rule inside the sheet (the
+   * reduced-motion block) sits only a third of the way in, so strays after it
+   * escaped; the statement that consumes the sheet is nowhere near it, since
+   * the CSS is injected as a style element a thousand lines later, so
+   * indexOf returned -1 and the region swallowed the entire module's
+   * JavaScript, where backticks are ordinary and expected.
+   *
+   * The reliable definition is the literal itself: it runs from its opening
+   * delimiter to the first line that is nothing but a closing delimiter, and
+   * anything before that line which also contains one is the bug.
+   */
+  const open = src.indexOf('const CSS = ' + BACKTICK);
+  assert(open > 0, 'stylesheet not found');
+  const lines = src.slice(open).split('\n');
+  const closing = lines.findIndex((line, index) => index > 0 && line.trim() === BACKTICK);
+  assert(closing > 0, 'the stylesheet literal is never closed');
+
+  const offenders = lines.slice(1, closing)
+    .map((line, index) => [index + 1, line])
+    .filter(([, line]) => line.includes(BACKTICK) || line.includes('${'));
+  assert.deepEqual(
+    offenders.map(([index, line]) => `line +${index}: ${line.trim().slice(0, 70)}`),
+    [],
+    'a backtick or ${ inside the CSS literal ends it early; name tokens in plain words instead',
+  );
+  // Sanity-check the scan itself: the region has to be the whole stylesheet,
+  // not a few lines of it. An anchor that silently matched early is exactly
+  // how the earlier versions of this test reported success on broken input.
+  assert(closing > 600, 'the scanned region is too short to be the stylesheet: ' + closing + ' lines');
+  assert(lines.slice(1, closing).join('\n').includes('prefers-reduced-motion'),
+    'the scan missed the end of the stylesheet');
+});
+
+test('the whole palette stays legible in both themes', () => {
+  /*
+   * Resolve the panel's palette arithmetically and check every pairing that
+   * carries text or structure, in light and dark.
+   *
+   * This exists because the panel's colours are now a derivation chain: the
+   * accent comes from a theme token, surfaces from the accent, plates mix into
+   * surfaces. Any link can be adjusted innocently and ruin a pairing three
+   * steps away — tinting the page a little more also tints every card, every
+   * plate and the sticky table header. Reading percentages out of the
+   * stylesheet keeps this measuring what actually ships.
+   */
+  const percentOf = name => {
+    const m = new RegExp('--flup-' + name + ':\\s*color-mix\\(in srgb, var\\(--flup-accent\\) (\\d+)%').exec(cssText);
+    assert(m, '--flup-' + name + ' is not a mix of the accent');
+    return Number(m[1]) / 100;
+  };
+  const hslToRgb = (h, s, l) => {
+    h = ((h % 360) + 360) % 360; s /= 100; l /= 100;
+    const c = (1 - Math.abs(2 * l - 1)) * s;
+    const x = c * (1 - Math.abs(((h / 60) % 2) - 1));
+    const m = l - c / 2;
+    const [r, g, b] = h < 60 ? [c, x, 0] : h < 120 ? [x, c, 0] : h < 180 ? [0, c, x]
+      : h < 240 ? [0, x, c] : h < 300 ? [x, 0, c] : [c, 0, x];
+    return [r, g, b].map(v => Math.round((v + m) * 255));
+  };
+  const blend = (a, b, p) => a.map((v, i) => Math.round(v * p + b[i] * (1 - p)));
+  const luminance = rgb => {
+    const [r, g, b] = rgb.map(v => {
+      const c = v / 255;
+      return c <= 0.03928 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4;
+    });
+    return 0.2126 * r + 0.7152 * g + 0.0722 * b;
+  };
+  const ratio = (a, b) => {
+    const pair = [luminance(a), luminance(b)].sort((x, y) => y - x);
+    return (pair[0] + 0.05) / (pair[1] + 0.05);
+  };
+  const apart = (a, b) => Math.abs(a[0] - b[0]) + Math.abs(a[1] - b[1]) + Math.abs(a[2] - b[2]);
+
+  // The accent's own saturation and the fill's, read from the stylesheet.
+  const accentSat = Number(/--flup-accent:\s*hsl\(from var\(--dsw-alias-state-success-primary\) h (\d+)%/.exec(cssText)[1]);
+  const fillMatch = /--flup-fill:\s*hsl\(from var\(--dsw-alias-state-success-primary\) h (\d+)% (\d+)%\)/.exec(cssText);
+  assert(fillMatch, '--flup-fill must pin its own saturation and lightness');
+  const inkMatch = /--flup-ink:\s*color-mix\(in srgb, var\(--flup-accent\) (\d+)%, var\(--dsw-alias-label-primary\)\)/.exec(cssText);
+  assert(inkMatch, '--flup-ink must mix the accent into the theme label colour');
+
+  // state-success-primary is #22c55e in both themes; the surfaces differ.
+  const BASE_H = 145.4;
+  const BASE_L = 45.3;
+  const accent = hslToRgb(BASE_H, accentSat, BASE_L);
+  const fill = hslToRgb(BASE_H, Number(fillMatch[1]), Number(fillMatch[2]));
+  const inkPercent = Number(inkMatch[1]) / 100;
+  const mixes = {
+    surface: percentOf('surface'),
+    layer1: percentOf('surface-1'),
+    wash: percentOf('wash-brand'),
+  };
+
+  // Resolved from the application's own token definitions.
+  const THEMES = [
+    { name: 'light', base: [255, 255, 255], layer1: [255, 255, 255], label: [15, 17, 21], secondary: [107, 107, 112] },
+    { name: 'dark', base: [21, 21, 23], layer1: [35, 35, 36], label: [249, 250, 251], secondary: [150, 150, 155] },
+  ];
+  const chipPercent = Number(/\.flup-chip-hue \{[^}]*color-mix\(in srgb, var\(--flup-chip-hue\) (\d+)%/s.exec(cssText)[1]) / 100;
+
+  for (const theme of THEMES) {
+    const page = blend(accent, theme.base, mixes.surface);
+    const card = blend(accent, theme.layer1, mixes.layer1);
+    const wash = blend(accent, theme.layer1, mixes.wash);
+    const ink = blend(accent, theme.label, inkPercent);
+    const where = detail => `${theme.name}: ${detail}`;
+
+    // Text, at the AA floor for small text.
+    assert(ratio(theme.label, page) >= 4.5, where('primary text on the page'));
+    assert(ratio(theme.label, card) >= 4.5, where('primary text on a card'));
+    assert(ratio(theme.secondary, card) >= 4.5, where('secondary text on a card'));
+    assert(ratio(theme.label, wash) >= 4.5, where('primary text on a wash'));
+    assert(ratio(ink, page) >= 4.5, where('accent text on the page'));
+    assert(ratio(ink, card) >= 4.5, where('accent text on a card'));
+    // A filled button's label is white in both themes.
+    assert(ratio([255, 255, 255], fill) >= 4.5, where('white on the filled button'));
+
+    // Structure. In light theme all three background tokens resolve to #fff,
+    // so without the tint a card had no fill difference from the page at all
+    // and depended entirely on its border.
+    assert(apart(page, card) >= 6, where('a card must lift off the page'));
+
+    // The tint must not swallow the vendor plates that sit on top of it.
+    const plates = Array.from({ length: 12 }, (unused, i) => blend(hslToRgb(BASE_H + i * 30, accentSat, BASE_L), card, chipPercent));
+    let closest = Infinity;
+    for (let i = 0; i < plates.length; i += 1) {
+      for (let j = i + 1; j < plates.length; j += 1) closest = Math.min(closest, apart(plates[i], plates[j]));
+    }
+    assert(closest >= 12, where(`chip plates collapsed to ${closest}`));
+    assert(Math.min(...plates.map(p => ratio(p, theme.label))) >= 4.5, where('a plate label fell below AA'));
+
+    // The page tint must stay quieter than the quietest thing that carries
+    // information, or the decoration outranks the data.
+    const pageShift = apart(theme.base, page);
+    const plateShift = apart(card, blend(accent, card, 0.4));
+    assert(pageShift < plateShift, where('the page tint is louder than a vendor plate'));
+  }
 });
