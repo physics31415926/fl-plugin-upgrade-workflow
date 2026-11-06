@@ -533,7 +533,9 @@ window.__ModuleLoader__.load({
     const CSS = `
 .flup-root {
   display: flex; flex-direction: column; height: 100%; min-height: 0;
-  background: var(--dsw-alias-bg-base); color: var(--dsw-alias-label-primary);
+  /* Declared below in this same rule; custom properties resolve at use, not
+     in source order, so the forward reference is fine. */
+  background: var(--flup-surface); color: var(--dsw-alias-label-primary);
   font-size: 13px; line-height: 1.5;
 
   /*
@@ -548,11 +550,62 @@ window.__ModuleLoader__.load({
    * precisely because the brand fill underneath it does not change.
    */
   --flup-on-brand: #fff;
-  --flup-wash-brand: color-mix(in srgb, var(--dsw-alias-brand-primary) 10%, var(--dsw-alias-bg-layer-1));
+
+  /*
+   * The panel's own accent, in three strengths.
+   *
+   * --dsw-alias-brand-primary is not an accent colour despite its name: it
+   * resolves to #0f1115 in light and #f9fafb in dark, a near-black and a
+   * near-white. As a fill or a border it gives black buttons and black focus
+   * rings, which read as deliberate while the panel was greyscale and read as
+   * foreign next to the muted vendor plates. Twenty-six declarations used it.
+   *
+   * The accent is the plate family's own hue: the theme's success colour held
+   * at the plates' 35% saturation, so a button, a focus ring and a vendor
+   * plate are visibly one palette. Lightness comes from the theme, so it
+   * follows a theme switch.
+   *
+   * --flup-ink is the readable strength, for text and thin borders. It is
+   * not simply the accent at higher saturation — that was the obvious attempt
+   * and it fails, because no single colour clears 4.5:1 against both a white
+   * page and a near-black one; the requirement runs in opposite directions,
+   * and the theme only solves it for its own tokens by shipping two values.
+   * Mixing the accent into the theme's label colour does solve it, since
+   * label-primary is already near-black in light and near-white in dark, so
+   * the ink darkens or lightens to suit without naming either case. At 75%
+   * accent it stays clearly coloured and still reads 5.0:1 on the worst of
+   * the four surfaces.
+   *
+   * --flup-fill is for a filled button, whose label is white in both
+   * themes. The accent is too light for that at 3.4:1, so the fill raises
+   * saturation and drops lightness until white clears AA, at 4.8:1.
+   */
+  --flup-accent: hsl(from var(--dsw-alias-state-success-primary) h 35% l);
+  --flup-ink: color-mix(in srgb, var(--flup-accent) 75%, var(--dsw-alias-label-primary));
+  --flup-fill: hsl(from var(--dsw-alias-state-success-primary) h 50% 34%);
+
+  /*
+   * Surfaces carry a trace of the same hue, so the panel reads as one warm
+   * family rather than coloured chips floating on neutral grey.
+   *
+   * The amount falls as a surface rises, which is what makes layering work at
+   * all in the light theme: bg-base, bg-layer-1 and bg-layer-2 all resolve to
+   * #fff there, so a card had no fill difference from the page behind it and
+   * depended entirely on its border. 7/3/1 gives a card an 18-step lift in
+   * light and 29 in dark, while the least contrasted text still reads 17.6:1
+   * and 13.2:1 — far too faint to threaten legibility, and much quieter than
+   * the 40% vendor plate, which stays the quietest coloured thing that
+   * carries information.
+   */
+  --flup-surface: color-mix(in srgb, var(--flup-accent) 7%, var(--dsw-alias-bg-base));
+  --flup-surface-1: color-mix(in srgb, var(--flup-accent) 3%, var(--dsw-alias-bg-layer-1));
+  --flup-surface-2: color-mix(in srgb, var(--flup-accent) 1%, var(--dsw-alias-bg-layer-2));
+
+  --flup-wash-brand: color-mix(in srgb, var(--flup-accent) 14%, var(--dsw-alias-bg-layer-1));
   --flup-wash-ok: color-mix(in srgb, var(--dsw-alias-state-success-primary) 10%, var(--dsw-alias-bg-layer-1));
   --flup-wash-warn: color-mix(in srgb, var(--dsw-alias-state-warn-primary) 10%, var(--dsw-alias-bg-layer-1));
   --flup-wash-error: color-mix(in srgb, var(--dsw-alias-state-error-primary) 10%, var(--dsw-alias-bg-layer-1));
-  --flup-edge-brand: color-mix(in srgb, var(--dsw-alias-brand-primary) 38%, transparent);
+  --flup-edge-brand: color-mix(in srgb, var(--flup-accent) 55%, transparent);
   --flup-ease: cubic-bezier(0.22, 0.61, 0.36, 1);
 
   /*
@@ -710,18 +763,18 @@ window.__ModuleLoader__.load({
 .flup-rail-btn {
   appearance: none; font: inherit; text-align: left; cursor: pointer;
   border: 1px solid var(--dsw-alias-border-l2); border-radius: var(--flup-r2);
-  background: var(--dsw-alias-bg-layer-1); color: var(--dsw-alias-label-primary);
+  background: var(--flup-surface-1); color: var(--dsw-alias-label-primary);
   padding: 7px 10px 7px 9px; border-left-width: 3px;
   display: flex; flex-direction: column; gap: 1px; width: 100%;
   transition: background 140ms var(--flup-ease), border-color 140ms var(--flup-ease), transform 140ms var(--flup-ease);
 }
-.flup-rail-btn:hover { background: var(--dsw-alias-bg-layer-2); transform: translateX(1px); }
+.flup-rail-btn:hover { background: var(--flup-surface-2); transform: translateX(1px); }
 .flup-rail-btn:active { transform: translateX(1px) scale(0.99); }
 .flup-rail-btn[aria-current="true"] {
-  background: var(--dsw-alias-bg-layer-2); background: var(--flup-wash-brand);
-  font-weight: 500; border-color: var(--dsw-alias-brand-primary);
+  background: var(--flup-surface-2); background: var(--flup-wash-brand);
+  font-weight: 500; border-color: var(--flup-ink);
 }
-.flup-rail-btn:focus-visible { outline: 2px solid var(--dsw-alias-brand-primary); outline-offset: 1px; }
+.flup-rail-btn:focus-visible { outline: 2px solid var(--flup-ink); outline-offset: 1px; }
 /*
  * The deploy entry sits apart from the project list, because it acts on the
  * dashboard itself rather than on a project. It carries the brand fill while
@@ -729,17 +782,17 @@ window.__ModuleLoader__.load({
  * back to an outline once a dashboard exists and it is merely available.
  */
 .flup-rail-cta {
-  border-color: var(--dsw-alias-brand-primary);
-  color: var(--dsw-alias-brand-primary);
+  border-color: var(--flup-ink);
+  color: var(--flup-ink);
   font-weight: 500;
 }
 .flup-rail-cta-urgent {
-  background: var(--dsw-alias-brand-primary);
-  border-color: var(--dsw-alias-brand-primary);
+  background: var(--flup-fill);
+  border-color: var(--flup-ink);
   color: var(--flup-on-brand);
   font-weight: 500;
 }
-.flup-rail-cta-urgent:hover { background: var(--dsw-alias-brand-primary); filter: brightness(1.08); }
+.flup-rail-cta-urgent:hover { background: var(--flup-fill); filter: brightness(1.08); }
 .flup-rail-cta-urgent .flup-rail-sub { color: var(--flup-on-brand); opacity: 0.85; }
 .flup-rail-sub { font-size: 11px; color: var(--dsw-alias-label-secondary); font-weight: 400; }
 /*
@@ -764,8 +817,8 @@ window.__ModuleLoader__.load({
   text-align: left; padding: 8px 10px; font: inherit; font-size: 11px;
   color: var(--dsw-alias-label-secondary); border-radius: var(--flup-r2);
 }
-.flup-rail-link:hover { color: var(--dsw-alias-label-primary); background: var(--dsw-alias-bg-layer-2); }
-.flup-rail-link:focus-visible { outline: 2px solid var(--dsw-alias-brand-primary); outline-offset: 1px; }
+.flup-rail-link:hover { color: var(--dsw-alias-label-primary); background: var(--flup-surface-2); }
+.flup-rail-link:focus-visible { outline: 2px solid var(--flup-ink); outline-offset: 1px; }
 .flup-pane { flex: 1 1 auto; min-width: 0; display: flex; flex-direction: column; min-height: 0; }
 .flup-sub {
   display: flex; align-items: center; gap: 8px 14px; flex-wrap: wrap;
@@ -775,19 +828,19 @@ window.__ModuleLoader__.load({
 .flup-sub b { color: var(--dsw-alias-label-primary); font-weight: 500; }
 .flup-btn {
   appearance: none; border: 1px solid var(--dsw-alias-border-l2);
-  background: var(--dsw-alias-bg-layer-1); color: var(--dsw-alias-label-primary);
+  background: var(--flup-surface-1); color: var(--dsw-alias-label-primary);
   border-radius: var(--flup-r2); padding: 4px 11px; font: inherit; font-size: 12px; cursor: pointer;
   text-decoration: none; white-space: nowrap;
   transition: background 130ms var(--flup-ease), border-color 130ms var(--flup-ease),
     transform 130ms var(--flup-ease), filter 130ms var(--flup-ease);
 }
 .flup-btn:hover:not(:disabled) {
-  background: var(--dsw-alias-bg-layer-2); border-color: var(--dsw-alias-brand-primary);
+  background: var(--flup-surface-2); border-color: var(--flup-ink);
   transform: translateY(-1px);
 }
 .flup-btn:active:not(:disabled) { transform: translateY(0) scale(0.98); }
 .flup-btn:disabled { opacity: 0.5; cursor: default; }
-.flup-btn:focus-visible { outline: 2px solid var(--dsw-alias-brand-primary); outline-offset: 1px; }
+.flup-btn:focus-visible { outline: 2px solid var(--flup-ink); outline-offset: 1px; }
 /*
  * Button weight carries meaning, so the levels stay visually distinct:
  * primary is the filled action a view exists for, accent is an outlined action
@@ -795,26 +848,26 @@ window.__ModuleLoader__.load({
  * button is local navigation. Danger is reserved for removing something.
  */
 .flup-btn-primary {
-  border-color: transparent; background: var(--dsw-alias-brand-primary);
+  border-color: transparent; background: var(--flup-fill);
   color: var(--flup-on-brand); font-weight: 500;
 }
-.flup-btn-primary:hover:not(:disabled) { filter: brightness(1.08); background: var(--dsw-alias-brand-primary); }
+.flup-btn-primary:hover:not(:disabled) { filter: brightness(1.08); background: var(--flup-fill); }
 .flup-btn-accent {
-  border-color: var(--dsw-alias-brand-primary); color: var(--dsw-alias-brand-primary);
-  background: var(--dsw-alias-bg-layer-1);
+  border-color: var(--flup-ink); color: var(--flup-ink);
+  background: var(--flup-surface-1);
 }
-.flup-btn-accent:hover:not(:disabled) { background: var(--dsw-alias-bg-layer-2); }
+.flup-btn-accent:hover:not(:disabled) { background: var(--flup-surface-2); }
 .flup-btn-danger { border-color: var(--dsw-alias-state-error-primary); color: var(--dsw-alias-state-error-primary); }
 .flup-btn-danger:hover:not(:disabled) {
-  background: var(--dsw-alias-bg-layer-2); border-color: var(--dsw-alias-state-error-primary);
+  background: var(--flup-surface-2); border-color: var(--dsw-alias-state-error-primary);
 }
 .flup-select, .flup-input {
   font: inherit; font-size: 12px; border-radius: var(--flup-r2); padding: 4px 8px;
-  border: 1px solid var(--dsw-alias-border-l2); background: var(--dsw-alias-bg-layer-1);
+  border: 1px solid var(--dsw-alias-border-l2); background: var(--flup-surface-1);
   color: var(--dsw-alias-label-primary); max-width: 100%;
 }
 .flup-select:focus-visible, .flup-input:focus-visible {
-  outline: 2px solid var(--dsw-alias-brand-primary); outline-offset: 1px;
+  outline: 2px solid var(--flup-ink); outline-offset: 1px;
 }
 .flup-input { width: 100%; }
 .flup-dot { display: inline-block; width: 7px; height: 7px; border-radius: 50%; flex: none; }
@@ -835,24 +888,24 @@ window.__ModuleLoader__.load({
 .flup-tab {
   appearance: none; font: inherit; font-size: 12px; cursor: pointer;
   border: 1px solid var(--dsw-alias-border-l2); border-radius: var(--flup-r2);
-  background: var(--dsw-alias-bg-layer-1); color: var(--dsw-alias-label-primary);
+  background: var(--flup-surface-1); color: var(--dsw-alias-label-primary);
   padding: 5px 12px; position: relative; overflow: hidden;
   transition: background 130ms var(--flup-ease), border-color 130ms var(--flup-ease);
 }
-.flup-tab:hover { background: var(--dsw-alias-bg-layer-2); }
+.flup-tab:hover { background: var(--flup-surface-2); }
 .flup-tab[aria-selected="true"] {
-  background: var(--dsw-alias-bg-layer-2); background: var(--flup-wash-brand);
+  background: var(--flup-surface-2); background: var(--flup-wash-brand);
   font-weight: 500;
-  border-color: var(--dsw-alias-brand-primary); box-shadow: inset 0 -2px 0 var(--dsw-alias-brand-primary);
+  border-color: var(--flup-ink); box-shadow: inset 0 -2px 0 var(--flup-accent);
 }
 /* The underline grows from the left on selection, so the eye is carried from
    the tab that was active to the one that now is. */
 .flup-tab[aria-selected="true"]::after {
   content: ''; position: absolute; left: 0; right: 0; bottom: 0; height: 2px;
-  background: var(--dsw-alias-brand-primary); transform-origin: left;
+  background: var(--flup-fill); transform-origin: left;
   animation: flup-grow 220ms var(--flup-ease);
 }
-.flup-tab:focus-visible { outline: 2px solid var(--dsw-alias-brand-primary); outline-offset: 1px; }
+.flup-tab:focus-visible { outline: 2px solid var(--flup-ink); outline-offset: 1px; }
 /*
  * Switching rail entries slides the new view in.
  *
@@ -875,7 +928,7 @@ window.__ModuleLoader__.load({
 .flup-table th {
   text-align: left; font-weight: 500; color: var(--dsw-alias-label-secondary);
   padding: 0 10px 6px 0; border-bottom: 1px solid var(--dsw-alias-border-l1); font-size: 11px;
-  position: sticky; top: 0; background: var(--dsw-alias-bg-base);
+  position: sticky; top: 0; background: var(--flup-surface);
 }
 .flup-table td { padding: 7px 10px 7px 0; border-bottom: 1px solid var(--dsw-alias-border-l1); }
 .flup-table tr:last-child td { border-bottom: none; }
@@ -901,7 +954,7 @@ window.__ModuleLoader__.load({
 /* A hovered row gets a brand edge as well as a fill, so the pointer's position
    is unambiguous in a dense table where adjacent rows are the same height. */
 .flup-table-rows tbody tr:hover {
-  background: var(--dsw-alias-bg-layer-1);
+  background: var(--flup-surface-1);
   box-shadow: inset 2px 0 0 var(--dsw-alias-border-l2);
   box-shadow: inset 2px 0 0 var(--flup-edge-brand);
 }
@@ -910,10 +963,10 @@ window.__ModuleLoader__.load({
    real button for keyboard and screen-reader users. */
 .flup-link {
   appearance: none; border: none; background: none; font: inherit; font-size: 12px;
-  color: var(--dsw-alias-brand-primary); cursor: pointer; padding: 0; text-align: left;
+  color: var(--flup-ink); cursor: pointer; padding: 0; text-align: left;
   text-decoration: underline; text-underline-offset: 2px;
 }
-.flup-link:focus-visible { outline: 2px solid var(--dsw-alias-brand-primary); outline-offset: 2px; }
+.flup-link:focus-visible { outline: 2px solid var(--flup-ink); outline-offset: 2px; }
 /* Branch filter chips above the task list. */
 .flup-filter { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; padding-bottom: 12px; }
 /* The same row used outside a body block, which supplies its own gutter. */
@@ -923,17 +976,17 @@ window.__ModuleLoader__.load({
 .flup-chip {
   appearance: none; font: inherit; font-size: 11px; cursor: pointer;
   border: 1px solid var(--dsw-alias-border-l2); border-radius: var(--flup-r3);
-  background: var(--dsw-alias-bg-layer-1); color: var(--dsw-alias-label-primary);
+  background: var(--flup-surface-1); color: var(--dsw-alias-label-primary);
   padding: 3px 11px; white-space: nowrap;
   transition: background 120ms var(--flup-ease), border-color 120ms var(--flup-ease),
     color 120ms var(--flup-ease), transform 120ms var(--flup-ease);
 }
 .flup-chip:active { transform: scale(0.96); }
-.flup-chip:hover { background: var(--dsw-alias-bg-layer-2); }
+.flup-chip:hover { background: var(--flup-surface-2); }
 .flup-chip[aria-pressed="true"] {
-  border-color: var(--dsw-alias-brand-primary);
-  background: var(--dsw-alias-bg-layer-2); background: var(--flup-wash-brand);
-  color: var(--dsw-alias-brand-primary); font-weight: 500;
+  border-color: var(--flup-ink);
+  background: var(--flup-surface-2); background: var(--flup-wash-brand);
+  color: var(--flup-ink); font-weight: 500;
 }
 /*
  * A vendor chip wears its vendor's colour.
@@ -969,11 +1022,11 @@ window.__ModuleLoader__.load({
  */
 .flup-chip-hue {
   border-color: color-mix(in srgb, var(--flup-chip-hue) 70%, transparent);
-  background: color-mix(in srgb, var(--flup-chip-hue) 60%, var(--dsw-alias-bg-layer-1));
+  background: color-mix(in srgb, var(--flup-chip-hue) 60%, var(--flup-surface-1));
   color: var(--dsw-alias-label-primary);
 }
 .flup-chip-hue:hover {
-  background: color-mix(in srgb, var(--flup-chip-hue) 75%, var(--dsw-alias-bg-layer-1));
+  background: color-mix(in srgb, var(--flup-chip-hue) 75%, var(--flup-surface-1));
   border-color: var(--flup-chip-hue);
 }
 /*
@@ -987,7 +1040,7 @@ window.__ModuleLoader__.load({
  */
 .flup-chip-hue[aria-pressed="true"] {
   border-color: var(--flup-chip-hue);
-  background: color-mix(in srgb, var(--flup-chip-hue) 88%, var(--dsw-alias-bg-layer-1));
+  background: color-mix(in srgb, var(--flup-chip-hue) 88%, var(--flup-surface-1));
   box-shadow: 0 0 0 2px color-mix(in srgb, var(--flup-chip-hue) 35%, transparent);
   font-weight: 500;
 }
@@ -1006,10 +1059,10 @@ window.__ModuleLoader__.load({
  */
 .flup-vendor {
   display: inline-block; padding: 1px var(--flup-s2); border-radius: var(--flup-r3);
-  background: color-mix(in srgb, var(--flup-chip-hue) 40%, var(--dsw-alias-bg-layer-1));
+  background: color-mix(in srgb, var(--flup-chip-hue) 40%, var(--flup-surface-1));
   color: var(--dsw-alias-label-primary);
 }
-.flup-chip:focus-visible { outline: 2px solid var(--dsw-alias-brand-primary); outline-offset: 1px; }
+.flup-chip:focus-visible { outline: 2px solid var(--flup-ink); outline-offset: 1px; }
 /* Task drill-in. */
 .flup-detail-head { display: flex; align-items: center; gap: 8px; padding-bottom: 10px; }
 .flup-detail-title { margin: 0 0 4px; font-size: 14px; font-weight: 600; color: var(--dsw-alias-label-primary); }
@@ -1017,7 +1070,7 @@ window.__ModuleLoader__.load({
 .flup-card {
   border: 1px solid var(--dsw-alias-border-l1); border-radius: var(--flup-r2);
   padding: var(--flup-s3) 14px; margin-bottom: var(--flup-s3);
-  background: var(--dsw-alias-bg-layer-1);
+  background: var(--flup-surface-1);
   animation: flup-rise 220ms var(--flup-ease) both;
 }
 /*
@@ -1038,7 +1091,7 @@ window.__ModuleLoader__.load({
 .flup-pre {
   margin: 0; font-size: 12px; line-height: 1.55; white-space: pre-wrap; word-break: break-word;
   color: var(--dsw-alias-label-primary); max-height: 320px; overflow: auto;
-  background: var(--dsw-alias-bg-layer-2); border-radius: var(--flup-r2); padding: 8px 10px;
+  background: var(--flup-surface-2); border-radius: var(--flup-r2); padding: 8px 10px;
 }
 .flup-plan { margin: 0; padding-left: 20px; font-size: 12px; line-height: 1.8; }
 .flup-plan-done { color: var(--dsw-alias-label-secondary); }
@@ -1063,14 +1116,14 @@ window.__ModuleLoader__.load({
  */
 .flup-warn-err {
   border-color: var(--dsw-alias-state-error-primary);
-  background: var(--dsw-alias-bg-layer-2);
-  background: color-mix(in srgb, var(--dsw-alias-state-error-primary) 7%, var(--dsw-alias-bg-layer-1));
+  background: var(--flup-surface-2);
+  background: color-mix(in srgb, var(--dsw-alias-state-error-primary) 7%, var(--flup-surface-1));
 }
 .flup-warn-lead { font-weight: 600; }
 .flup-code-inline {
   font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
   font-size: 11px; padding: 1px 5px; border-radius: var(--flup-r1);
-  background: var(--dsw-alias-bg-layer-2); word-break: break-all;
+  background: var(--flup-surface-2); word-break: break-all;
 }
 .flup-events {
   margin: 0; padding: 0; list-style: none; font-size: 12px; line-height: 1.55;
@@ -1089,7 +1142,7 @@ window.__ModuleLoader__.load({
  */
 .flup-tag {
   border-radius: var(--flup-r1); padding: 1px 6px; font-size: 11px;
-  background: var(--dsw-alias-bg-layer-2); color: var(--dsw-alias-label-secondary);
+  background: var(--flup-surface-2); color: var(--dsw-alias-label-secondary);
   border: 1px solid transparent;
 }
 .flup-tag-warn {
@@ -1103,15 +1156,15 @@ window.__ModuleLoader__.load({
   background: transparent;
 }
 .flup-tag-active {
-  color: var(--dsw-alias-brand-primary);
-  border-color: var(--dsw-alias-brand-primary);
+  color: var(--flup-ink);
+  border-color: var(--flup-ink);
   background: transparent;
 }
 
 .flup-meta { color: var(--dsw-alias-label-secondary); font-size: 12px; }
 .flup-empty { color: var(--dsw-alias-label-secondary); font-size: 12px; padding: 6px 0; }
 .flup-code {
-  display: block; background: var(--dsw-alias-bg-layer-2); border-radius: var(--flup-r2);
+  display: block; background: var(--flup-surface-2); border-radius: var(--flup-r2);
   padding: 8px 10px; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
   font-size: 11px; white-space: pre-wrap; word-break: break-all; margin: 8px 0 0;
 }
@@ -1132,19 +1185,19 @@ window.__ModuleLoader__.load({
  */
 .flup-card-warn {
   border-left: 3px solid var(--dsw-alias-state-warn-primary);
-  background: var(--dsw-alias-bg-layer-1); background: var(--flup-wash-warn);
+  background: var(--flup-surface-1); background: var(--flup-wash-warn);
 }
 .flup-card-ok {
   border-left: 3px solid var(--dsw-alias-state-success-primary);
-  background: var(--dsw-alias-bg-layer-1); background: var(--flup-wash-ok);
+  background: var(--flup-surface-1); background: var(--flup-wash-ok);
 }
 .flup-card-accent {
-  border-left: 3px solid var(--dsw-alias-brand-primary);
-  background: var(--dsw-alias-bg-layer-1); background: var(--flup-wash-brand);
+  border-left: 3px solid var(--flup-ink);
+  background: var(--flup-surface-1); background: var(--flup-wash-brand);
 }
 .flup-card-error {
   border-left: 3px solid var(--dsw-alias-state-error-primary);
-  background: var(--dsw-alias-bg-layer-1); background: var(--flup-wash-error);
+  background: var(--flup-surface-1); background: var(--flup-wash-error);
 }
 /*
  * Placeholder bars shown while a request is in flight, sized like the content
@@ -1155,10 +1208,12 @@ window.__ModuleLoader__.load({
 .flup-skel-wrap { padding: 4px 0 2px; }
 .flup-skel {
   border-radius: var(--flup-r1); height: 11px; margin: 8px 0;
+  /* The sweep rides the tinted surfaces too, or a loading placeholder is the
+     one grey rectangle on a warm page. */
   background: linear-gradient(90deg,
-    var(--dsw-alias-bg-layer-1) 25%,
-    var(--dsw-alias-bg-layer-2) 37%,
-    var(--dsw-alias-bg-layer-1) 63%);
+    var(--flup-surface-2) 25%,
+    var(--flup-wash-brand) 37%,
+    var(--flup-surface-2) 63%);
   background-size: 200% 100%;
   animation: flup-sweep 1.3s ease-in-out infinite;
 }
