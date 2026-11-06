@@ -191,13 +191,56 @@ test('markup carries no ad-hoc margin', () => {
   const spacing = inline.filter(s => /margin(?!Top: 'auto')|padding|gap/.test(s));
   assert.deepEqual(spacing, [], 'spacing belongs in a class');
 
-  // What may remain is only what a stylesheet cannot express: a computed
-  // width, a status-dependent colour, and the rail pinning its last entry.
-  assert(inline.length <= 5, 'inline styles crept back in: ' + inline.length);
+  // What may remain is only what a stylesheet cannot express: a value that
+  // differs per item. Each allowance below names a specific one, so a new
+  // inline style has to be justified here before it can land.
+  const ALLOWED = [
+    /widths\[/,                       // computed skeleton bar width
+    /background: ok \?/,              // dot colour chosen from a verdict
+    /marginTop: 'auto'/,              // the rail pinning its last entry
+    /display: 'block'/,               // one icon sizing toggle
+    /'--flup-chip-hue'/,              // per-vendor hue; the rules live in CSS
+  ];
   for (const style of inline) {
-    const ok = /widths\[|background: ok \?|marginTop: 'auto'|display: 'block'/.test(style);
-    assert(ok, 'unexplained inline style: ' + style);
+    assert(ALLOWED.some(pattern => pattern.test(style)), 'unexplained inline style: ' + style);
   }
+  // A custom property feeding a stylesheet rule is the sanctioned way to pass
+  // a per-item value, so those are counted separately from the rest.
+  // Five, not four: the rail pins both its setup entry and the link that
+  // replaces it, so `marginTop: 'auto'` legitimately appears twice.
+  const hue = inline.filter(s => /'--flup-chip-hue'/.test(s));
+  assert.equal(inline.length - hue.length, 5, 'non-hue inline styles changed');
+});
+
+test('vendor colour is assigned, not hashed, and does not move', () => {
+  // Hashing was tried first and was wrong: against the real twelve-vendor
+  // fleet it used seven hues and put the three biggest vendors on one colour.
+  assert(!/function hueFor\(/.test(src), 'the hashed assignment is gone');
+  const start = src.indexOf('function huePalette(names) {');
+  assert(start > 0, 'huePalette not found');
+  const body = src.slice(start, src.indexOf('\n    }', start));
+  // Sorting by name is what keeps a colour still. The fleet view is ordered
+  // by host count, so position-based hues would swap when a vendor gains one
+  // machine — a colour that moves for no reason is worse than no colour.
+  assert(/unique\.sort\(\)/.test(body), 'assignment must not depend on input order');
+  assert(/% HUE_COUNT/.test(body), 'a thirteenth vendor must wrap, not lose its colour');
+
+  // Twelve declared steps, and every one reachable.
+  const declared = [...cssText.matchAll(/--flup-hue-(\d+):/g)].map(m => Number(m[1]));
+  assert.equal(new Set(declared).size, 12, 'twelve hue steps');
+
+  // Each hue rotates the theme's own brand token, so it follows light/dark.
+  // A literal hex would stay put while everything around it moved.
+  const relative = [...cssText.matchAll(/--flup-hue-\d+: hsl\(from var\(--dsw-alias-brand-primary\)[^;]*;/g)];
+  assert.equal(relative.length, 12, 'every hue derives from the theme');
+  // And each has a color-mix fallback first, so a renderer without relative
+  // color gets a usable tint instead of an invalid value and no colour.
+  const fallbacks = [...cssText.matchAll(/--flup-hue-\d+: color-mix\(/g)];
+  assert.equal(fallbacks.length, 12, 'every hue needs a fallback');
+
+  // Colour is never the only signal: the chip and the row both keep a label.
+  assert(/\}, shortBackend\(host\.backend, t\)\)/.test(markup), 'the row keeps its vendor name');
+  assert(/\$\{shortBackend\(name, t\)\} \(\$\{count\}\)/.test(markup), 'the chip keeps its label and count');
 });
 
 test('radii come from the scale', () => {
