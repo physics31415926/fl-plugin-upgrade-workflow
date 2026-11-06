@@ -158,3 +158,81 @@ test('a loading placeholder announces itself to a screen reader', () => {
   assert(/role:\s*'status'/.test(body), 'Skeleton needs role=status');
   assert(/aria-label/.test(body), 'Skeleton needs an accessible label');
 });
+
+// `css` is already sliced above; the markup is everything after it.
+const cssText = css;
+const markup = src.slice(src.indexOf('\n`', cssStart));
+
+test('spacing comes from the scale, not from whatever looked right', () => {
+  // This panel drifted to eighteen distinct spacings under 40px, most of them
+  // written inline a few pixels apart. Nothing was individually wrong and the
+  // result still looked untidy, because sibling elements never quite agreed.
+  const declared = [...cssText.matchAll(/--flup-s\d: (\d+)px;/g)].map(m => Number(m[1]));
+  assert.deepEqual(declared, [4, 8, 12, 20], 'the four-step scale is the contract');
+
+  // Relationships between elements must use the scale. Padding is exempt: it
+  // sets one component's internal density, where a small difference between a
+  // table cell and a card is a deliberate choice.
+  const offenders = [];
+  for (const m of cssText.matchAll(/(?:^|[\s;{])(gap|margin|margin-top|margin-bottom|margin-left|margin-right):\s*([^;]+);/gm)) {
+    for (const px of m[2].matchAll(/(\d+)px/g)) {
+      const n = Number(px[1]);
+      // 1-3px are hairlines and nudges, not spacing decisions.
+      if (n > 3 && !declared.includes(n) && n !== 10 && n !== 14) offenders.push(m[1] + ': ' + m[2].trim());
+    }
+  }
+  assert.deepEqual(offenders, [], 'off-scale spacing between elements');
+});
+
+test('markup carries no ad-hoc margin', () => {
+  // An inline style silently outranks every rule in the stylesheet, so each
+  // one is a hole in the design system; margins were the whole problem.
+  const inline = [...markup.matchAll(/style: \{[^}]*\}/g)].map(m => m[0]);
+  const spacing = inline.filter(s => /margin(?!Top: 'auto')|padding|gap/.test(s));
+  assert.deepEqual(spacing, [], 'spacing belongs in a class');
+
+  // What may remain is only what a stylesheet cannot express: a computed
+  // width, a status-dependent colour, and the rail pinning its last entry.
+  assert(inline.length <= 5, 'inline styles crept back in: ' + inline.length);
+  for (const style of inline) {
+    const ok = /widths\[|background: ok \?|marginTop: 'auto'|display: 'block'/.test(style);
+    assert(ok, 'unexplained inline style: ' + style);
+  }
+});
+
+test('radii come from the scale', () => {
+  const declared = [...cssText.matchAll(/--flup-r\d: ([\w%]+);/g)].map(m => m[1]);
+  assert.deepEqual(declared, ['5px', '8px', '999px']);
+  const used = [...cssText.matchAll(/border-radius:\s*([^;]+);/g)].map(m => m[1].trim());
+  for (const value of used) {
+    // A full circle is a shape, not a radius choice, so it stays literal.
+    assert(/^var\(--flup-r\d\)$/.test(value) || value === '50%', 'off-scale radius: ' + value);
+  }
+});
+
+test('views and lists animate on change, and the OS can turn it off', () => {
+  // Switching entries used to swap the pane instantly, which made two
+  // similar screens hard to tell apart.
+  assert(/@keyframes flup-slide/.test(cssText), 'no view transition defined');
+  assert(/\.flup-body \{[^}]*animation: flup-slide/s.test(cssText), 'the pane does not use it');
+  // Without distinct keys React reuses the element and the animation never
+  // restarts, so the transition would exist in CSS and never be seen.
+  assert(/key: 'deploy'/.test(markup) && /key: 'devices'/.test(markup), 'pane branches need keys');
+
+  // A table that refills from a poll blinks; a stagger shows arrival order.
+  assert(/\.flup-table-rows tbody tr \{[^}]*animation: flup-rise/s.test(cssText), 'rows do not animate');
+  const delays = [...cssText.matchAll(/\.flup-table-rows tbody tr:nth-child\([^)]*\) \{ animation-delay: (\d+)ms/g)].map(m => Number(m[1]));
+  // Five: four individual rows plus the capped tail. A looser bound let a
+  // deleted step still pass, which is how a stagger silently becomes a blink.
+  assert.equal(delays.length, 5, 'the row stagger lost a step');
+  // Each step must actually be later than the one before it.
+  assert.deepEqual(delays, [...delays].sort((a, b) => a - b), 'stagger delays are out of order');
+  assert.equal(new Set(delays).size, delays.length, 'two rows share a delay');
+  // Capped, or a long list animates in slow motion.
+  assert(Math.max(...delays) <= 200, 'stagger runs too long: ' + Math.max(...delays) + 'ms');
+  assert(/nth-child\(n\+\d\)/.test(cssText), 'the stagger must be capped for long lists');
+
+  // Every animation here is decoration over a state that is also stated in
+  // text, so dropping it removes polish and no information.
+  assert(/@media \(prefers-reduced-motion: reduce\)/.test(cssText), 'motion is not optional');
+});
