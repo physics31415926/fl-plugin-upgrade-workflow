@@ -497,6 +497,39 @@ window.__ModuleLoader__.load({
       return t.cjkNames ? parts[cjk] : parts[1 - cjk]
     }
 
+    /** How many hue steps the stylesheet declares. */
+    const HUE_COUNT = 12
+
+    /**
+     * Assign each name its own hue.
+     *
+     * Hashing the name was the first attempt and was wrong here: against the
+     * real fleet of twelve vendors it used seven hues and put NVIDIA, Hygon
+     * and AMD on one colour. A hash spreads a large unknown key space; this
+     * key space is small, known, and entirely visible at once, where what
+     * matters is that neighbours differ.
+     *
+     * So hues go by position in a name-sorted copy of the set, which
+     * guarantees distinctness up to twelve. Sorting by NAME, not by the host
+     * count the fleet is ordered by, is the point: a vendor acquiring one
+     * machine changes its row position, and a colour that moves when nothing
+     * meaningful changed is worse than no colour. Adding a vendor can shift
+     * the assignment, which is rare and visible, and the labels carry the
+     * meaning regardless.
+     *
+     * Past twelve, names wrap and two vendors share a hue. The fleet has
+     * twelve; this keeps a thirteenth from being colourless.
+     */
+    function huePalette(names) {
+      const unique = [...new Set((names || []).map(name => String(name || '')).filter(Boolean))]
+      unique.sort()
+      const palette = new Map()
+      unique.forEach((name, index) => {
+        palette.set(name, `var(--flup-hue-${(index % HUE_COUNT) + 1})`)
+      })
+      return palette
+    }
+
     const CSS = `
 .flup-root {
   display: flex; flex-direction: column; height: 100%; min-height: 0;
@@ -521,6 +554,51 @@ window.__ModuleLoader__.load({
   --flup-wash-error: color-mix(in srgb, var(--dsw-alias-state-error-primary) 10%, var(--dsw-alias-bg-layer-1));
   --flup-edge-brand: color-mix(in srgb, var(--dsw-alias-brand-primary) 38%, transparent);
   --flup-ease: cubic-bezier(0.22, 0.61, 0.36, 1);
+
+  /*
+   * A hue wheel derived from the theme's own brand colour.
+   *
+   * The theme offers five meaningful colours, four of which already mean
+   * something (error, warning, success, idle). That leaves one hue for
+   * everything else, which is why a fleet of twelve vendors rendered as twelve
+   * identical grey chips. Writing fixed hexes would solve the sameness and
+   * break theming: a literal stays put when the user switches light and dark,
+   * and would be wrong in one of them.
+   *
+   * Relative color syntax avoids the trade. Each step below takes the brand
+   * token apart and rotates only its hue, so lightness and saturation still
+   * come from the theme and every step moves with it. The angles are spread
+   * unevenly on purpose: equal 45-degree steps put two neighbours in the
+   * blue-green region where they are hard to tell apart at chip size.
+   *
+   * Each declaration is preceded by a color-mix fallback, so a renderer
+   * without relative color still gets a distinguishable tint rather than an
+   * invalid value and no colour at all.
+   */
+  --flup-hue-1: color-mix(in srgb, var(--dsw-alias-brand-primary) 85%, var(--dsw-alias-state-success-primary));
+  --flup-hue-1: hsl(from var(--dsw-alias-brand-primary) calc(h + 18) s l);
+  --flup-hue-2: color-mix(in srgb, var(--dsw-alias-brand-primary) 60%, var(--dsw-alias-state-success-primary));
+  --flup-hue-2: hsl(from var(--dsw-alias-brand-primary) calc(h + 52) s l);
+  --flup-hue-3: color-mix(in srgb, var(--dsw-alias-state-success-primary) 80%, var(--dsw-alias-brand-primary));
+  --flup-hue-3: hsl(from var(--dsw-alias-brand-primary) calc(h + 96) s l);
+  --flup-hue-4: color-mix(in srgb, var(--dsw-alias-state-success-primary) 70%, var(--dsw-alias-state-warn-primary));
+  --flup-hue-4: hsl(from var(--dsw-alias-brand-primary) calc(h + 134) s l);
+  --flup-hue-5: color-mix(in srgb, var(--dsw-alias-state-warn-primary) 80%, var(--dsw-alias-state-success-primary));
+  --flup-hue-5: hsl(from var(--dsw-alias-brand-primary) calc(h + 168) s l);
+  --flup-hue-6: color-mix(in srgb, var(--dsw-alias-state-warn-primary) 90%, var(--dsw-alias-brand-primary));
+  --flup-hue-6: hsl(from var(--dsw-alias-brand-primary) calc(h + 205) s l);
+  --flup-hue-7: color-mix(in srgb, var(--dsw-alias-state-warn-primary) 60%, var(--dsw-alias-state-error-primary));
+  --flup-hue-7: hsl(from var(--dsw-alias-brand-primary) calc(h + 238) s l);
+  --flup-hue-8: color-mix(in srgb, var(--dsw-alias-state-error-primary) 80%, var(--dsw-alias-state-warn-primary));
+  --flup-hue-8: hsl(from var(--dsw-alias-brand-primary) calc(h + 272) s l);
+  --flup-hue-9: color-mix(in srgb, var(--dsw-alias-state-error-primary) 85%, var(--dsw-alias-brand-primary));
+  --flup-hue-9: hsl(from var(--dsw-alias-brand-primary) calc(h + 300) s l);
+  --flup-hue-10: color-mix(in srgb, var(--dsw-alias-state-error-primary) 55%, var(--dsw-alias-brand-primary));
+  --flup-hue-10: hsl(from var(--dsw-alias-brand-primary) calc(h + 322) s l);
+  --flup-hue-11: color-mix(in srgb, var(--dsw-alias-brand-primary) 70%, var(--dsw-alias-state-error-primary));
+  --flup-hue-11: hsl(from var(--dsw-alias-brand-primary) calc(h + 340) s l);
+  --flup-hue-12: color-mix(in srgb, var(--dsw-alias-brand-primary) 90%, var(--dsw-alias-state-idle-primary));
+  --flup-hue-12: hsl(from var(--dsw-alias-brand-primary) calc(h + 356) s l);
 
   /*
    * One spacing scale, and one radius scale.
@@ -849,6 +927,48 @@ window.__ModuleLoader__.load({
   background: var(--dsw-alias-bg-layer-2); background: var(--flup-wash-brand);
   color: var(--dsw-alias-brand-primary); font-weight: 500;
 }
+/*
+ * A vendor chip wears its vendor's colour.
+ *
+ * Twelve hardware vendors used to render as twelve identical grey chips, so
+ * telling them apart meant reading every label. The hue is set per chip from
+ * the wheel above, and stays with that vendor across sorts and reloads
+ * because it is hashed from the vendor's own name rather than taken from list
+ * position.
+ *
+ * Unselected chips show the hue as a dot and a tinted edge, not as a fill:
+ * twelve saturated pills would compete with the task tables that actually
+ * carry status. Selecting one fills it, which keeps selection the loudest
+ * thing in the row.
+ *
+ * The label never relies on the colour, so this remains legible to anyone who
+ * cannot distinguish the hues.
+ */
+.flup-chip-hue { border-color: color-mix(in srgb, var(--flup-chip-hue) 45%, var(--dsw-alias-border-l2)); }
+.flup-chip-hue::before {
+  content: ''; display: inline-block; width: 6px; height: 6px;
+  border-radius: 50%; margin-right: var(--flup-s1); vertical-align: 1px;
+  background: var(--flup-chip-hue);
+}
+.flup-chip-hue:hover {
+  background: color-mix(in srgb, var(--flup-chip-hue) 8%, var(--dsw-alias-bg-layer-2));
+  border-color: color-mix(in srgb, var(--flup-chip-hue) 70%, transparent);
+}
+.flup-chip-hue[aria-pressed="true"] {
+  border-color: var(--flup-chip-hue);
+  background: color-mix(in srgb, var(--flup-chip-hue) 16%, var(--dsw-alias-bg-layer-1));
+  color: var(--dsw-alias-label-primary);
+}
+/*
+ * The same vendor hue inside a table, so a row and the chip that filters it
+ * read as the same thing. Quieter than the chip: a column of twelve colours
+ * must not outshout the status column next to it.
+ */
+.flup-vendor { display: inline-flex; align-items: baseline; gap: var(--flup-s1); }
+.flup-vendor::before {
+  content: ''; width: 5px; height: 5px; border-radius: 50%;
+  background: var(--flup-chip-hue); flex: none;
+}
 .flup-chip:focus-visible { outline: 2px solid var(--dsw-alias-brand-primary); outline-offset: 1px; }
 /* Task drill-in. */
 .flup-detail-head { display: flex; align-items: center; gap: 8px; padding-bottom: 10px; }
@@ -1163,6 +1283,9 @@ window.__ModuleLoader__.load({
     function BackendTable({ status, t }) {
       const backends = (status && Array.isArray(status.backends)) ? status.backends : []
       if (!backends.length) return h('p', { className: 'flup-empty' }, t.noBackends)
+      // Same vendor colours as the fleet view. A backend here and a machine
+      // vendor there are the same hardware, so they should look related.
+      const hues = huePalette(backends.map(backend => backend.label || backend.id))
       return h('table', { className: 'flup-table' },
         h('thead', null, h('tr', null,
           h('th', null, t.backend),
@@ -1175,7 +1298,10 @@ window.__ModuleLoader__.load({
           const gate = backend.gate
           return h('tr', { key: String(backend.id) },
             h('td', null,
-              String(backend.label || backend.id),
+              h('span', {
+                className: 'flup-vendor',
+                style: { '--flup-chip-hue': hues.get(String(backend.label || backend.id)) || 'var(--dsw-alias-state-idle-primary)' },
+              }, String(backend.label || backend.id)),
               backend.pr && backend.pr.url
                 ? h('a', {
                   className: 'flup-link flup-inline-note',
@@ -1288,6 +1414,10 @@ window.__ModuleLoader__.load({
       const known = backends.some(([name]) => name === backend)
       const active = known ? backend : null
       const hosts = active ? allHosts.filter(host => host.backend === active) : allHosts
+      // Built from the WHOLE fleet, so selecting a vendor does not recolour
+      // the rows that remain. A palette derived from the filtered list would
+      // make every single-vendor view the same first hue.
+      const hues = huePalette(allHosts.map(host => host.backend))
 
       /*
        * The fleet in one line, recomputed from the hosts on screen.
@@ -1359,8 +1489,12 @@ window.__ModuleLoader__.load({
             }, `${t.allBackends} (${allHosts.length})`),
             backends.map(([name, count]) => h('button', {
               key: name,
-              className: 'flup-chip',
+              className: 'flup-chip flup-chip-hue',
               type: 'button',
+              // The one inline style the hue needs: the value is per vendor,
+              // so it cannot live in a static stylesheet. The stylesheet owns
+              // every rule that reads it.
+              style: { '--flup-chip-hue': hues.get(String(name)) || 'var(--dsw-alias-state-idle-primary)' },
               'aria-pressed': active === name,
               // The chip shows one half of the bilingual name to keep the row
               // short; the title carries the full one the bastion reports, so
@@ -1373,7 +1507,7 @@ window.__ModuleLoader__.load({
         h('div', { className: 'flup-body' },
           error ? h('p', { className: 'flup-err' }, `${t.error}: ${error}`) : null,
           !devices && !error ? h(Skeleton, { rows: 6, label: t.loading }) : null,
-          devices ? h(DeviceTable, { hosts, t }) : null,
+          devices ? h(DeviceTable, { hosts, t, hues }) : null,
         ),
       )
     }
@@ -1384,9 +1518,12 @@ window.__ModuleLoader__.load({
      * Takes the hosts to show rather than the whole payload, so the caller
      * owns the filtering and this cannot disagree with the counts above it.
      */
-    function DeviceTable({ hosts: rows, t }) {
+    function DeviceTable({ hosts: rows, t, hues }) {
       const hosts = Array.isArray(rows) ? rows : []
       if (!hosts.length) return h('p', { className: 'flup-empty' }, t.noDevices)
+      // Built from the caller's full fleet when provided, so a filtered table
+      // keeps the colours the unfiltered chip row showed.
+      const palette = hues || huePalette(hosts.map(host => host.backend))
       return h('table', { className: 'flup-table' },
         h('thead', null, h('tr', null,
           h('th', null, t.host),
@@ -1403,7 +1540,15 @@ window.__ModuleLoader__.load({
               ? h('span', { className: 'flup-meta flup-cell-sub' }, String(host.accel.card_name))
               : null,
           ),
-          h('td', { className: 'flup-meta' }, String(host.backend || '—')),
+          // Same hue as the vendor's filter chip, so a filtered table and the
+          // chip that filtered it visibly belong together.
+          h('td', { className: 'flup-meta' },
+            host.backend
+              ? h('span', {
+                className: 'flup-vendor',
+                style: { '--flup-chip-hue': palette.get(String(host.backend)) || 'var(--dsw-alias-state-idle-primary)' },
+              }, shortBackend(host.backend, t))
+              : '—'),
           h('td', null,
             h('span', { className: 'flup-pill' }, h(Dot, { status: host.verdict }), String(host.verdict || '—')),
             // Stale data looks identical to fresh data otherwise, and acting
