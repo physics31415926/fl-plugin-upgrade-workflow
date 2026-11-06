@@ -231,9 +231,18 @@ test('vendor colour is assigned, not hashed, and does not move', () => {
 
   // Each hue rotates a theme token, so it follows light/dark; a literal hex
   // would stay put while everything around it moved.
-  const relative = [...cssText.matchAll(/--flup-hue-\d+: hsl\(from var\((--dsw-alias-[\w-]+)\) calc\(h \+ (\d+)\) s l\);/g)];
+  // Hue and lightness come from the theme; saturation is pinned, because the
+  // theme's 71% is poster paint once twelve plates sit in one row.
+  const relative = [...cssText.matchAll(/--flup-hue-\d+: hsl\(from var\((--dsw-alias-[\w-]+)\) calc\(h \+ (\d+)\) (\d+)% l\);/g)];
   assert.equal(relative.length, 12, 'every hue derives from a theme token');
   assert.equal(new Set(relative.map(m => m[1])).size, 1, 'one base token for the whole wheel');
+  const saturations = new Set(relative.map(m => Number(m[3])));
+  assert.equal(saturations.size, 1, 'one saturation for the whole wheel');
+  const saturation = [...saturations][0];
+  // The khaki register. Above roughly 45% the row stops reading as muted.
+  assert(saturation >= 25 && saturation <= 45, 'saturation left the muted range: ' + saturation);
+  // Lightness must stay inherited, or the wheel stops following the theme.
+  assert(/\) \d+% l\);/.test(cssText), 'lightness must come from the theme');
 
   /*
    * The base must actually have a hue to rotate.
@@ -286,10 +295,11 @@ test('the hue wheel renders twelve colours a person can tell apart', () => {
     '--dsw-alias-state-warn-primary': '#f59e0b',
     '--dsw-alias-state-error-primary': '#ec1313',
   };
-  const steps = [...cssText.matchAll(/--flup-hue-\d+: hsl\(from var\((--dsw-alias-[\w-]+)\) calc\(h \+ (\d+)\) s l\);/g)];
+  const steps = [...cssText.matchAll(/--flup-hue-\d+: hsl\(from var\((--dsw-alias-[\w-]+)\) calc\(h \+ (\d+)\) (\d+)% l\);/g)];
   assert.equal(steps.length, 12);
   const hex = RESOLVED[steps[0][1]];
   assert(hex, 'unknown hue base: ' + steps[0][1]);
+  const pinnedSaturation = Number(steps[0][3]) / 100;
 
   const toHsl = value => {
     const n = parseInt(value.slice(1), 16);
@@ -316,19 +326,81 @@ test('the hue wheel renders twelve colours a person can tell apart', () => {
   // A base with no hue to rotate is the failure this test exists for.
   assert(hsl.s > 0.5, 'the hue base is too desaturated to rotate: s=' + hsl.s.toFixed(2));
 
-  const colours = steps.map(m => toRgb(hsl.h + Number(m[2]), hsl.s, hsl.l));
+  /*
+   * Measure the PLATE, not the raw hue.
+   *
+   * What the user sees is the hue mixed into a theme surface, so the raw wheel
+   * being separable proves nothing on its own: a mix percentage low enough
+   * would flatten it back into the background. Both themes are checked,
+   * because one declaration has to work against #fff and #232324 alike.
+   */
+  const plate = (angle, surface, percent) => {
+    const rgb = toRgb(hsl.h + angle, pinnedSaturation, hsl.l);
+    return rgb.map((v, i) => Math.round(v * percent + surface[i] * (1 - percent)));
+  };
   const distance = (a, b) => Math.abs(a[0] - b[0]) + Math.abs(a[1] - b[1]) + Math.abs(a[2] - b[2]);
+  const relativeLuminance = rgb => {
+    const [r, g, b] = rgb.map(v => {
+      const c = v / 255;
+      return c <= 0.03928 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4;
+    });
+    return 0.2126 * r + 0.7152 * g + 0.0722 * b;
+  };
+  const contrast = (a, b) => {
+    const pair = [relativeLuminance(a), relativeLuminance(b)].sort((x, y) => y - x);
+    return (pair[0] + 0.05) / (pair[1] + 0.05);
+  };
 
-  let closest = Infinity;
-  for (let i = 0; i < colours.length; i += 1) {
-    for (let j = i + 1; j < colours.length; j += 1) {
-      closest = Math.min(closest, distance(colours[i], colours[j]));
+  // Resolved from the application's own token definitions.
+  const THEMES = [
+    { name: 'light', surface: [255, 255, 255], text: [15, 17, 21] },
+    { name: 'dark', surface: [35, 35, 36], text: [249, 250, 251] },
+  ];
+  // The mix percentages the stylesheet actually uses for the two plates.
+  const chipMix = /\.flup-chip-hue \{[^}]*color-mix\(in srgb, var\(--flup-chip-hue\) (\d+)%/s.exec(cssText);
+  const rowMix = /\.flup-vendor \{[^}]*color-mix\(in srgb, var\(--flup-chip-hue\) (\d+)%/s.exec(cssText);
+  assert(chipMix, 'the chip has no backing plate');
+  assert(rowMix, 'the table cell has no backing plate');
+
+  /*
+   * An unmixed fill sidesteps the percentages this test reasons about, and at
+   * 35% saturation it is also the one value that cannot carry the label: a
+   * neat demonstration that matching a pattern is not the same as covering a
+   * rule. Every plate must be a mix against a theme surface, so that the
+   * contrast arithmetic below actually describes what renders.
+   */
+  for (const selector of ['.flup-chip-hue', '.flup-vendor']) {
+    const block = new RegExp(selector.replace('.', '\\.') + '[^{]*\\{([^}]*)\\}', 's').exec(cssText);
+    assert(block, selector + ' not found');
+    const fill = /background:\s*([^;]+);/.exec(block[1]);
+    assert(fill, selector + ' has no background');
+    assert(/^color-mix\(in srgb, var\(--flup-chip-hue\) \d+%, var\(--dsw-alias-bg-/.test(fill[1].trim()),
+      selector + ' must mix its hue into a theme surface, not fill with it: ' + fill[1].trim());
+  }
+  // A dot is not a plate: the previous attempt was too small to register.
+  assert(Number(chipMix[1]) >= 50, 'the chip plate is too faint: ' + chipMix[1] + '%');
+  // The row must stay quieter than the chip, or it outshouts the status column.
+  assert(Number(rowMix[1]) < Number(chipMix[1]), 'the table plate must be quieter than the chip');
+
+  const angles = steps.map(m => Number(m[2]));
+  for (const { name, surface, text } of THEMES) {
+    for (const [label, percent] of [['chip', Number(chipMix[1]) / 100], ['row', Number(rowMix[1]) / 100]]) {
+      const plates = angles.map(a => plate(a, surface, percent));
+      let closest = Infinity;
+      for (let i = 0; i < plates.length; i += 1) {
+        for (let j = i + 1; j < plates.length; j += 1) {
+          closest = Math.min(closest, distance(plates[i], plates[j]));
+        }
+      }
+      // The broken wheel scored 2 of a possible 765. Plates are mixed down, so
+      // the floor is lower than the raw wheel's, but far above indistinguishable.
+      assert(closest >= 12, `${name} ${label} plates too close: ${closest}`);
+      assert.equal(new Set(plates.map(p => p.join(','))).size, 12, `${name} ${label}: two plates identical`);
+      // Colour must never cost legibility. 4.5:1 is the AA floor for small text.
+      const worst = Math.min(...plates.map(p => contrast(p, text)));
+      assert(worst >= 4.5, `${name} ${label} label contrast ${worst.toFixed(2)} is below AA`);
     }
   }
-  // The broken wheel scored 2 here, out of 765 possible. The working one
-  // scores 81; this floor is well above the first and below the second.
-  assert(closest >= 60, 'hues are too close to tell apart: closest pair ' + closest);
-  assert.equal(new Set(colours.map(c => c.join(','))).size, 12, 'two steps render the same colour');
 });
 
 test('radii come from the scale', () => {

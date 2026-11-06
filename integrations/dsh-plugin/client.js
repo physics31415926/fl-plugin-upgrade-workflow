@@ -573,12 +573,14 @@ window.__ModuleLoader__.load({
    * distance apart in light, and 0 in dark. The wheel was real in the CSS and
    * invisible on screen.
    *
-   * success-primary is #22c55e: 71% saturated at 45% lightness. It is the most
-   * restrained of the three saturated tokens the theme has, and its lightness
-   * reads on both backgrounds. Rotating it puts the closest pair 43 apart,
-   * which is distinguishable at chip size. Saturation and lightness still come
-   * from the theme, so the wheel follows a theme change; only the angle is
-   * ours.
+   * success-primary is #22c55e: the most restrained of the three saturated
+   * tokens the theme has, and its lightness reads on both backgrounds.
+   *
+   * Saturation is pinned to 35% rather than inherited. Inherited it is 71%,
+   * which is poster paint once twelve of them sit in one row; 35% is the khaki
+   * register, since muted earth tones are defined by low saturation rather
+   * than by one particular hue. Lightness still comes from the theme, so the
+   * wheel still follows a theme change, and the hue is still the theme's own.
    *
    * The angles are an even 30 degrees apart, which is the answer a search
    * gave rather than the one I guessed. I first hand-picked uneven angles on
@@ -593,18 +595,18 @@ window.__ModuleLoader__.load({
    * real thing, hiding the problem instead of solving it. Chromium here is
    * 152; relative color has shipped since 119.
    */
-  --flup-hue-1: hsl(from var(--dsw-alias-state-success-primary) calc(h + 0) s l);
-  --flup-hue-2: hsl(from var(--dsw-alias-state-success-primary) calc(h + 30) s l);
-  --flup-hue-3: hsl(from var(--dsw-alias-state-success-primary) calc(h + 60) s l);
-  --flup-hue-4: hsl(from var(--dsw-alias-state-success-primary) calc(h + 90) s l);
-  --flup-hue-5: hsl(from var(--dsw-alias-state-success-primary) calc(h + 120) s l);
-  --flup-hue-6: hsl(from var(--dsw-alias-state-success-primary) calc(h + 150) s l);
-  --flup-hue-7: hsl(from var(--dsw-alias-state-success-primary) calc(h + 180) s l);
-  --flup-hue-8: hsl(from var(--dsw-alias-state-success-primary) calc(h + 210) s l);
-  --flup-hue-9: hsl(from var(--dsw-alias-state-success-primary) calc(h + 240) s l);
-  --flup-hue-10: hsl(from var(--dsw-alias-state-success-primary) calc(h + 270) s l);
-  --flup-hue-11: hsl(from var(--dsw-alias-state-success-primary) calc(h + 300) s l);
-  --flup-hue-12: hsl(from var(--dsw-alias-state-success-primary) calc(h + 330) s l);
+  --flup-hue-1: hsl(from var(--dsw-alias-state-success-primary) calc(h + 0) 35% l);
+  --flup-hue-2: hsl(from var(--dsw-alias-state-success-primary) calc(h + 30) 35% l);
+  --flup-hue-3: hsl(from var(--dsw-alias-state-success-primary) calc(h + 60) 35% l);
+  --flup-hue-4: hsl(from var(--dsw-alias-state-success-primary) calc(h + 90) 35% l);
+  --flup-hue-5: hsl(from var(--dsw-alias-state-success-primary) calc(h + 120) 35% l);
+  --flup-hue-6: hsl(from var(--dsw-alias-state-success-primary) calc(h + 150) 35% l);
+  --flup-hue-7: hsl(from var(--dsw-alias-state-success-primary) calc(h + 180) 35% l);
+  --flup-hue-8: hsl(from var(--dsw-alias-state-success-primary) calc(h + 210) 35% l);
+  --flup-hue-9: hsl(from var(--dsw-alias-state-success-primary) calc(h + 240) 35% l);
+  --flup-hue-10: hsl(from var(--dsw-alias-state-success-primary) calc(h + 270) 35% l);
+  --flup-hue-11: hsl(from var(--dsw-alias-state-success-primary) calc(h + 300) 35% l);
+  --flup-hue-12: hsl(from var(--dsw-alias-state-success-primary) calc(h + 330) 35% l);
 
   /*
    * One spacing scale, and one radius scale.
@@ -950,44 +952,62 @@ window.__ModuleLoader__.load({
  * The label never relies on the colour, so this remains legible to anyone who
  * cannot distinguish the hues.
  */
+/*
+ * The hue is the chip's backing plate, not a dot on it.
+ *
+ * A 7px dot was the first attempt and was too small to register: the eye has
+ * to find it before the colour can mean anything, which defeats the purpose
+ * of colour-coding. The plate is the whole chip, so the vendor reads at a
+ * glance without being looked for.
+ *
+ * 60% of the hue against layer-1 is the measured limit, not a taste call. It
+ * is where the twelve plates stay separable from each other — closest pair 24
+ * of a possible 765 — while the label keeps 6.7:1 contrast in light and 5.5:1
+ * in dark, both well past the 4.5:1 that small text needs. Mixing against a
+ * theme surface is also what makes one declaration work in both themes: the
+ * same 60% lands on #fff in light and #232324 in dark.
+ */
 .flup-chip-hue {
-  border-color: color-mix(in srgb, var(--flup-chip-hue) 60%, transparent);
-  background: color-mix(in srgb, var(--flup-chip-hue) 14%, var(--dsw-alias-bg-layer-1));
+  border-color: color-mix(in srgb, var(--flup-chip-hue) 70%, transparent);
+  background: color-mix(in srgb, var(--flup-chip-hue) 60%, var(--dsw-alias-bg-layer-1));
   color: var(--dsw-alias-label-primary);
 }
-.flup-chip-hue::before {
-  content: ''; display: inline-block; width: 7px; height: 7px;
-  border-radius: 50%; margin-right: var(--flup-s1); vertical-align: 0;
-  background: var(--flup-chip-hue);
-}
 .flup-chip-hue:hover {
-  background: color-mix(in srgb, var(--flup-chip-hue) 24%, var(--dsw-alias-bg-layer-1));
+  background: color-mix(in srgb, var(--flup-chip-hue) 75%, var(--dsw-alias-bg-layer-1));
   border-color: var(--flup-chip-hue);
 }
 /*
- * Selection fills the chip with its own hue.
+ * Selection deepens the plate and adds a ring.
  *
- * An unselected chip already carries a visible tint, so selection has to be
- * louder than "slightly more tinted" to read at a glance. The text flips to
- * the on-brand constant, which is the one literal in this stylesheet and is
- * safe for the same reason it was before: the fill underneath it is a
- * saturated mid-lightness colour in both themes, so white always reads on it.
+ * The plate is already coloured, so selection cannot be "now it has colour".
+ * A fully saturated fill was tried and is wrong at this saturation: 35% hues
+ * do not carry white text. Instead the plate goes denser and gains an outer
+ * ring, which reads as selected without changing the text colour or breaking
+ * the muted register the rest of the row keeps.
  */
 .flup-chip-hue[aria-pressed="true"] {
   border-color: var(--flup-chip-hue);
-  background: var(--flup-chip-hue);
-  color: var(--flup-on-brand); font-weight: 500;
+  background: color-mix(in srgb, var(--flup-chip-hue) 88%, var(--dsw-alias-bg-layer-1));
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--flup-chip-hue) 35%, transparent);
+  font-weight: 500;
 }
-.flup-chip-hue[aria-pressed="true"]::before { background: var(--flup-on-brand); }
 /*
  * The same vendor hue inside a table, so a row and the chip that filters it
  * read as the same thing. Quieter than the chip: a column of twelve colours
  * must not outshout the status column next to it.
  */
-.flup-vendor { display: inline-flex; align-items: baseline; gap: var(--flup-s1); }
-.flup-vendor::before {
-  content: ''; width: 5px; height: 5px; border-radius: 50%;
-  background: var(--flup-chip-hue); flex: none;
+/*
+ * A quieter plate than the chip, at 40% rather than 60%.
+ *
+ * A column of twelve plates sits beside the status column, which carries real
+ * state and has to stay the loudest thing in the row. 40% keeps the vendor
+ * recognisable — closest pair 15, label contrast 9.8:1 light and 7.8:1 dark —
+ * while reading as a tint rather than a highlight.
+ */
+.flup-vendor {
+  display: inline-block; padding: 1px var(--flup-s2); border-radius: var(--flup-r3);
+  background: color-mix(in srgb, var(--flup-chip-hue) 40%, var(--dsw-alias-bg-layer-1));
+  color: var(--dsw-alias-label-primary);
 }
 .flup-chip:focus-visible { outline: 2px solid var(--dsw-alias-brand-primary); outline-offset: 1px; }
 /* Task drill-in. */
