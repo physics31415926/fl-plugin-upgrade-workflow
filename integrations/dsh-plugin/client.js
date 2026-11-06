@@ -556,49 +556,55 @@ window.__ModuleLoader__.load({
   --flup-ease: cubic-bezier(0.22, 0.61, 0.36, 1);
 
   /*
-   * A hue wheel derived from the theme's own brand colour.
+   * A hue wheel rotated off the theme's success colour.
    *
-   * The theme offers five meaningful colours, four of which already mean
-   * something (error, warning, success, idle). That leaves one hue for
-   * everything else, which is why a fleet of twelve vendors rendered as twelve
-   * identical grey chips. Writing fixed hexes would solve the sameness and
-   * break theming: a literal stays put when the user switches light and dark,
-   * and would be wrong in one of them.
+   * The theme offers five meaningful colours and four already mean something
+   * (error, warning, success, idle), which left one hue for everything else
+   * and made a fleet of twelve vendors render as twelve identical grey chips.
+   * Fixed hexes would fix the sameness and break theming: a literal stays put
+   * when the user switches light and dark, and is wrong in one of them.
    *
-   * Relative color syntax avoids the trade. Each step below takes the brand
-   * token apart and rotates only its hue, so lightness and saturation still
-   * come from the theme and every step moves with it. The angles are spread
-   * unevenly on purpose: equal 45-degree steps put two neighbours in the
-   * blue-green region where they are hard to tell apart at chip size.
+   * Relative color syntax avoids that, but only if the base colour actually
+   * has a hue to rotate. The first attempt here used brand-primary, which
+   * resolves to #0f1115 in light and #f9fafb in dark: a near-black and a
+   * near-white, 17% and 20% saturated. Rotating the hue of an almost
+   * achromatic colour returns almost the same colour, so all twelve steps came
+   * out visually identical — the closest pair was 2 of 765 possible channel
+   * distance apart in light, and 0 in dark. The wheel was real in the CSS and
+   * invisible on screen.
    *
-   * Each declaration is preceded by a color-mix fallback, so a renderer
-   * without relative color still gets a distinguishable tint rather than an
-   * invalid value and no colour at all.
+   * success-primary is #22c55e: 71% saturated at 45% lightness. It is the most
+   * restrained of the three saturated tokens the theme has, and its lightness
+   * reads on both backgrounds. Rotating it puts the closest pair 43 apart,
+   * which is distinguishable at chip size. Saturation and lightness still come
+   * from the theme, so the wheel follows a theme change; only the angle is
+   * ours.
+   *
+   * The angles are an even 30 degrees apart, which is the answer a search
+   * gave rather than the one I guessed. I first hand-picked uneven angles on
+   * the theory that equal steps bunch up in the blue-green region; measuring
+   * the result put the closest pair 43 apart out of a possible 765, while
+   * plain even spacing puts it at 81. sRGB is not perceptually uniform, but
+   * not unevenly enough to beat the symmetry by hand.
+   *
+   * No color-mix fallback precedes these any more. It was pointless: mixing
+   * two tokens always produces a valid colour, so the fallback always parsed
+   * and therefore always won in exactly the renderers that could not do the
+   * real thing, hiding the problem instead of solving it. Chromium here is
+   * 152; relative color has shipped since 119.
    */
-  --flup-hue-1: color-mix(in srgb, var(--dsw-alias-brand-primary) 85%, var(--dsw-alias-state-success-primary));
-  --flup-hue-1: hsl(from var(--dsw-alias-brand-primary) calc(h + 18) s l);
-  --flup-hue-2: color-mix(in srgb, var(--dsw-alias-brand-primary) 60%, var(--dsw-alias-state-success-primary));
-  --flup-hue-2: hsl(from var(--dsw-alias-brand-primary) calc(h + 52) s l);
-  --flup-hue-3: color-mix(in srgb, var(--dsw-alias-state-success-primary) 80%, var(--dsw-alias-brand-primary));
-  --flup-hue-3: hsl(from var(--dsw-alias-brand-primary) calc(h + 96) s l);
-  --flup-hue-4: color-mix(in srgb, var(--dsw-alias-state-success-primary) 70%, var(--dsw-alias-state-warn-primary));
-  --flup-hue-4: hsl(from var(--dsw-alias-brand-primary) calc(h + 134) s l);
-  --flup-hue-5: color-mix(in srgb, var(--dsw-alias-state-warn-primary) 80%, var(--dsw-alias-state-success-primary));
-  --flup-hue-5: hsl(from var(--dsw-alias-brand-primary) calc(h + 168) s l);
-  --flup-hue-6: color-mix(in srgb, var(--dsw-alias-state-warn-primary) 90%, var(--dsw-alias-brand-primary));
-  --flup-hue-6: hsl(from var(--dsw-alias-brand-primary) calc(h + 205) s l);
-  --flup-hue-7: color-mix(in srgb, var(--dsw-alias-state-warn-primary) 60%, var(--dsw-alias-state-error-primary));
-  --flup-hue-7: hsl(from var(--dsw-alias-brand-primary) calc(h + 238) s l);
-  --flup-hue-8: color-mix(in srgb, var(--dsw-alias-state-error-primary) 80%, var(--dsw-alias-state-warn-primary));
-  --flup-hue-8: hsl(from var(--dsw-alias-brand-primary) calc(h + 272) s l);
-  --flup-hue-9: color-mix(in srgb, var(--dsw-alias-state-error-primary) 85%, var(--dsw-alias-brand-primary));
-  --flup-hue-9: hsl(from var(--dsw-alias-brand-primary) calc(h + 300) s l);
-  --flup-hue-10: color-mix(in srgb, var(--dsw-alias-state-error-primary) 55%, var(--dsw-alias-brand-primary));
-  --flup-hue-10: hsl(from var(--dsw-alias-brand-primary) calc(h + 322) s l);
-  --flup-hue-11: color-mix(in srgb, var(--dsw-alias-brand-primary) 70%, var(--dsw-alias-state-error-primary));
-  --flup-hue-11: hsl(from var(--dsw-alias-brand-primary) calc(h + 340) s l);
-  --flup-hue-12: color-mix(in srgb, var(--dsw-alias-brand-primary) 90%, var(--dsw-alias-state-idle-primary));
-  --flup-hue-12: hsl(from var(--dsw-alias-brand-primary) calc(h + 356) s l);
+  --flup-hue-1: hsl(from var(--dsw-alias-state-success-primary) calc(h + 0) s l);
+  --flup-hue-2: hsl(from var(--dsw-alias-state-success-primary) calc(h + 30) s l);
+  --flup-hue-3: hsl(from var(--dsw-alias-state-success-primary) calc(h + 60) s l);
+  --flup-hue-4: hsl(from var(--dsw-alias-state-success-primary) calc(h + 90) s l);
+  --flup-hue-5: hsl(from var(--dsw-alias-state-success-primary) calc(h + 120) s l);
+  --flup-hue-6: hsl(from var(--dsw-alias-state-success-primary) calc(h + 150) s l);
+  --flup-hue-7: hsl(from var(--dsw-alias-state-success-primary) calc(h + 180) s l);
+  --flup-hue-8: hsl(from var(--dsw-alias-state-success-primary) calc(h + 210) s l);
+  --flup-hue-9: hsl(from var(--dsw-alias-state-success-primary) calc(h + 240) s l);
+  --flup-hue-10: hsl(from var(--dsw-alias-state-success-primary) calc(h + 270) s l);
+  --flup-hue-11: hsl(from var(--dsw-alias-state-success-primary) calc(h + 300) s l);
+  --flup-hue-12: hsl(from var(--dsw-alias-state-success-primary) calc(h + 330) s l);
 
   /*
    * One spacing scale, and one radius scale.
@@ -944,21 +950,35 @@ window.__ModuleLoader__.load({
  * The label never relies on the colour, so this remains legible to anyone who
  * cannot distinguish the hues.
  */
-.flup-chip-hue { border-color: color-mix(in srgb, var(--flup-chip-hue) 45%, var(--dsw-alias-border-l2)); }
+.flup-chip-hue {
+  border-color: color-mix(in srgb, var(--flup-chip-hue) 60%, transparent);
+  background: color-mix(in srgb, var(--flup-chip-hue) 14%, var(--dsw-alias-bg-layer-1));
+  color: var(--dsw-alias-label-primary);
+}
 .flup-chip-hue::before {
-  content: ''; display: inline-block; width: 6px; height: 6px;
-  border-radius: 50%; margin-right: var(--flup-s1); vertical-align: 1px;
+  content: ''; display: inline-block; width: 7px; height: 7px;
+  border-radius: 50%; margin-right: var(--flup-s1); vertical-align: 0;
   background: var(--flup-chip-hue);
 }
 .flup-chip-hue:hover {
-  background: color-mix(in srgb, var(--flup-chip-hue) 8%, var(--dsw-alias-bg-layer-2));
-  border-color: color-mix(in srgb, var(--flup-chip-hue) 70%, transparent);
+  background: color-mix(in srgb, var(--flup-chip-hue) 24%, var(--dsw-alias-bg-layer-1));
+  border-color: var(--flup-chip-hue);
 }
+/*
+ * Selection fills the chip with its own hue.
+ *
+ * An unselected chip already carries a visible tint, so selection has to be
+ * louder than "slightly more tinted" to read at a glance. The text flips to
+ * the on-brand constant, which is the one literal in this stylesheet and is
+ * safe for the same reason it was before: the fill underneath it is a
+ * saturated mid-lightness colour in both themes, so white always reads on it.
+ */
 .flup-chip-hue[aria-pressed="true"] {
   border-color: var(--flup-chip-hue);
-  background: color-mix(in srgb, var(--flup-chip-hue) 16%, var(--dsw-alias-bg-layer-1));
-  color: var(--dsw-alias-label-primary);
+  background: var(--flup-chip-hue);
+  color: var(--flup-on-brand); font-weight: 500;
 }
+.flup-chip-hue[aria-pressed="true"]::before { background: var(--flup-on-brand); }
 /*
  * The same vendor hue inside a table, so a row and the chip that filters it
  * read as the same thing. Quieter than the chip: a column of twelve colours

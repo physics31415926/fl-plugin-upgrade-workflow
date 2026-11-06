@@ -229,18 +229,106 @@ test('vendor colour is assigned, not hashed, and does not move', () => {
   const declared = [...cssText.matchAll(/--flup-hue-(\d+):/g)].map(m => Number(m[1]));
   assert.equal(new Set(declared).size, 12, 'twelve hue steps');
 
-  // Each hue rotates the theme's own brand token, so it follows light/dark.
-  // A literal hex would stay put while everything around it moved.
-  const relative = [...cssText.matchAll(/--flup-hue-\d+: hsl\(from var\(--dsw-alias-brand-primary\)[^;]*;/g)];
-  assert.equal(relative.length, 12, 'every hue derives from the theme');
-  // And each has a color-mix fallback first, so a renderer without relative
-  // color gets a usable tint instead of an invalid value and no colour.
-  const fallbacks = [...cssText.matchAll(/--flup-hue-\d+: color-mix\(/g)];
-  assert.equal(fallbacks.length, 12, 'every hue needs a fallback');
+  // Each hue rotates a theme token, so it follows light/dark; a literal hex
+  // would stay put while everything around it moved.
+  const relative = [...cssText.matchAll(/--flup-hue-\d+: hsl\(from var\((--dsw-alias-[\w-]+)\) calc\(h \+ (\d+)\) s l\);/g)];
+  assert.equal(relative.length, 12, 'every hue derives from a theme token');
+  assert.equal(new Set(relative.map(m => m[1])).size, 1, 'one base token for the whole wheel');
+
+  /*
+   * The base must actually have a hue to rotate.
+   *
+   * This is the bug the first attempt shipped: it rotated brand-primary,
+   * which resolves to #0f1115 in light and #f9fafb in dark — a near-black and
+   * a near-white. Rotating the hue of an almost achromatic colour returns
+   * almost the same colour, so all twelve steps rendered identically and the
+   * panel showed no colour at all. The CSS was well-formed and the feature
+   * was supported; the base was simply wrong.
+   *
+   * Only three theme tokens are saturated enough to rotate.
+   */
+  const base = relative[0][1];
+  const SATURATED = [
+    '--dsw-alias-state-success-primary',
+    '--dsw-alias-state-warn-primary',
+    '--dsw-alias-state-error-primary',
+  ];
+  assert(SATURATED.includes(base), 'the hue base must be a saturated token, not ' + base);
+
+  // Angles must separate. Even spacing beat hand-picked uneven angles when
+  // measured, so this pins the spacing that was actually verified.
+  const angles = relative.map(m => Number(m[2]));
+  assert.deepEqual(angles, [0, 30, 60, 90, 120, 150, 180, 210, 240, 270, 300, 330], 'angles must stay evenly spread');
+
+  // No color-mix fallback: mixing two tokens always parses, so a fallback
+  // would always win in the renderers that cannot do the real thing, hiding
+  // a broken wheel rather than revealing it.
+  assert.equal([...cssText.matchAll(/--flup-hue-\d+: color-mix\(/g)].length, 0,
+    'a fallback here masks a broken wheel');
 
   // Colour is never the only signal: the chip and the row both keep a label.
   assert(/\}, shortBackend\(host\.backend, t\)\)/.test(markup), 'the row keeps its vendor name');
   assert(/\$\{shortBackend\(name, t\)\} \(\$\{count\}\)/.test(markup), 'the chip keeps its label and count');
+});
+
+test('the hue wheel renders twelve colours a person can tell apart', () => {
+  /*
+   * Compute what the declared angles actually produce.
+   *
+   * Checking the CSS shape is not enough: the first version of this wheel was
+   * perfectly formed and rendered twelve copies of the same near-black,
+   * because its base token was achromatic. Only arithmetic catches that, so
+   * this resolves the base token's real value and rotates it.
+   */
+  const RESOLVED = {
+    // From the application's own token definitions.
+    '--dsw-alias-state-success-primary': '#22c55e',
+    '--dsw-alias-state-warn-primary': '#f59e0b',
+    '--dsw-alias-state-error-primary': '#ec1313',
+  };
+  const steps = [...cssText.matchAll(/--flup-hue-\d+: hsl\(from var\((--dsw-alias-[\w-]+)\) calc\(h \+ (\d+)\) s l\);/g)];
+  assert.equal(steps.length, 12);
+  const hex = RESOLVED[steps[0][1]];
+  assert(hex, 'unknown hue base: ' + steps[0][1]);
+
+  const toHsl = value => {
+    const n = parseInt(value.slice(1), 16);
+    const r = ((n >> 16) & 255) / 255; const g = ((n >> 8) & 255) / 255; const b = (n & 255) / 255;
+    const mx = Math.max(r, g, b); const mn = Math.min(r, g, b);
+    const l = (mx + mn) / 2;
+    if (mx === mn) return { h: 0, s: 0, l };
+    const d = mx - mn;
+    const s = l > 0.5 ? d / (2 - mx - mn) : d / (mx + mn);
+    const h = (mx === r ? (g - b) / d + (g < b ? 6 : 0) : mx === g ? (b - r) / d + 2 : (r - g) / d + 4) * 60;
+    return { h, s, l };
+  };
+  const toRgb = (h, s, l) => {
+    h = ((h % 360) + 360) % 360;
+    const c = (1 - Math.abs(2 * l - 1)) * s;
+    const x = c * (1 - Math.abs(((h / 60) % 2) - 1));
+    const m = l - c / 2;
+    const [r, g, b] = h < 60 ? [c, x, 0] : h < 120 ? [x, c, 0] : h < 180 ? [0, c, x]
+      : h < 240 ? [0, x, c] : h < 300 ? [x, 0, c] : [c, 0, x];
+    return [r, g, b].map(v => Math.round((v + m) * 255));
+  };
+
+  const hsl = toHsl(hex);
+  // A base with no hue to rotate is the failure this test exists for.
+  assert(hsl.s > 0.5, 'the hue base is too desaturated to rotate: s=' + hsl.s.toFixed(2));
+
+  const colours = steps.map(m => toRgb(hsl.h + Number(m[2]), hsl.s, hsl.l));
+  const distance = (a, b) => Math.abs(a[0] - b[0]) + Math.abs(a[1] - b[1]) + Math.abs(a[2] - b[2]);
+
+  let closest = Infinity;
+  for (let i = 0; i < colours.length; i += 1) {
+    for (let j = i + 1; j < colours.length; j += 1) {
+      closest = Math.min(closest, distance(colours[i], colours[j]));
+    }
+  }
+  // The broken wheel scored 2 here, out of 765 possible. The working one
+  // scores 81; this floor is well above the first and below the second.
+  assert(closest >= 60, 'hues are too close to tell apart: closest pair ' + closest);
+  assert.equal(new Set(colours.map(c => c.join(','))).size, 12, 'two steps render the same colour');
 });
 
 test('radii come from the scale', () => {
