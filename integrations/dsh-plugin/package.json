@@ -1,6 +1,6 @@
 {
   "name": "@local/fl-upgrade-workflow",
-  "version": "0.4.0",
+  "version": "0.4.1",
   "type": "module",
   "description": "FL plugin adaptation workbench: tracks vLLM-Plugin-FL and SGLang-Plugin-FL upgrade progress inside the Harness sidebar.",
   "exports": {

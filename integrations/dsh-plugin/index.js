@@ -1721,10 +1721,16 @@ export function apply(ctx, rawConfig) {
         supported: true,
         env: name,
         configured: info?.configured === true,
-        // A value coming from the ambient environment or a `.env` file is not
-        // ours to overwrite, so the panel must not offer to.
-        writable: info?.writable === true,
+        // Reported for display, not as a gate. Per the service contract `set`
+        // always writes its own managed source, so a token can always be saved
+        // here; gating the field on this flag was what stranded users whose
+        // token came from the environment.
+        writable: info?.writable !== false,
+        // Where the *currently effective* value comes from: `file` means our
+        // managed store, anything else (env, a `.env` fallback) means ambient.
+        // A saved value overrides ambient, which the panel explains.
         source: typeof info?.source === 'string' ? info.source : null,
+        ambient: info?.configured === true && typeof info?.source === 'string' && info.source !== 'file',
       }
     } catch {
       return { supported: false, configured: false, writable: false, source: null }
@@ -2613,16 +2619,16 @@ export function apply(ctx, rawConfig) {
                 sendJson(res, 400, { error: 'project is required' })
                 return
               }
-              const info = await githubTokenState()
-              if (!info.writable) {
-                // An ambient value (process environment, `.env`) is not ours to
-                // replace; overwriting would silently diverge from its source.
-                sendJson(res, 409, {
-                  ok: false,
-                  error: 'this token comes from the environment and must be changed there',
-                })
-                return
-              }
+              /*
+               * No refusal for an ambient token. The credential service's
+               * `set` always writes its own managed source, and a stored value
+               * takes precedence over ambient fallbacks (process env, `.env`).
+               * So a token already present in the environment is not a reason
+               * to reject the write — the saved one simply wins. Refusing it
+               * (as an earlier version did with a 409) was the bug behind "I
+               * cannot configure the token": a user whose shell exported
+               * GITHUB_TOKEN could never save one here.
+               */
               try {
                 await credentials.set(config.githubTokenEnv, secret)
               } catch (failure) {

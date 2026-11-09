@@ -249,6 +249,7 @@ window.__ModuleLoader__.load({
         credGithubHint: 'Signing in with the GitHub CLI also works and takes precedence over the token. Without either, PR and CI columns may read \u201cunknown\u201d and anonymous requests are limited to 60 per hour.',
         credGithubLabel: 'GitHub token',
         credGithubFieldHint: 'Stored by the Harness credential service, not by this plugin and not by the dashboard. It reaches collection through the dashboard\u2019s process environment, never over HTTP, because that server writes every request line to a plaintext log. A fine-grained token with read access to the two plugin repositories is enough.',
+        credGithubAmbientHint: 'A token is already set in the environment. You can still save one here \u2014 a stored token takes precedence over the environment \u2014 or leave this empty to keep using the environment one.',
         credGithubDone: 'GitHub token stored',
         credGithubStored: 'token stored in the Harness credential store',
         credGithubAmbient: 'token supplied by the environment',
@@ -495,6 +496,7 @@ window.__ModuleLoader__.load({
         credGithubHint: '也可以用 GitHub CLI 登录，它的优先级高于 token。两者都没有的话，PR 和 CI 列可能显示 unknown，匿名请求限额是每小时 60 次。',
         credGithubLabel: 'GitHub token',
         credGithubFieldHint: '由 Harness 的凭据服务加密保存，不经过本插件也不经过看板。它通过看板进程的环境变量传入，不走 HTTP —— 因为那个服务器会把每个请求行写进明文日志。一个对两个插件仓库有读权限的细粒度 token 就够了。',
+        credGithubAmbientHint: '环境里已经有一个 token。你仍然可以在这里存一个 —— 存进来的会覆盖环境里的 —— 或者留空继续用环境里的那个。',
         credGithubDone: 'GitHub token 已保存',
         credGithubStored: 'token 已存入 Harness 凭据库',
         credGithubAmbient: 'token 由环境提供',
@@ -3569,9 +3571,9 @@ window.__ModuleLoader__.load({
             github && github.supported
               ? row('GitHub', github.configured,
                 github.configured
-                  ? (github.writable ? t.credGithubStored : `${t.credGithubAmbient} (${github.source || '—'})`)
+                  ? (github.ambient ? `${t.credGithubAmbient} (${github.source || '—'})` : t.credGithubStored)
                   : t.credGithubNone,
-                !github.configured)
+                Boolean(github.ambient) || !github.configured)
               : row('GitHub', false, t.credGithubUnknown, true),
           )
           : null,
@@ -3603,17 +3605,21 @@ window.__ModuleLoader__.load({
           : null,
 
         /*
-         * The GitHub token is collectable now, with the user's explicit save
-         * as the authorization. It is stored by the Harness credential service
-         * — encrypted, outside this plugin — and handed to the dashboard
-         * through its process environment, never over HTTP: that server logs
-         * request lines to a plaintext file.
+         * The GitHub token field is always offered when the credential
+         * service is present, never gated on a writable flag. The service's
+         * `set` always writes its own store and a stored value overrides any
+         * ambient one, so there is no state in which saving is impossible —
+         * gating the field was exactly what left users unable to configure it.
          *
-         * An ambient token (process environment, `.env`) gets no field: it is
-         * not ours to overwrite, and the row above says where it comes from.
+         * "Done" means the token lives in our managed store. A value that is
+         * only ambient (the shell exported GITHUB_TOKEN) still shows the field,
+         * with a note that saving here overrides it, rather than a dead tick.
          */
-        github && github.supported && github.writable
-          ? slot('github', github.configured, t.credGithubLabel, t.credGithubFieldHint, t.credGithubDone)
+        github && github.supported
+          ? slot('github', github.configured && !github.ambient,
+            t.credGithubLabel,
+            github.ambient ? t.credGithubAmbientHint : t.credGithubFieldHint,
+            t.credGithubDone)
           : null,
 
         // Collection reads the environment it was started with, so a token

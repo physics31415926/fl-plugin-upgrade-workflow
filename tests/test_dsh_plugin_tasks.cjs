@@ -128,7 +128,11 @@ test('only credentials with a real store are accepted', () => {
 
 test('a github token is stored by the Harness, never sent to the dashboard', () => {
   const block = route('credential', 'task-message');
-  const github = block.slice(block.indexOf("if (kind === 'github')"));
+  // Bound to the github branch: from its `if` to the start of the non-github
+  // path (the project-required check that the claude/jumpserver code shares),
+  // so a 409 in another branch is not read as this one's.
+  const ghStart = block.indexOf("if (kind === 'github')");
+  const github = block.slice(ghStart, block.indexOf("const projectId = scalar(parsed?.project)", ghStart));
   /*
    * The dashboard reads the token from its process environment and its control
    * server logs every request line to a plaintext file, so forwarding the
@@ -137,8 +141,17 @@ test('a github token is stored by the Harness, never sent to the dashboard', () 
   assert(github.includes('credentials.set('), 'stores through the credential service');
   const toUpstream = github.slice(0, github.indexOf('sendJson(res, 200'));
   assert.equal(/callUpstream/.test(toUpstream), false, 'never forwards the token upstream');
-  // An ambient value belongs to its source; overwriting it would diverge.
-  assert(github.includes('info.writable'), 'refuses to overwrite an ambient token');
+  /*
+   * A token already present in the environment must NOT be refused. The
+   * credential service's `set` always writes its own managed source and a
+   * stored value overrides ambient fallbacks, so an environment token is no
+   * reason to reject the write — refusing it (an earlier 409) was the bug
+   * behind "cannot configure the token".
+   */
+  assert.equal(/status.*409|statusCode.*409|sendJson\(res, 409/.test(code(github)), false,
+    'must not refuse a save because a token exists in the environment');
+  assert.equal(/info\.writable/.test(code(github)), false,
+    'must not gate the write on a writable flag');
   // A running dashboard keeps its original environment.
   assert(github.includes('restartRequired'), 'reports that a restart is needed');
   // The reply must carry readiness for the project the caller named.

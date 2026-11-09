@@ -27,7 +27,7 @@
 里填刚下载的那个 `.tgz` 的**绝对路径**，然后点**安装**：
 
 ```text
-C:\Users\<你>\Downloads\local-fl-upgrade-workflow-0.4.0.tgz
+C:\Users\<你>\Downloads\local-fl-upgrade-workflow-0.4.1.tgz
 ```
 
 这个输入框是文本框，不是文件选择器，所以路径要自己粘进去（在文件管理器里复制文件路径
@@ -40,7 +40,7 @@ C:\Users\<你>\Downloads\local-fl-upgrade-workflow-0.4.0.tgz
 **或者用命令行**：
 
 ```sh
-dsh plugin install /绝对路径/local-fl-upgrade-workflow-0.4.0.tgz
+dsh plugin install /绝对路径/local-fl-upgrade-workflow-0.4.1.tgz
 ```
 
 **装过一次之后就不用再手动下载了。** 面板标题栏有个「检查更新」按钮，点一下才去问
