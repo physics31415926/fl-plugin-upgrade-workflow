@@ -53,10 +53,39 @@ test('creating a task validates every input before it reaches upstream', () => {
   assert(block.includes("sendJson(res, 400, { error: 'project and profile are required' })"));
   assert(/branch is not a valid git ref/.test(block), 'rejects a malformed ref');
   assert(/6000/.test(block), 'caps the goal at the upstream limit');
-  // A provider is fixed at creation and cannot be changed, so an unavailable
-  // one would strand the task. flagscale reports itself unavailable.
-  assert(/provider must be codex or claude/.test(block));
-  assert.equal(/'flagscale'/.test(block), false, 'must not accept flagscale');
+  // All three implemented providers are accepted at the syntax gate; a
+  // provider cannot be changed after creation, so only these three are valid.
+  assert(/provider must be codex, claude or flagscale/.test(block));
+  // flagscale is explicitly accepted, not merely tolerated by a loose check:
+  // the syntax gate must name all three it rejects outside of.
+  assert(/provider !== 'codex' && provider !== 'claude' && provider !== 'flagscale'/.test(block),
+    'the gate rejects only values outside the three real providers');
+  /*
+   * Availability is then checked against upstream, so an unavailable provider
+   * is refused with a 409 rather than forwarded and stranded. This replaces
+   * the old blanket exclusion of flagscale, which is a real provider.
+   */
+  assert(/agent-providers/.test(block), 'probes provider availability');
+  assert(/row\.available !== true/.test(block), 'refuses an unavailable provider');
+  assert(/is not available on this deployment/.test(block), 'says why it refused');
+});
+
+test('setting a remote workspace writes only that field, and never a bad path', () => {
+  const block = route('set-workspace', 'create-task');
+  // The path is the user's; the plugin never invents a remote directory.
+  assert(/remote_workspace: workspace/.test(block), 'forwards the path the user gave');
+  assert(/\/api\/codex-machines/.test(block), 'writes through the machine-profile route');
+  // The body is exactly the id and the one field — nothing else is disturbed
+  // on the merged profile.
+  const bodyCall = block.match(/JSON\.stringify\(\{ id: profileId, remote_workspace: workspace \}\)/);
+  assert(bodyCall, 'sends only the id and remote_workspace, no extra fields');
+  // An absolute POSIX path with no shell metacharacters: it ends up on an SSH
+  // command line, and a relative path is ambiguous on the host.
+  assert(/workspace\.startsWith\('\/'\)/.test(block), 'requires an absolute path');
+  assert(/\["'`\$\\\\\]/.test(block) || /metacharacters/.test(block), 'rejects shell metacharacters');
+  // Confirmed from the saved profile, and the path is never echoed back.
+  const reply = block.slice(block.indexOf('sendJson(res, 200'));
+  assert.equal(/workspace\s*[,}]/.test(reply), false, 'must not echo the path');
 });
 
 test('a timed-out create is never retried on its own', () => {

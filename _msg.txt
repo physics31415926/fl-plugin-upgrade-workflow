@@ -1,0 +1,43 @@
+Make the new-task form usable: branch dropdown, flagscale, inline workspace
+
+Three things kept the new-task form from actually producing a task.
+
+The branch was a free-text box. A typo there silently targeted a branch that
+does not exist, and upstream rejected the create with no hint which field was
+wrong. It is now a dropdown of the branches the dashboard tracks, read from
+branch-status and threaded through task-options; it falls back to a text box
+only when that list is empty, and always offers the default branch.
+
+flagscale was excluded from the provider picker. The comment claimed it
+"reports itself unavailable", but upstream reports it available and configured —
+it is a real backend with its own persona and skills. It is now offered
+whenever the dashboard reports it available, alongside codex and claude, and the
+create route accepts all three. Because a provider cannot be changed after
+creation, the route also probes upstream and refuses one that is not actually
+available with a 409, rather than forwarding a create that would strand.
+
+The workspace blocker was a dead end. On a JumpServer deployment every machine
+profile starts with an empty remote_workspace, which manual creation requires,
+so the form could only ever say "no usable machine" and point at the dashboard.
+It now offers the field in place: one absolute remote path, saved to the profile
+through the machine-profile route, and the blocker clears without leaving the
+panel. Upstream merges the one field onto the stored profile and JumpServer
+refresh preserves a user-set workspace, so it is set once and kept. The path is
+the user's to supply — the plugin never invents a remote directory — and it is
+validated as an absolute POSIX path with no shell metacharacters, since it ends
+up on an SSH command line.
+
+Verified live. task-options now returns 57 branches and lists codex/claude/
+flagscale as available; writing /workspace/adapt to a cuda profile flipped
+hasWorkspace to true and anyManualPossible to true, and the create blockers all
+cleared for a cuda task on a free branch. The actual create is left to the user:
+it builds a worktree on the remote host and leases the machine, which stays a
+human-initiated step.
+
+531 JS tests pass. Six deliberate regressions were each caught: the flagscale
+validation dropped, the availability guard removed, the absolute-path check
+removed, save-profile sending an extra field, the client dropping flagscale, and
+the client dropping the branch dropdown. Two initially survived — a provider
+check loose enough to pass with one name removed, and a body assertion that
+matched a superset — and both assertions were tightened until the mutation
+failed.

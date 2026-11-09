@@ -1868,6 +1868,25 @@ export function apply(ctx, rawConfig) {
             // The pair guard degrades to "unknown" rather than blocking the
             // whole view; upstream enforces it again on create anyway.
           }
+          /*
+           * The branch list, so the panel can offer a dropdown instead of a
+           * free-text field where a typo silently targets a non-existent
+           * branch. It lives on branch-status, not on the sessions cards, so
+           * it is read separately and degrades to just the default branch when
+           * that read fails — a dropdown of one is still better than a box.
+           */
+          let branches = []
+          try {
+            const reply = await callUpstream(config.port, 'GET', `/api/branch-status?project=${encodeURIComponent(projectId)}`)
+            if (reply.status < 400) {
+              const parsed = JSON.parse(reply.text)
+              if (Array.isArray(parsed?.branches)) {
+                branches = parsed.branches.filter(b => typeof b === 'string')
+              }
+            }
+          } catch {
+            // Leave it empty; the client falls back to the default branch.
+          }
           // A (backend, branch) pair that already has a live task cannot take
           // another one. Soft-deleted tasks free their pair, and they are
           // already absent from this list.
@@ -1910,6 +1929,14 @@ export function apply(ctx, rawConfig) {
             // `available` false means sessions are not configured at all.
             available: cards?.available === true,
             defaultBranch: scalar(cards?.default_branch) || null,
+            // Every branch the dashboard knows, for the new-task dropdown. The
+            // default is guaranteed present even when the list read failed.
+            branches: (() => {
+              const seen = branches.slice()
+              const def = scalar(cards?.default_branch)
+              if (def && !seen.includes(def)) seen.unshift(def)
+              return seen
+            })(),
             backends: Array.isArray(cards?.backends) ? cards.backends.filter(b => typeof b === 'string') : [],
             machines,
             policies,
@@ -2684,6 +2711,92 @@ export function apply(ctx, rawConfig) {
            * never forwarded: upstream validates it against the saved profile
            * anyway and its presence forces a live SSH preflight.
            */
+          /*
+           * Set a machine profile's remote working directory.
+           *
+           * Manual task creation needs `remote_workspace` on the chosen
+           * profile, and on a JumpServer-sourced deployment every profile
+           * starts empty — so without this the panel can only ever say "no
+           * usable machine". Upstream's `save_profile` merges onto the stored
+           * profile and JumpServer refresh preserves a user-set workspace
+           * (`previous.get("remote_workspace")`), so this one field, set once,
+           * survives.
+           *
+           * The path is a remote absolute path on the GPU host, which only the
+           * user knows; this never invents one. It is validated as a POSIX
+           * absolute path and forwarded in the body, never a query string.
+           */
+          if (action === 'set-workspace') {
+            const raw = await readBody(req)
+            let parsed = {}
+            if (raw.trim()) {
+              try {
+                parsed = JSON.parse(raw)
+              } catch {
+                sendJson(res, 400, { error: 'body must be JSON' })
+                return
+              }
+            }
+            const projectId = scalar(parsed?.project)
+            const profileId = scalar(parsed?.profile)
+            // Not `scalar`: a remote path is absolute and starts with '/', which
+            // scalar rejects as a leading-dash hazard. Validate it directly.
+            const workspace = typeof parsed?.workspace === 'string' ? parsed.workspace.trim() : ''
+            if (!projectId || !profileId) {
+              sendJson(res, 400, { error: 'project and profile are required' })
+              return
+            }
+            if (!workspace) {
+              sendJson(res, 400, { error: 'workspace is required' })
+              return
+            }
+            // A remote POSIX absolute path: no control characters, no shell
+            // metacharacters that a later SSH command line would reinterpret,
+            // and it must begin at root so it is unambiguous on the host.
+            if (!workspace.startsWith('/') || workspace.length > 400
+              || /[\u0000-\u001f]/.test(workspace) || /["'`$\\]/.test(workspace)) {
+              sendJson(res, 400, { error: 'workspace must be an absolute remote path without quotes or shell metacharacters' })
+              return
+            }
+            if (!current && !(await syncAdoption())) {
+              sendJson(res, 503, { error: 'dashboard is not running' })
+              return
+            }
+            try {
+              const reply = await callUpstream(
+                config.port,
+                'POST',
+                `/api/codex-machines?project=${encodeURIComponent(projectId)}`,
+                // Only the id and the one field: save_profile merges onto the
+                // stored profile, so nothing else is disturbed.
+                JSON.stringify({ id: profileId, remote_workspace: workspace }),
+                SLOW_UPSTREAM_TIMEOUT_MS,
+              )
+              if (reply.status >= 400) {
+                let message = 'the dashboard rejected this workspace path'
+                try {
+                  message = redactText(JSON.parse(reply.text)?.error, 300) ?? message
+                } catch { /* non-JSON failure body */ }
+                sendJson(res, 400, { ok: false, error: message })
+                return
+              }
+              // Confirm from the saved profile rather than trusting the write;
+              // report only whether it now carries a workspace, never the path.
+              let saved = false
+              try {
+                saved = typeof JSON.parse(reply.text)?.remote_workspace === 'string'
+                  && JSON.parse(reply.text).remote_workspace.trim() !== ''
+              } catch { /* keep saved false */ }
+              sendJson(res, 200, { ok: true, saved })
+            } catch (failure) {
+              sendJson(res, 502, {
+                ok: false,
+                error: redactText(failure.message, 300) ?? 'the dashboard could not be reached',
+              })
+            }
+            return
+          }
+
           if (action === 'create-task') {
             const raw = await readBody(req)
             let parsed = {}
@@ -2718,16 +2831,33 @@ export function apply(ctx, rawConfig) {
               sendJson(res, 400, { error: 'goal is too long (6000 characters maximum)' })
               return
             }
-            if (provider !== 'codex' && provider !== 'claude') {
-              // `flagscale` is a real upstream provider but reports itself
-              // unavailable here, and a provider cannot be changed after
-              // creation, so offering it would strand the task.
-              sendJson(res, 400, { error: 'provider must be codex or claude' })
+            if (provider !== 'codex' && provider !== 'claude' && provider !== 'flagscale') {
+              // A provider cannot be changed after creation, so only the three
+              // the dashboard actually implements are accepted. Whether a given
+              // one is available right now is checked next, against upstream.
+              sendJson(res, 400, { error: 'provider must be codex, claude or flagscale' })
               return
             }
             if (!current && !(await syncAdoption())) {
               sendJson(res, 503, { error: 'dashboard is not running' })
               return
+            }
+            /*
+             * Refuse a provider upstream reports as unavailable, rather than
+             * forwarding a create that stranding the task. The provider cannot
+             * be changed afterward, so this is the last chance to catch it.
+             */
+            try {
+              const probe = await callUpstream(config.port, 'GET', `/api/agent-providers?project=${encodeURIComponent(projectId)}`)
+              if (probe.status < 400) {
+                const row = JSON.parse(probe.text)?.providers?.[provider]
+                if (row && row.available !== true) {
+                  sendJson(res, 409, { error: `the ${provider} provider is not available on this deployment` })
+                  return
+                }
+              }
+            } catch {
+              // If the probe cannot run, defer to upstream's own check on create.
             }
             const query = `?project=${encodeURIComponent(projectId)}`
             try {
