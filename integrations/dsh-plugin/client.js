@@ -210,8 +210,14 @@ window.__ModuleLoader__.load({
         createDone: 'prepared',
         createNext: 'Prepared, not started. Open it below to review, then start it from the dashboard.',
         createFailed: 'the dashboard refused to create this task',
-        createNeedsWorkspace: 'This machine has no remote workspace recorded, which preparing a task requires. Set one on the machine profile in the dashboard first.',
-        createNoWorkspaces: 'No machine profile on this deployment has a remote workspace recorded, so tasks cannot be prepared from here yet. The dashboard\u2019s own machine settings are where that is filled in.',
+        createNeedsWorkspace: 'This machine has no remote working directory recorded, which preparing a task requires. Set one below.',
+        createWorkspaceLabel: 'Remote working directory',
+        createWorkspaceHint: 'e.g. /workspace/adapt',
+        createWorkspaceSave: 'Save workspace',
+        createWorkspaceSaving: 'Saving',
+        createWorkspaceFailed: 'the dashboard rejected this path',
+        createWorkspaceWhy: 'An absolute path on the remote GPU host where the task checks out and runs. It is saved on the machine profile and reused; JumpServer refreshes keep it.',
+        createNoWorkspaces: 'No machine profile on this deployment has a remote working directory yet. Pick a machine above and set one — tasks can be prepared as soon as one machine has it.',
         createMonitorOnly: 'This backend is monitor-only on this branch: an adaptation PR already exists, so new tasks are refused.',
         createPairTaken: 'This backend already has a task on this branch. Only one is allowed at a time; delete the existing one first.',
         createBackendGuess: 'This machine\u2019s backend was inferred from its name rather than detected, so it may be wrong.',
@@ -450,8 +456,14 @@ window.__ModuleLoader__.load({
         createDone: '已准备',
         createNext: '已准备，尚未启动。可以在下方打开查看，然后在看板里启动。',
         createFailed: '看板拒绝创建这个任务',
-        createNeedsWorkspace: '这台机器没有记录远端工作目录，而准备任务需要它。请先在看板的机器配置里补上。',
-        createNoWorkspaces: '当前部署里没有任何机器配置记录了远端工作目录，所以暂时无法从这里准备任务。这一项需要在看板自己的机器设置里填写。',
+        createNeedsWorkspace: '这台机器没有记录远端工作目录，而准备任务需要它。在下面填一个即可。',
+        createWorkspaceLabel: '远端工作目录',
+        createWorkspaceHint: '例如 /workspace/adapt',
+        createWorkspaceSave: '保存工作目录',
+        createWorkspaceSaving: '保存中',
+        createWorkspaceFailed: '看板拒绝了这个路径',
+        createWorkspaceWhy: '远端 GPU 机器上任务检出并运行的绝对路径。保存在机器配置上并复用；JumpServer 刷新也会保留。',
+        createNoWorkspaces: '当前部署里还没有任何机器记录远端工作目录。在上面选一台机器填一个即可 —— 只要有一台填了就能准备任务。',
         createMonitorOnly: '这个后端在该分支上是只监控状态：已经有适配 PR，因此不再接受新任务。',
         createPairTaken: '这个后端在该分支上已经有任务了。同一时间只允许一个，请先删除已有的那个。',
         createBackendGuess: '这台机器的后端是按名称推断的，不是实际探测结果，可能不准。',
@@ -2846,6 +2858,16 @@ window.__ModuleLoader__.load({
       const [busy, setBusy] = React.useState(false)
       const [error, setError] = useCached(scope, 'error', null)
       const [made, setMade] = React.useState(null)
+      /*
+       * Remote-workspace entry, for a machine that has none.
+       *
+       * Not cached: it is a one-shot action keyed to the machine currently
+       * selected, and a stale draft restored against a different machine would
+       * be worse than an empty field.
+       */
+      const [wsDraft, setWsDraft] = React.useState('')
+      const [wsBusy, setWsBusy] = React.useState(false)
+      const [wsError, setWsError] = React.useState(null)
 
       React.useEffect(() => {
         if (!open) return undefined
@@ -2908,6 +2930,37 @@ window.__ModuleLoader__.load({
         }
       }
 
+      /*
+       * Set the selected machine's remote workspace, then re-read the options
+       * so `hasWorkspace` flips and the blocker clears in place. The path is
+       * the user's to supply — the plugin never guesses a remote directory.
+       */
+      const saveWorkspace = async () => {
+        const path = wsDraft.trim()
+        if (!path.startsWith('/') || !form.profile) return
+        setWsBusy(true)
+        setWsError(null)
+        try {
+          const result = await callJson(`${BASE}set-workspace`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ project: project.id, profile: form.profile, workspace: path }),
+          })
+          if (result && result.ok) {
+            setWsDraft('')
+            // Refresh options so the saved profile now reports hasWorkspace.
+            const body = await callJson(`${BASE}task-options?project=${encodeURIComponent(project.id)}`)
+            setOptions(body)
+          } else {
+            setWsError(String((result && result.error) || t.createWorkspaceFailed))
+          }
+        } catch (failure) {
+          setWsError(String(failure.message))
+        } finally {
+          setWsBusy(false)
+        }
+      }
+
       if (!open) {
         return h('div', { className: 'flup-pb3' },
           h('button', {
@@ -2956,12 +3009,26 @@ window.__ModuleLoader__.load({
             ),
             h('div', { className: 'flup-field' },
               h('span', { className: 'flup-label' }, t.createBranch),
-              h('input', {
-                className: 'flup-input',
-                type: 'text',
-                value: form.branch,
-                onChange: event => edit('branch', event.target.value),
-              }),
+              // A dropdown of the branches the dashboard tracks, not a free
+              // text box: a typo there silently targets a branch that does not
+              // exist. Falls back to just the default when the list is empty.
+              (options.branches && options.branches.length)
+                ? h('select', {
+                  className: 'flup-select',
+                  value: form.branch,
+                  onChange: event => edit('branch', event.target.value),
+                },
+                  form.branch && !options.branches.includes(form.branch)
+                    ? h('option', { value: form.branch }, form.branch)
+                    : null,
+                  options.branches.map(name => h('option', { key: name, value: name }, name)),
+                )
+                : h('input', {
+                  className: 'flup-input',
+                  type: 'text',
+                  value: form.branch,
+                  onChange: event => edit('branch', event.target.value),
+                }),
             ),
             h('div', { className: 'flup-field' },
               h('span', { className: 'flup-label' }, t.createProvider),
@@ -2970,10 +3037,10 @@ window.__ModuleLoader__.load({
                 value: form.provider,
                 onChange: event => edit('provider', event.target.value),
               },
-                // Only providers that are actually available, and never
-                // flagscale: a provider cannot be changed after creation, so
-                // picking an unavailable one would strand the task.
-                ['codex', 'claude']
+                // Every provider the dashboard reports as available. A
+                // provider cannot be changed after creation, so an unavailable
+                // one is filtered out rather than offered and stranded.
+                ['codex', 'claude', 'flagscale']
                   .filter(name => ((options.providers || {})[name] || {}).available)
                   .map(name => h('option', { key: name, value: name }, name)),
               ),
@@ -2989,9 +3056,33 @@ window.__ModuleLoader__.load({
               }),
             ),
 
-            // Each blocker names the one thing that has to change.
+            // The chosen machine has no remote working directory. Rather than
+            // a dead-end error, offer to set it right here: one field, saved to
+            // the profile, and the blocker clears without leaving the panel.
             needsWorkspace
-              ? h('p', { className: 'flup-err' }, t.createNeedsWorkspace)
+              ? h('div', { className: 'flup-sub flup-mt2' },
+                h('p', { className: 'flup-warn flup-flat' }, `⚠ ${t.createNeedsWorkspace}`),
+                h('div', { className: 'flup-field flup-mt2' },
+                  h('span', { className: 'flup-label' }, t.createWorkspaceLabel),
+                  h('input', {
+                    className: 'flup-input',
+                    type: 'text',
+                    value: wsDraft,
+                    placeholder: t.createWorkspaceHint,
+                    onChange: event => setWsDraft(event.target.value),
+                  }),
+                ),
+                h('div', { className: 'flup-line flup-mt2' },
+                  h('button', {
+                    className: 'flup-btn flup-btn-sm flup-btn-accent',
+                    type: 'button',
+                    disabled: wsBusy || !wsDraft.trim().startsWith('/'),
+                    onClick: saveWorkspace,
+                  }, wsBusy ? `${t.createWorkspaceSaving}…` : t.createWorkspaceSave),
+                  wsError ? h('span', { className: 'flup-err' }, wsError) : null,
+                ),
+                h('p', { className: 'flup-meta flup-mt2' }, t.createWorkspaceWhy),
+              )
               : null,
             policyBlocks
               ? h('p', { className: 'flup-warn' },

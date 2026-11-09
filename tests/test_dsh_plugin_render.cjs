@@ -122,12 +122,13 @@ const FLEET = [
 ]
 const OPTIONS = {
   available: true, defaultBranch: '0.4.0-dev', backends: ['cuda'],
+  branches: ['0.4.0-dev', '0.5.0-dev', 'main'],
   machines: [MACHINE], policies: {}, takenPairs: [],
-  providers: { codex: { available: true }, claude: { available: true }, flagscale: { available: false } },
+  providers: { codex: { available: true }, claude: { available: true }, flagscale: { available: true } },
   anyManualPossible: true,
 }
 const FORM = { profile: 'jms-a', branch: '0.4.0-dev', goal: '', provider: 'codex' }
-// CreateTask hook order: open, options, form, busy, error, made.
+// CreateTask hook order: open, options, form, busy, error, made, wsDraft, wsBusy, wsError.
 const state = (over = {}) => [
   over.open !== undefined ? over.open : true,
   over.options !== undefined ? over.options : OPTIONS,
@@ -135,6 +136,9 @@ const state = (over = {}) => [
   over.busy || false,
   over.error !== undefined ? over.error : null,
   over.made !== undefined ? over.made : null,
+  over.wsDraft || '',
+  over.wsBusy || false,
+  over.wsError !== undefined ? over.wsError : null,
 ]
 const createTask = over => render(probe.CreateTask, { t, project: { id: 'vllm' }, onCreated() {} }, state(over))
 const prepareButton = tree => find(tree, 'button').find(b => /Prepare task/.test(text(b)))
@@ -153,16 +157,38 @@ const prepareButton = tree => find(tree, 'button').find(b => /Prepare task/.test
   const button = prepareButton(tree)
   check('prepare is enabled when nothing blocks', Boolean(button) && !button.props.disabled)
   const providers = find(tree, 'option').map(o => o.props.value)
-  check('flagscale is never offered', !providers.includes('flagscale'), providers.join(','))
+  // flagscale is offered now that the dashboard reports it available.
+  check('an available flagscale provider is offered', providers.includes('flagscale'), providers.join(','))
+  // The branch is a dropdown of the tracked branches, not a free-text box.
+  check('the branch is a dropdown', providers.includes('0.5.0-dev') && providers.includes('main'))
 }
 {
-  // The live deployment: every profile lacks a remote workspace.
+  // A provider the dashboard reports unavailable is not offered.
+  const tree = createTask({ options: { ...OPTIONS, providers: { codex: { available: true }, claude: { available: false }, flagscale: { available: false } } } })
+  const providers = find(tree, 'option').map(o => o.props.value)
+  check('an unavailable provider is withheld', !providers.includes('claude') && !providers.includes('flagscale'), providers.join(','))
+}
+{
+  // The live deployment: every profile lacks a remote working directory.
   const machine = { ...MACHINE, hasWorkspace: false }
   const tree = createTask({ options: { ...OPTIONS, machines: [machine], anyManualPossible: false } })
   const body = text(tree)
   check('no-workspace deployment is explained up front', /no machine profile/i.test(body))
-  check('a machine without a workspace is explained', /no remote workspace recorded/i.test(body))
+  check('a machine without a workspace is explained', /no remote working directory recorded/i.test(body))
+  // The fix is reachable in place: a field and a save button, not a dead end.
+  check('a workspace field is offered inline', /Remote working directory/i.test(body))
+  check('a save-workspace button is offered', find(tree, 'button').some(b => /Save workspace/.test(text(b))))
   check('prepare is disabled without a workspace', prepareButton(tree).props.disabled === true)
+}
+{
+  // With a workspace draft started, saving is enabled only for an absolute path.
+  const machine = { ...MACHINE, hasWorkspace: false }
+  const rel = createTask({ options: { ...OPTIONS, machines: [machine], anyManualPossible: false }, wsDraft: 'workspace/adapt' })
+  const relSave = find(rel, 'button').find(b => /Save workspace/.test(text(b)))
+  check('a relative workspace path cannot be saved', relSave.props.disabled === true)
+  const abs = createTask({ options: { ...OPTIONS, machines: [machine], anyManualPossible: false }, wsDraft: '/workspace/adapt' })
+  const absSave = find(abs, 'button').find(b => /Save workspace/.test(text(b)))
+  check('an absolute workspace path can be saved', absSave.props.disabled === false)
 }
 {
   // A monitor policy on the SAME branch must block.

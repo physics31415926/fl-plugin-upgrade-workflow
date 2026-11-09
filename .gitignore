@@ -15,3 +15,8 @@ branch-monitor.sglang.json
 # fall out of step with the source it was built from.
 dist/
 *.tgz
+
+_msg.txt
+_pr.md
+_notes.md
+
