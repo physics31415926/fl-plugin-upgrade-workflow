@@ -14,8 +14,11 @@
 也可以用命令行：
 
 ```
-dsh plugin install /绝对路径/local-fl-upgrade-workflow-0.1.0.tgz
+dsh plugin install /绝对路径/local-fl-upgrade-workflow-0.2.0.tgz
 ```
+
+装过一次之后就不用再手动下载了：面板标题栏会在有新版本时出现一个「更新到 x.y.z」
+按钮，点一下就从 GitHub Releases 拉取并安装（见下面「关于自动更新」）。
 
 安装后必须填 `repoPath`：
 
@@ -25,7 +28,7 @@ dsh plugin install /绝对路径/local-fl-upgrade-workflow-0.1.0.tgz
 | `port` | 看板监听的回环端口，默认 `8766` |
 | `pythonPath` | 留空则用 PATH 上的 `python`，需要 3.11+ |
 | `projectsConfig` | 留空则依次找 `runs/configured/projects.json`、`projects.json` |
-| `autoStart` | 插件激活时是否自动拉起看板进程，默认 `false` |
+| `autoStart` | 插件激活时是否自动拉起看板进程，默认 `true`。面板的全部数据都来自这个进程，所以默认让它跟着插件起；置 `false` 则改回手动点「启动」 |
 
 ```
 git clone https://github.com/physics31415926/fl-plugin-upgrade-workflow
@@ -44,6 +47,13 @@ git clone https://github.com/physics31415926/fl-plugin-upgrade-workflow
 - 任务详情：点任务进入，看 agent 的计划、最新消息、进展摘要和对话记录，
   并可发送后续消息。详情页按 5 秒（执行中）/ 20 秒轮询，标签页隐藏时暂停
 - 「重新采集」手动触发一次采集
+- 采集状态小标：标题栏里进程指示旁边的那个圆角标签。它回答的是**采集有没有在出数据**，
+  跟进程死活是两回事 —— 服务好好答着、SSH 扇出却全挂，这种情况进程指示看不出来。
+  任一采集器失败就整体报异常（悲观判定：半屏数据是旧的而没人提示，比直接说坏更糟），
+  鼠标悬停能看到是哪个采集器、具体错误、以及上次拿到数据的时间
+- 页面缓存：切开再切回不会闪骨架屏。各视图带 React key 以便滑入动画重播，而 remount
+  会丢掉组件状态，所以数据存在组件树之外，回来先渲染旧内容、后台静默刷新。
+  点「刷新」会先清缓存 —— 那个按钮的意思就是不信任当前内容。凭据表单不缓存（见下）
 - 「在本机部署」：勾选项目、填本地插件检出路径和目标分支，一键配置并启动看板。
   这个入口**只在还没弄完时出现**：看板跑起来、该填的密钥也填了，它就从左栏消失，
   换成一行不显眼的返回链接（以后坏了还能回去修）。「弄完」的判断包含凭据，因为
@@ -94,6 +104,10 @@ git clone https://github.com/physics31415926/fl-plugin-upgrade-workflow
 `log_message`，每个请求行都会进明文日志文件，所以密钥绝对不能出现在
 query string、路径段或任何 GET 里。插件自己不保存、不回显、不写浏览器存储。
 
+凭据卡也是**唯一不进页面缓存的视图**。其他视图把数据存在组件树之外以免切页闪烁，
+而这张卡的输入框里是明文密钥：缓存它等于让一个没提交的密钥在模块级 Map 里
+活到页面关闭，比重新输一遍的代价大得多。所以切走再回来，这张表单是空的。
+
 ### 关于 Agent 后端
 
 看板支持 `codex`、`claude`、`flagscale` 三个后端，但**后端在创建任务时确定，
@@ -114,6 +128,37 @@ query string、路径段或任何 GET 里。插件自己不保存、不回显、
 
 部署按钮不重新实现配置逻辑，它调用仓库自带的
 `scripts/configure.py --non-interactive`，再启动 `scripts/flflow.py serve`。
+
+### 关于自动更新
+
+标题栏在**有新版本时**才出现「更新到 x.y.z」按钮，没有更新时不显示 —— 一个永远灰着
+的按钮在进程控制旁边会被当成坏了。点一下就完成下载、校验和安装，装完提示重新加载窗口
+（新代码已经落盘，但当前页面还跑着旧模块）。
+
+更新源**写死在代码里**，不是配置项：
+
+| 项 | 值 |
+| --- | --- |
+| 发布仓库 | `physics31415926/fl-plugin-upgrade-workflow` |
+| tag 形状 | `dsh-plugin-v<semver>` |
+| 资产 | 该 release 里的 `.tgz` |
+
+安装路由不接受任何参数 —— 没有 version、URL、path 可传。这是有意的：这条路径决定
+Harness 要安装并运行哪份代码，不能让 profile 配置或请求体改写它。草稿版和预发布版
+(`prerelease`) 不会被当成更新。
+
+校验分三层：
+
+- 公布的资产 URL 必须是 `github.com`；
+- 实际下载会被重定向到 `*.githubusercontent.com` 的 CDN，落地域名按后缀匹配校验
+  （`evil-githubusercontent.com` 这类不通过）；
+- 下载内容与 GitHub 公布的 sha256 比对，不一致就拒绝安装。大小上限 8 MB，临时文件
+  以 `0600` 写入并在安装后删除。
+
+**一个限制**：如果插件是以 `link:` 方式（本地检出）装进 profile 的，按钮会拒绝安装并
+说明原因，只把可用版本号显示为文字。用发布包覆盖会把那个检出目录从 loader 里摘掉，
+让你正在改的代码变成孤儿。这种情况下请用 git 更新。判定方式是解析本模块的真实路径：
+`link:` 装法会落在 profile 的 `node_modules` 之外。
 
 ## 外部依赖
 

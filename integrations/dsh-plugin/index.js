@@ -9,10 +9,12 @@
  */
 
 import { request as httpRequest } from 'node:http'
-import { existsSync, readFileSync } from 'node:fs'
-import { realpath, writeFile } from 'node:fs/promises'
+import { existsSync, readFileSync, realpathSync } from 'node:fs'
+import { realpath, rm, writeFile } from 'node:fs/promises'
 import { basename, dirname, isAbsolute, join, resolve as resolvePath } from 'node:path'
 import { createServer as createSocketServer } from 'node:net'
+import { createHash } from 'node:crypto'
+import { tmpdir } from 'node:os'
 
 /*
  * Only hard dependencies are injected. `workspaceRegistry` is read through
@@ -77,12 +79,80 @@ const TELEMETRY_METHODS = new Set([
 /** Allowed read paths that may block on a cold upstream cache. */
 const SLOW_READ_PATHS = new Set(['/api/adaptation-tasks', '/api/projects-status'])
 
+/**
+ * Which collector a read path observes, for the status indicator.
+ *
+ * The panel's header reports whether collection is actually producing data,
+ * which is not the same question as whether the process is alive: the server
+ * answers immediately while an SSH fan-out to the GPU fleet fails on every
+ * host, or while a GitHub token has expired. Attributing each read to its
+ * collector is what separates "running" from "running and working".
+ *
+ * Only paths whose answer comes from a collection round appear here.
+ * `/api/projects` and `/api/capabilities` describe configuration and would
+ * report health for a collector that never ran.
+ */
+const COLLECTOR_PATHS = new Map([
+  ['/api/devices', 'devices'],
+  ['/api/branch-status', 'branches'],
+  ['/api/projects-status', 'branches'],
+  ['/api/adaptation-tasks', 'tasks'],
+])
+
 /** Upstream dashboard paths the panel may trigger. Collection refresh only. */
 const REFRESH_PATHS = new Set(['/api/branch-refresh', '/api/devices/refresh'])
 
 const MAX_UPSTREAM_BYTES = 4 * 1024 * 1024
 const OUTPUT_LIMIT = 256 * 1024
 const UPSTREAM_TIMEOUT_MS = 30_000
+
+/*
+ * Where plugin releases come from.
+ *
+ * Pinned in code rather than taken from config: this is the one place that
+ * decides which code the Harness will install and run, so a profile setting
+ * (or a request body) must not be able to repoint it at another repository.
+ * The GitHub API is addressed over HTTPS and only its release metadata is
+ * read; the download is then taken from the release asset list it returns.
+ */
+const RELEASE_OWNER = 'physics31415926'
+const RELEASE_REPO = 'fl-plugin-upgrade-workflow'
+const RELEASE_API = `https://api.github.com/repos/${RELEASE_OWNER}/${RELEASE_REPO}/releases`
+
+/** Tag shape this plugin publishes under, so unrelated repo tags are ignored. */
+const RELEASE_TAG_PREFIX = 'dsh-plugin-v'
+
+/*
+ * Only GitHub may serve the tarball.
+ *
+ * The asset URL arrives from a network response, so treating it as a plain
+ * download target would let a compromised or mistaken API answer redirect the
+ * installer anywhere.
+ *
+ * Two checks, because the advertised URL and the one that actually serves the
+ * bytes are different hosts: a release asset is advertised on `github.com` and
+ * redirects to a `*.githubusercontent.com` CDN host, whose exact name GitHub
+ * has changed (`objects.` historically, `release-assets.` as observed). The
+ * advertised host is pinned exactly; the landing host is matched by domain
+ * suffix so a CDN rename cannot break updates, while still never leaving
+ * GitHub-controlled DNS. The published digest is what actually authenticates
+ * the bytes.
+ */
+const RELEASE_ASSET_HOSTS = new Set(['github.com'])
+
+/** Whether a download may be served from this host. */
+function isReleaseDownloadHost(hostname) {
+  return RELEASE_ASSET_HOSTS.has(hostname)
+    // A suffix match on the dotted domain: `evil-githubusercontent.com` and
+    // `githubusercontent.com.evil.test` both fail it.
+    || hostname.endsWith('.githubusercontent.com')
+}
+
+/** A release tarball is small; this cap exists so a bad URL cannot fill a disk. */
+const MAX_ASSET_BYTES = 8 * 1024 * 1024
+
+const RELEASE_TIMEOUT_MS = 20_000
+const DOWNLOAD_TIMEOUT_MS = 120_000
 
 /**
  * Timeout for upstream reads that block on a cold cache instead of answering
@@ -104,7 +174,19 @@ function normalizeConfig(raw) {
     port,
     pythonPath: typeof value.pythonPath === 'string' ? value.pythonPath.trim() : '',
     projectsConfig: typeof value.projectsConfig === 'string' ? value.projectsConfig.trim() : '',
-    autoStart: value.autoStart === true,
+    /*
+     * Collection is part of the plugin, not a service the user runs.
+     *
+     * Device and PR collection live in the dashboard process, so the panel is
+     * empty until something starts it. Defaulting this off made that the
+     * user's job: install the plugin, then find and press Start. The data is
+     * the reason the panel exists, so the process comes up with it.
+     *
+     * Only `=== false` disables it. An absent field means a profile written
+     * before this default existed, and those should gain the behaviour; an
+     * explicit `false` is a decision and is kept.
+     */
+    autoStart: value.autoStart !== false,
   }
 }
 
@@ -334,6 +416,114 @@ function redactText(value, limit) {
     .replace(/\b[\w.-]+@[\w.-]+\b/g, '[host]')
     .replace(/\b(?:\d{1,3}\.){3}\d{1,3}\b/g, '[host]')
   return clean.slice(0, limit)
+}
+
+/**
+ * Parse a release version into comparable parts.
+ *
+ * Accepts `1.2.3` and `1.2.3-rc.1`; anything else returns null so an
+ * unexpected tag is ignored rather than guessed at. Prerelease identifiers are
+ * kept as raw strings because only their presence and ordering matter here.
+ */
+function parseVersion(value) {
+  const match = /^(\d+)\.(\d+)\.(\d+)(?:-([0-9A-Za-z.-]+))?$/.exec(String(value ?? '').trim())
+  if (!match) return null
+  return {
+    major: Number(match[1]),
+    minor: Number(match[2]),
+    patch: Number(match[3]),
+    pre: match[4] ? match[4].split('.') : null,
+  }
+}
+
+/**
+ * Semver-style ordering, returning negative when `a` precedes `b`.
+ *
+ * Only as much of semver as release selection needs: numeric triple first,
+ * then the rule that a prerelease sorts *before* its own release, so
+ * `0.2.0-rc.1` never looks newer than `0.2.0`. Without that rule an installed
+ * release would be offered an "update" back to its own candidate.
+ */
+function compareVersions(a, b) {
+  const left = parseVersion(a)
+  const right = parseVersion(b)
+  if (!left || !right) return 0
+  for (const key of ['major', 'minor', 'patch']) {
+    if (left[key] !== right[key]) return left[key] < right[key] ? -1 : 1
+  }
+  if (!left.pre && !right.pre) return 0
+  if (!left.pre) return 1
+  if (!right.pre) return -1
+  for (let i = 0; i < Math.max(left.pre.length, right.pre.length); i += 1) {
+    const x = left.pre[i]
+    const y = right.pre[i]
+    if (x === undefined) return -1
+    if (y === undefined) return 1
+    if (x === y) continue
+    const nx = /^\d+$/.test(x)
+    const ny = /^\d+$/.test(y)
+    // Numeric identifiers compare numerically and always sort below
+    // alphanumeric ones, which is what distinguishes rc.2 from rc.10.
+    if (nx && ny) return Number(x) < Number(y) ? -1 : 1
+    if (nx !== ny) return nx ? -1 : 1
+    return x < y ? -1 : 1
+  }
+  return 0
+}
+
+/**
+ * Pick the newest published plugin release from a GitHub releases payload.
+ *
+ * Drafts are not published and prereleases are not offered as automatic
+ * updates, so both are skipped. Tag order from the API is not relied upon:
+ * releases are sorted by creation date, which a retagged release can reverse.
+ */
+function selectRelease(payload) {
+  if (!Array.isArray(payload)) return null
+  let best = null
+  for (const row of payload) {
+    if (!row || typeof row !== 'object') continue
+    if (row.draft === true || row.prerelease === true) continue
+    const tag = typeof row.tag_name === 'string' ? row.tag_name : ''
+    if (!tag.startsWith(RELEASE_TAG_PREFIX)) continue
+    const version = tag.slice(RELEASE_TAG_PREFIX.length)
+    if (!parseVersion(version)) continue
+    /*
+     * The asset must be a tarball served from a GitHub release host. An
+     * unexpected host here is treated as no asset at all rather than being
+     * followed, since this URL becomes an install source.
+     */
+    const asset = (Array.isArray(row.assets) ? row.assets : []).find(item => {
+      const name = typeof item?.name === 'string' ? item.name : ''
+      const url = typeof item?.browser_download_url === 'string' ? item.browser_download_url : ''
+      if (!name.endsWith('.tgz') || !url) return false
+      try {
+        const parsed = new URL(url)
+        // The advertised URL is pinned to `github.com` exactly; only the
+        // redirect it leads to may land on a CDN host.
+        return parsed.protocol === 'https:' && RELEASE_ASSET_HOSTS.has(parsed.hostname)
+      } catch {
+        return false
+      }
+    })
+    if (!asset) continue
+    const candidate = {
+      version,
+      tag,
+      url: asset.browser_download_url,
+      name: asset.name,
+      size: Number.isFinite(asset.size) ? asset.size : null,
+      // GitHub reports `sha256:<hex>` when it has one. Used to verify the
+      // download, never to locate it.
+      digest: typeof asset.digest === 'string' && /^sha256:[0-9a-f]{64}$/.test(asset.digest)
+        ? asset.digest.slice(7)
+        : null,
+      publishedAt: typeof row.published_at === 'string' ? row.published_at : null,
+      notes: typeof row.body === 'string' ? row.body.slice(0, 4000) : null,
+    }
+    if (!best || compareVersions(best.version, candidate.version) < 0) best = candidate
+  }
+  return best
 }
 
 /**
@@ -670,6 +860,227 @@ export function apply(ctx, rawConfig) {
     }
   }
 
+  /*
+   * The installed version of this plugin, read from the manifest beside this
+   * module rather than hardcoded, so a build cannot disagree with its own
+   * package.json. Read once: the file does not change under a running plugin.
+   */
+  const installedVersion = (() => {
+    try {
+      const manifest = JSON.parse(readFileSync(new URL('./package.json', import.meta.url), 'utf8'))
+      return typeof manifest?.version === 'string' ? manifest.version : null
+    } catch {
+      return null
+    }
+  })()
+
+  /*
+   * Whether this profile carries the plugin as a `link:` dependency.
+   *
+   * A linked install points at a checkout someone edits; installing a
+   * published tarball over it would take that directory out of the loader and
+   * leave their work orphaned, so the button refuses and says why.
+   *
+   * Decided by resolving this module's real path: pnpm materialises a linked
+   * dependency as a junction to the checkout, which resolves *outside* the
+   * profile's `node_modules`, while a tarball install resolves inside it. That
+   * is a local filesystem fact, so it needs no network and cannot be
+   * misreported by a registry.
+   */
+  const linkedInstall = (() => {
+    try {
+      const real = realpathSync(new URL('.', import.meta.url))
+      return !/[\\/]node_modules[\\/]/.test(real)
+    } catch {
+      // If the question cannot be answered, do not offer an install that might
+      // clobber a checkout.
+      return true
+    }
+  })()
+
+  /**
+   * The newest release, cached briefly.
+   *
+   * The panel asks on mount, so an uncached check would hit GitHub on every
+   * mount and spend the unauthenticated rate limit on data that changes
+   * perhaps weekly. A failed check is cached too, for less time, so a
+   * disconnected machine is not retried on every render.
+   */
+  let releaseCache = null
+
+  async function latestRelease({ refresh = false } = {}) {
+    const fresh = releaseCache
+      && !refresh
+      && Date.now() - releaseCache.at < (releaseCache.error ? 60_000 : 15 * 60_000)
+    if (fresh) return releaseCache.value
+
+    let value
+    try {
+      const response = await fetch(`${RELEASE_API}?per_page=20`, {
+        headers: {
+          Accept: 'application/vnd.github+json',
+          'X-GitHub-Api-Version': '2022-11-28',
+          'User-Agent': `dsh-fl-upgrade-workflow/${installedVersion ?? '0'}`,
+        },
+        signal: AbortSignal.timeout(RELEASE_TIMEOUT_MS),
+      })
+      if (!response.ok) {
+        // A rate-limited check is the common case on a shared IP and reads very
+        // differently from "no release", so it is reported as its own state.
+        const limited = response.status === 403 && response.headers.get('x-ratelimit-remaining') === '0'
+        value = { error: limited ? 'rate-limited' : `github-${response.status}` }
+      } else {
+        const release = selectRelease(await response.json())
+        value = release ? { release } : { error: 'no-release' }
+      }
+    } catch (failure) {
+      value = { error: failure?.name === 'TimeoutError' ? 'timeout' : 'network' }
+    }
+    releaseCache = { at: Date.now(), value, error: Boolean(value.error) }
+    return value
+  }
+
+  /**
+   * Describe the update situation for the panel.
+   *
+   * `installable` is the question the button cares about and is deliberately
+   * separate from "a newer version exists": this profile may carry the plugin
+   * as a linked checkout, where installing a tarball would silently replace a
+   * developer's working directory with a published build. That case reports
+   * the newer version and refuses to install it.
+   */
+  async function updateState(options) {
+    const manager = ctx.get('pluginManager')
+    const { release, error } = await latestRelease(options)
+    const newer = Boolean(release && installedVersion && compareVersions(installedVersion, release.version) < 0)
+    return {
+      installed: installedVersion,
+      checkError: error ?? null,
+      latest: release
+        ? {
+          version: release.version,
+          publishedAt: release.publishedAt,
+          size: release.size,
+          notes: release.notes,
+          verifiable: Boolean(release.digest),
+        }
+        : null,
+      newer,
+      // Without the service there is no way to install anything, so the panel
+      // shows the available version and points at the manual route.
+      supported: Boolean(manager),
+      linked: linkedInstall,
+      installable: Boolean(manager) && newer && !linkedInstall,
+    }
+  }
+
+  /** Serialises updates: two concurrent installs of one bundle cannot be safe. */
+  let updating = null
+
+  /**
+   * Download the newest release and hand the tarball to the plugin manager.
+   *
+   * The tarball is fetched here rather than passed to the manager as a URL,
+   * because the manager installs from a registry spec or a local path and
+   * this release lives on neither. Verification happens before the file is
+   * ever offered as an install source:
+   *   - the URL host must be a GitHub release host (checked at selection),
+   *   - the body must not exceed `MAX_ASSET_BYTES`,
+   *   - the sha256 must equal the digest GitHub published, when it published
+   *     one. A release whose digest is absent is still installed, since the
+   *     transport is authenticated HTTPS to a pinned host, but the response
+   *     says which guarantee applied.
+   */
+  async function runUpdate() {
+    const manager = ctx.get('pluginManager')
+    if (!manager) return { ok: false, error: 'this Harness build cannot install plugins' }
+    if (linkedInstall) {
+      return {
+        ok: false,
+        error: 'this plugin is installed from a local checkout; update it with git instead',
+        linked: true,
+      }
+    }
+    const { release, error } = await latestRelease({ refresh: true })
+    if (!release) return { ok: false, error: error ?? 'no release found' }
+    if (!installedVersion || compareVersions(installedVersion, release.version) >= 0) {
+      return { ok: true, changed: false, installed: installedVersion, latest: release.version }
+    }
+
+    let response
+    try {
+      response = await fetch(release.url, {
+        headers: { Accept: 'application/octet-stream', 'User-Agent': `dsh-fl-upgrade-workflow/${installedVersion}` },
+        signal: AbortSignal.timeout(DOWNLOAD_TIMEOUT_MS),
+        redirect: 'follow',
+      })
+    } catch (failure) {
+      return { ok: false, error: failure?.name === 'TimeoutError' ? 'the download timed out' : 'the download failed' }
+    }
+    if (!response.ok) return { ok: false, error: `the download failed (HTTP ${response.status})` }
+    /*
+     * Redirects are followed (GitHub sends release downloads to its object
+     * host), so the *final* URL is re-checked against the same allowlist. A
+     * redirect chain ending anywhere else is refused before the body is used.
+     */
+    try {
+      const landed = new URL(response.url || release.url)
+      if (landed.protocol !== 'https:' || !isReleaseDownloadHost(landed.hostname)) {
+        return { ok: false, error: 'the download was redirected off GitHub and was refused' }
+      }
+    } catch {
+      return { ok: false, error: 'the download URL could not be verified' }
+    }
+
+    const body = Buffer.from(await response.arrayBuffer())
+    if (body.byteLength > MAX_ASSET_BYTES) {
+      return { ok: false, error: 'the release asset is larger than this plugin will install' }
+    }
+    if (release.digest) {
+      const actual = createHash('sha256').update(body).digest('hex')
+      if (actual !== release.digest) {
+        return { ok: false, error: 'the download did not match the digest GitHub published' }
+      }
+    }
+
+    /*
+     * The manager installs from a path, so the verified bytes are written to
+     * one. The name carries this process's pid so two Harness instances
+     * sharing a temp directory cannot write the same file, and the mode keeps
+     * it readable only by this user.
+     */
+    const target = join(tmpdir(), `dsh-fl-upgrade-${release.version}-${process.pid}.tgz`)
+    try {
+      await writeFile(target, body, { mode: 0o600 })
+      const result = await manager.installBundle(target)
+      /*
+       * The manager reports a saved-but-not-live change rather than throwing,
+       * so a missing `applied` is not assumed to mean success: only an
+       * explicit `true` is. `nextStep` is the manager's own instruction for
+       * finishing the change (a restart, usually) and is passed through for
+       * the panel to show instead of being interpreted here.
+       */
+      const applied = result?.applied === true
+      return {
+        ok: applied,
+        changed: applied,
+        from: installedVersion,
+        to: release.version,
+        verified: Boolean(release.digest),
+        nextStep: typeof result?.nextStep === 'string' ? result.nextStep : null,
+        error: applied ? undefined : (typeof result?.nextStep === 'string'
+          ? result.nextStep
+          : 'the install did not complete'),
+      }
+    } catch (failure) {
+      return { ok: false, error: redactText(failure?.message, 300) ?? 'the install failed' }
+    } finally {
+      // Best effort: a leftover tarball in temp is harmless, and failing to
+      // remove it must not turn a successful install into an error.
+      await rm(target, { force: true }).catch(() => {})
+    }
+  }
+
   function snapshot() {
     const launch = resolveLaunch(config)
     return {
@@ -695,6 +1106,8 @@ export function apply(ctx, rawConfig) {
       startedAt: current?.startedAt ?? null,
       exit: current ? null : lastError,
       output: current ? readOutput(current.handle) : (lastError?.output ?? null),
+      // Whether collection is producing data, as distinct from `running`.
+      collection: collectionSnapshot(),
     }
   }
 
@@ -702,6 +1115,61 @@ export function apply(ctx, rawConfig) {
   async function syncAdoption() {
     adopted = current === null ? await probeUpstream() : false
     return adopted
+  }
+
+  /*
+   * Per-collector health, keyed by the names in COLLECTOR_PATHS.
+   *
+   * A live process is not the same as working collection: the server answers
+   * while an SSH fan-out fails on every GPU host, or while an expired token
+   * makes every PR read return an error body. The header indicator reports
+   * the difference, so each collector's last outcome is recorded as reads
+   * pass through.
+   *
+   * Observed rather than subscribed: the dashboard publishes no collection
+   * event, so the only evidence available is the reads the panel already
+   * makes. A collector nobody has read yet stays absent instead of being
+   * reported healthy.
+   */
+  const collectors = new Map()
+
+  /**
+   * Record one collector read outcome.
+   *
+   * `error` is already-redacted text or null. Success keeps its timestamp
+   * separate from the attempt so the indicator can say "working, last data 2
+   * minutes ago" during a transient failure rather than flipping to broken on
+   * one bad round.
+   */
+  function noteCollector(path, outcome) {
+    const name = COLLECTOR_PATHS.get(path)
+    if (!name) return
+    const previous = collectors.get(name)
+    const at = Date.now()
+    if (outcome.ok) {
+      collectors.set(name, { okAt: at, triedAt: at, error: null })
+      return
+    }
+    collectors.set(name, {
+      okAt: previous?.okAt ?? null,
+      triedAt: at,
+      error: outcome.error ?? 'unknown',
+    })
+  }
+
+  /**
+   * The collection half of the state report.
+   *
+   * Timestamps are epoch milliseconds: the panel formats them against the
+   * reader's clock, and sending preformatted strings would bake this
+   * process's locale into the payload.
+   */
+  function collectionSnapshot() {
+    const rows = {}
+    for (const [name, value] of collectors) {
+      rows[name] = { okAt: value.okAt, triedAt: value.triedAt, error: value.error }
+    }
+    return rows
   }
 
   /**
@@ -1319,6 +1787,35 @@ export function apply(ctx, rawConfig) {
         }
 
         /*
+         * Whether a newer plugin release exists.
+         *
+         * Read-only and cached, so the panel can ask on every mount. `refresh`
+         * forces a new check for the explicit "check now" action.
+         */
+        if (req.method === 'GET' && action === 'update-state') {
+          sendJson(res, 200, await updateState({ refresh: scalar(url.searchParams.get('refresh')) === '1' }))
+          return
+        }
+
+        /*
+         * Install the newest release over this plugin.
+         *
+         * POST because it replaces running code. It takes no parameters at
+         * all: the release source is pinned in this module, so there is no
+         * version, URL or path a caller could supply to redirect the install.
+         */
+        if (req.method === 'POST' && action === 'self-update') {
+          // One at a time. A second press joins the running install rather
+          // than starting a competing one against the same bundle.
+          if (!updating) {
+            updating = runUpdate().finally(() => { updating = null })
+          }
+          const outcome = await updating
+          sendJson(res, outcome.ok ? 200 : 409, outcome)
+          return
+        }
+
+        /*
          * Whether the panel should still offer its setup entry.
          *
          * Separate from `deploy-preflight`, which the setup view polls while
@@ -1377,13 +1874,42 @@ export function apply(ctx, rawConfig) {
           if (project) query.set('project', project)
           if (branch) query.set('branch', branch)
           const suffix = query.size ? `?${query.toString()}` : ''
-          const upstream = await callUpstream(
-            config.port,
-            'GET',
-            `${path}${suffix}`,
-            undefined,
-            SLOW_READ_PATHS.has(path) ? SLOW_UPSTREAM_TIMEOUT_MS : UPSTREAM_TIMEOUT_MS,
-          )
+          let upstream
+          try {
+            upstream = await callUpstream(
+              config.port,
+              'GET',
+              `${path}${suffix}`,
+              undefined,
+              SLOW_READ_PATHS.has(path) ? SLOW_UPSTREAM_TIMEOUT_MS : UPSTREAM_TIMEOUT_MS,
+            )
+          } catch (failure) {
+            // A transport failure is a collector failure too: the indicator
+            // would otherwise keep reporting the last success while every
+            // read times out.
+            noteCollector(path, { ok: false, error: redactText(String(failure?.message ?? failure), 200) })
+            throw failure
+          }
+          /*
+           * Attribute this read to its collector.
+           *
+           * An HTTP 200 carrying `{error}` is the dashboard's way of saying a
+           * collection round failed while the server itself is fine, so the
+           * body decides the outcome rather than the status code.
+           */
+          if (COLLECTOR_PATHS.has(path)) {
+            let failed = upstream.status >= 400 ? `upstream status ${upstream.status}` : null
+            if (!failed) {
+              try {
+                const parsed = JSON.parse(upstream.text)
+                if (parsed && parsed.error) failed = redactText(String(parsed.error), 200)
+              } catch {
+                // Unparseable but 2xx: treat as delivered, same as the
+                // forwarding below, which passes it through unchanged.
+              }
+            }
+            noteCollector(path, failed ? { ok: false, error: failed } : { ok: true })
+          }
           // The panel renders the summary fields only, so compact the payload
           // here rather than shipping the full per-case matrix to the browser.
           let text = upstream.text
@@ -2256,7 +2782,27 @@ export function apply(ctx, rawConfig) {
         if (typeof args?.project === 'string' && args.project) query.set('project', args.project)
         if (typeof args?.branch === 'string' && args.branch) query.set('branch', args.branch)
         const suffix = query.size ? `?${query.toString()}` : ''
-        const upstream = await callUpstream(config.port, 'GET', `${path}${suffix}`)
+        let upstream
+        try {
+          upstream = await callUpstream(config.port, 'GET', `${path}${suffix}`)
+        } catch (failure) {
+          noteCollector(path, { ok: false, error: redactText(String(failure?.message ?? failure), 200) })
+          throw failure
+        }
+        // An Agent read is evidence about collection health too, so it feeds
+        // the same record the panel's indicator reads.
+        if (COLLECTOR_PATHS.has(path)) {
+          let failed = upstream.status >= 400 ? `upstream status ${upstream.status}` : null
+          if (!failed) {
+            try {
+              const parsed = JSON.parse(upstream.text)
+              if (parsed && parsed.error) failed = redactText(String(parsed.error), 200)
+            } catch {
+              // Unparseable 2xx: delivered, same as the return below.
+            }
+          }
+          noteCollector(path, failed ? { ok: false, error: failed } : { ok: true })
+        }
         try {
           const body = JSON.parse(upstream.text)
           return args?.full === true

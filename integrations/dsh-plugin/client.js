@@ -24,6 +24,27 @@ window.__ModuleLoader__.load({
         openDashboard: 'Open dashboard',
         adopted: 'External',
         adoptedHint: 'This dashboard was started outside the plugin, so it is read here but not managed.',
+        collecting: 'Collecting',
+        collectStale: 'Collection failing',
+        collectWaiting: 'No data yet',
+        collectOkHint: 'Collection is delivering data. Last success: ',
+        collectStaleHint: 'Collection is failing. Last error: ',
+        collectWaitingHint: 'The collectors have not delivered data yet.',
+        collectNeverOk: 'no successful round yet',
+        collectDevices: 'devices',
+        collectBranches: 'branches',
+        collectTasks: 'tasks',
+        updateAvailable: 'Update to',
+        updateInstalling: 'Updating',
+        updateCurrent: 'Up to date',
+        updateCheck: 'Check for updates',
+        updateDone: 'Updated to',
+        updateRestart: 'Reload the window to run the new version.',
+        updateLinkedHint: 'This plugin runs from a local checkout, so a release cannot be installed over it. Update it with git.',
+        updateUnsupportedHint: 'This Harness build cannot install plugins from the panel.',
+        updateCheckFailed: 'The update check failed',
+        updateRateLimited: 'GitHub rate-limited the update check. Try again later.',
+        updateNotes: 'Release notes',
         noProjects: 'No project is configured.',
         branch: 'Branch',
         engine: 'engine',
@@ -232,6 +253,27 @@ window.__ModuleLoader__.load({
         openDashboard: '打开看板',
         adopted: '外部',
         adoptedHint: '该看板不是由插件启动的，这里只读取状态，不做进程管理。',
+        collecting: '采集中',
+        collectStale: '采集异常',
+        collectWaiting: '暂无数据',
+        collectOkHint: '采集正常。最近一次成功：',
+        collectStaleHint: '采集失败。最近错误：',
+        collectWaitingHint: '采集器还没有返回过数据。',
+        collectNeverOk: '尚无成功记录',
+        collectDevices: '设备',
+        collectBranches: '分支',
+        collectTasks: '任务',
+        updateAvailable: '更新到',
+        updateInstalling: '更新中',
+        updateCurrent: '已是最新',
+        updateCheck: '检查更新',
+        updateDone: '已更新到',
+        updateRestart: '重新加载窗口即可运行新版本。',
+        updateLinkedHint: '当前插件是从本地检出加载的，不能用发布包覆盖。请用 git 更新。',
+        updateUnsupportedHint: '当前 Harness 构建不支持从面板安装插件。',
+        updateCheckFailed: '检查更新失败',
+        updateRateLimited: 'GitHub 限流了更新检查，稍后再试。',
+        updateNotes: '更新说明',
         noProjects: '尚未配置项目。',
         branch: '分支',
         engine: '引擎',
@@ -429,6 +471,59 @@ window.__ModuleLoader__.load({
 
     /** Carries the plugin context to the panel tree without module-level state. */
     const PluginContext = React.createContext(null)
+
+    /*
+     * Last-known view data, surviving the remount that switching views causes.
+     *
+     * Each view in the pane carries a React key so its slide-in replays on
+     * every switch. That remount is deliberate, but it also discards the
+     * component's state, so returning to a view showed a skeleton and
+     * re-fetched from scratch — the flicker on every rail click, with the old
+     * data still perfectly good.
+     *
+     * Holding the data outside the component tree separates the two: the
+     * animation still replays, while the view renders its previous content
+     * immediately and refreshes behind it. The entries are plain summarized
+     * payloads, the same shapes already sent to this browser, so nothing here
+     * is sensitive beyond what the panel is displaying.
+     *
+     * Module scope rather than a ref: the panel itself unmounts when the
+     * sidebar closes, and reopening it should not start cold either.
+     */
+    const VIEW_CACHE = new Map()
+
+    /** Drop the cache for one view, or all of it when no key is given. */
+    function dropCache(key) {
+      if (key === undefined) VIEW_CACHE.clear()
+      else VIEW_CACHE.delete(key)
+    }
+
+    /**
+     * `useState`, but seeded from and written through to VIEW_CACHE.
+     *
+     * `key` identifies the view instance (`devices`, `project:vllm`) and
+     * `field` the datum within it, so two projects keep separate caches and a
+     * project's branch list does not overwrite its task list.
+     *
+     * The initial value is used only when nothing is cached; a cached entry
+     * wins so the first render after a remount already has content. Writes go
+     * to the cache before the state update so a remount that happens before
+     * React re-renders still observes the newest value.
+     */
+    function useCached(key, field, initial) {
+      const slot = `${key}\u0000${field}`
+      const [value, setValue] = React.useState(() => (
+        VIEW_CACHE.has(slot) ? VIEW_CACHE.get(slot) : initial
+      ))
+      const update = React.useCallback(next => {
+        setValue(previous => {
+          const resolved = typeof next === 'function' ? next(previous) : next
+          VIEW_CACHE.set(slot, resolved)
+          return resolved
+        })
+      }, [slot])
+      return [value, update]
+    }
 
     /** Resolve the active locale's dictionary, falling back to English. */
     function useText() {
@@ -884,6 +979,18 @@ window.__ModuleLoader__.load({
   color: inherit; animation: flup-halo 1.6s var(--flup-ease) infinite;
 }
 .flup-state { display: inline-flex; align-items: center; gap: 8px; font-size: 12px; color: var(--dsw-alias-label-secondary); }
+/*
+ * The collection indicator, set apart from the process indicator beside it.
+ *
+ * Two bare dot-and-word pairs in a row read as one broken sentence, so this
+ * one is enclosed: the border makes it a distinct claim about a distinct
+ * subject. The help cursor advertises the tooltip, which carries the
+ * timestamp and the error that the badge itself has no room for.
+ */
+.flup-collect {
+  padding: 3px 9px; border-radius: var(--flup-r3); cursor: help;
+  border: 1px solid var(--dsw-alias-border-l2);
+}
 .flup-tabs { display: flex; gap: 8px; padding: 10px 20px 0; }
 .flup-tab {
   appearance: none; font: inherit; font-size: 12px; cursor: pointer;
@@ -1319,6 +1426,147 @@ window.__ModuleLoader__.load({
       return Number.isNaN(parsed.getTime()) ? String(value) : parsed.toLocaleString()
     }
 
+    /**
+     * Reduce the per-collector records to the one verdict the header shows.
+     *
+     * Health is reported pessimistically on purpose: the indicator exists to
+     * answer "is the data I am looking at current", and a fleet that collects
+     * branches fine while every GPU host is unreachable is not healthy. So any
+     * failing collector makes the whole indicator say so, and its error is the
+     * one named in the tooltip.
+     *
+     * A collector that has never been read is not evidence either way and is
+     * skipped; when that is all of them the verdict is `waiting`.
+     */
+    function collectionVerdict(collection) {
+      const rows = collection && typeof collection === 'object' ? Object.entries(collection) : []
+      if (!rows.length) return { state: 'waiting', failing: [], okAt: null, error: null }
+      const failing = rows.filter(([, value]) => value && value.error)
+      // The most recent success across collectors: what "last data" means to
+      // someone reading the panel as a whole.
+      const okAt = rows.reduce((latest, [, value]) => {
+        const at = value && typeof value.okAt === 'number' ? value.okAt : null
+        return at !== null && (latest === null || at > latest) ? at : latest
+      }, null)
+      if (failing.length) {
+        return {
+          state: 'stale',
+          failing: failing.map(([name]) => name),
+          okAt,
+          error: String(failing[0][1].error),
+        }
+      }
+      return { state: okAt === null ? 'waiting' : 'ok', failing: [], okAt, error: null }
+    }
+
+    /**
+     * The collection indicator in the panel header.
+     *
+     * Separate from the process indicator beside it, because the two answer
+     * different questions and routinely disagree: the process is up while
+     * collection fails. It renders nothing while the dashboard is down, where
+     * the process indicator already explains the situation and a second
+     * "no data" badge would only repeat it.
+     */
+    function CollectionBadge({ collection, running, t }) {
+      if (!running) return null
+      const verdict = collectionVerdict(collection)
+      const label = verdict.state === 'ok'
+        ? t.collecting
+        : (verdict.state === 'stale' ? t.collectStale : t.collectWaiting)
+      const names = verdict.failing
+        .map(name => t[`collect${name.charAt(0).toUpperCase()}${name.slice(1)}`] || name)
+        .join(', ')
+      const title = verdict.state === 'ok'
+        ? `${t.collectOkHint}${localTime(verdict.okAt)}`
+        : (verdict.state === 'stale'
+          ? `${names ? `${names}: ` : ''}${t.collectStaleHint}${verdict.error}`
+            + (verdict.okAt === null ? ` (${t.collectNeverOk})` : ` (${t.collected} ${localTime(verdict.okAt)})`)
+          : t.collectWaitingHint)
+      return h('span', { className: 'flup-state flup-collect', title },
+        // `failed` and `unknown` are the vocabulary statusColor already
+        // paints; a word outside its lists would fall through to idle grey.
+        h(Dot, { status: verdict.state === 'ok' ? 'online' : (verdict.state === 'stale' ? 'failed' : 'unknown') }),
+        label,
+      )
+    }
+
+    /**
+     * Update control for the plugin itself.
+     *
+     * Only present when there is something to do: with no newer release this
+     * renders nothing rather than a permanently greyed-out button, because the
+     * header is shared with the controls that run the dashboard and a dead
+     * control there reads as a broken one.
+     *
+     * The states that cannot install (a linked checkout, a build without the
+     * plugin manager) still surface the available version as plain text, so
+     * the information is not hidden from someone who can act on it another
+     * way.
+     */
+    function UpdateButton({ t }) {
+      const [state, setState] = React.useState(null)
+      const [busy, setBusy] = React.useState(false)
+      const [done, setDone] = React.useState(null)
+      const [failed, setFailed] = React.useState(null)
+
+      const check = React.useCallback(async (refresh) => {
+        try {
+          setState(await callJson(`${BASE}update-state${refresh ? '?refresh=1' : ''}`))
+        } catch {
+          // A failed check is not worth an error banner: the panel's own work
+          // is unaffected, and the button simply stays absent.
+          setState(null)
+        }
+      }, [])
+
+      React.useEffect(() => { check(false) }, [check])
+
+      const install = React.useCallback(async () => {
+        setBusy(true)
+        setFailed(null)
+        try {
+          const result = await callJson(`${BASE}self-update`, { method: 'POST' })
+          setDone(result)
+        } catch (failure) {
+          setFailed(failure.message)
+        } finally {
+          setBusy(false)
+        }
+      }, [])
+
+      if (done && done.changed) {
+        // The new code is on disk but this page still runs the old module, so
+        // the honest report is "installed, reload to use it".
+        return h('span', { className: 'flup-state', title: t.updateRestart },
+          h(Dot, { status: 'online' }),
+          `${t.updateDone} ${done.to}`,
+        )
+      }
+      if (!state || !state.newer) return null
+
+      const version = state.latest ? state.latest.version : ''
+      if (!state.installable) {
+        const hint = state.linked ? t.updateLinkedHint : t.updateUnsupportedHint
+        return h('span', { className: 'flup-state', title: hint },
+          h(Dot, { status: 'unknown' }),
+          `${t.updateAvailable} ${version}`,
+        )
+      }
+      return h('button', {
+        className: 'flup-btn',
+        type: 'button',
+        disabled: busy,
+        // The release notes are the only description of what the update
+        // changes, so they ride along as the button's tooltip.
+        title: failed
+          ? failed
+          : [state.latest && state.latest.notes ? `${t.updateNotes}:\n${state.latest.notes}` : null]
+            .filter(Boolean).join('\n\n') || undefined,
+        onClick: install,
+      }, busy ? t.updateInstalling : `${t.updateAvailable} ${version}`)
+    }
+
     async function callJson(path, init) {
       const response = await fetch(path, { cache: 'no-store', ...init })
       const text = await response.text()
@@ -1436,13 +1684,17 @@ window.__ModuleLoader__.load({
      * difference to the answer.
      */
     function DeviceView({ t, project, running }) {
-      const [devices, setDevices] = React.useState(null)
-      const [error, setError] = React.useState(null)
+      // Cached across the remount that switching views causes, so returning
+      // to the fleet shows the last roster instead of a skeleton.
+      const [devices, setDevices] = useCached('devices', 'devices', null)
+      const [error, setError] = useCached('devices', 'error', null)
       const [busy, setBusy] = React.useState(false)
       // null means every backend. Filtering happens here because the device
       // route rejects any query key but `project`, so there is nothing to
       // delegate: the fleet arrives whole and is narrowed on arrival.
-      const [backend, setBackend] = React.useState(null)
+      // Cached too: a vendor filter is a deliberate choice and losing it on
+      // every visit is the same annoyance as losing the data.
+      const [backend, setBackend] = useCached('devices', 'backend', null)
 
       const load = React.useCallback(async () => {
         if (!running || !project) return
@@ -1777,17 +2029,25 @@ window.__ModuleLoader__.load({
      * reports `controllable: false` is read-only here by design.
      */
     function TaskDetail({ project, task, t, onBack }) {
-      const [providers, setProviders] = React.useState(null)
-      const [draft, setDraft] = React.useState('')
+      // Keyed by task, so opening a second task does not show the first one's
+      // transcript while its own loads.
+      const scope = `task:${project.id}:${task.id}`
+      const [providers, setProviders] = useCached(scope, 'providers', null)
+      // An unsent message to the agent. The most expensive thing on screen to
+      // lose, and previously lost on any view switch.
+      const [draft, setDraft] = useCached(scope, 'draft', '')
       const [busy, setBusy] = React.useState(false)
-      const [error, setError] = React.useState(null)
+      const [error, setError] = useCached(scope, 'error', null)
       const [sent, setSent] = React.useState(false)
-      const [fresh, setFresh] = React.useState(task)
-      const [events, setEvents] = React.useState(null)
-      const [eventError, setEventError] = React.useState(null)
-      const [workspace, setWorkspace] = React.useState(null)
+      // Seeded from the row that was clicked and replaced by the fresh read.
+      // Cached so a revisit keeps the newer copy rather than reverting to the
+      // list's older snapshot.
+      const [fresh, setFresh] = useCached(scope, 'fresh', task)
+      const [events, setEvents] = useCached(scope, 'events', null)
+      const [eventError, setEventError] = useCached(scope, 'eventError', null)
+      const [workspace, setWorkspace] = useCached(scope, 'workspace', null)
       const [wsBusy, setWsBusy] = React.useState(false)
-      const [wsError, setWsError] = React.useState(null)
+      const [wsError, setWsError] = useCached(scope, 'wsError', null)
 
       // A dashboard session id is 32 hex characters. Native observer rows and
       // read-only share rows never match, and have no transcript to read.
@@ -2116,31 +2376,31 @@ window.__ModuleLoader__.load({
      * dashboard's own current branch or the other project.
      */
     function ProjectView({ project, running, t }) {
-      const [branch, setBranch] = React.useState(null)
-      const [branches, setBranches] = React.useState([])
-      const [status, setStatus] = React.useState(null)
-      const [tasks, setTasks] = React.useState(null)
-      const [error, setError] = React.useState(null)
+      /*
+       * Cached per project, so switching between two projects keeps both.
+       *
+       * The cache key carries the project id, which also replaces the reset
+       * effect this component used to run on `project.id`: a different
+       * project reads different slots, so there is no stale state to clear.
+       * That effect additionally fought the remount — it cleared the data
+       * this cache exists to preserve.
+       */
+      const scope = `project:${project.id}`
+      const [branch, setBranch] = useCached(scope, 'branch', null)
+      const [branches, setBranches] = useCached(scope, 'branches', [])
+      const [status, setStatus] = useCached(scope, 'status', null)
+      const [tasks, setTasks] = useCached(scope, 'tasks', null)
+      const [error, setError] = useCached(scope, 'error', null)
       const [busy, setBusy] = React.useState(false)
-      const [tab, setTab] = React.useState('backends')
-      const [openTask, setOpenTask] = React.useState(null)
-      const [taskBranch, setTaskBranch] = React.useState(null)
+      const [tab, setTab] = useCached(scope, 'tab', 'backends')
+      // Which task is expanded is view state, not data, but it is cached for
+      // the same reason: reopening the project should look like returning to
+      // it rather than starting over.
+      const [openTask, setOpenTask] = useCached(scope, 'openTask', null)
+      const [taskBranch, setTaskBranch] = useCached(scope, 'taskBranch', null)
       // The dashboard owns tasks created outside this plugin, and there are
       // normally many of them. Default to the ones created here.
-      const [mineOnly, setMineOnly] = React.useState(true)
-
-      // Reset per-project state when the rail switches projects.
-      React.useEffect(() => {
-        setBranch(null)
-        setOpenTask(null)
-        setTaskBranch(null)
-        setBranches([])
-        setStatus(null)
-        setTasks(null)
-        setError(null)
-        setTab('backends')
-        setMineOnly(true)
-      }, [project.id])
+      const [mineOnly, setMineOnly] = useCached(scope, 'mineOnly', true)
 
       // The branch list also reports the dashboard's current branch, which is
       // the default selection until the user picks another.
@@ -2322,9 +2582,10 @@ window.__ModuleLoader__.load({
      */
     function RepoCard({ t, project }) {
       const ctx = React.useContext(PluginContext)
-      const [repo, setRepo] = React.useState(null)
+      const scope = `repo:${project.id}`
+      const [repo, setRepo] = useCached(scope, 'repo', null)
       const [busy, setBusy] = React.useState(false)
-      const [error, setError] = React.useState(null)
+      const [error, setError] = useCached(scope, 'error', null)
 
       const load = React.useCallback(async () => {
         try {
@@ -2462,11 +2723,21 @@ window.__ModuleLoader__.load({
      * rather than returned as a 400.
      */
     function CreateTask({ t, project, onCreated }) {
-      const [open, setOpen] = React.useState(false)
-      const [options, setOptions] = React.useState(null)
-      const [form, setForm] = React.useState({ profile: '', branch: '', goal: '', provider: 'codex' })
+      /*
+       * Cached per project, including the draft.
+       *
+       * A half-typed goal is worth more than the fetched options: losing it to
+       * a glance at another view is the sharper version of the same flicker
+       * complaint. `made` is deliberately not cached — it reports what this
+       * visit created, and restoring it later would announce a task the user
+       * did not just make.
+       */
+      const scope = `create:${project.id}`
+      const [open, setOpen] = useCached(scope, 'open', false)
+      const [options, setOptions] = useCached(scope, 'options', null)
+      const [form, setForm] = useCached(scope, 'form', { profile: '', branch: '', goal: '', provider: 'codex' })
       const [busy, setBusy] = React.useState(false)
-      const [error, setError] = React.useState(null)
+      const [error, setError] = useCached(scope, 'error', null)
       const [made, setMade] = React.useState(null)
 
       React.useEffect(() => {
@@ -2661,10 +2932,15 @@ window.__ModuleLoader__.load({
      * paths cannot be discovered, so the user supplies them here.
      */
     function DeployView({ t, onDone }) {
-      const [preflight, setPreflight] = React.useState(null)
-      const [picked, setPicked] = React.useState({})
+      const [preflight, setPreflight] = useCached('deploy', 'preflight', null)
+      // The picked paths are the user's answers to setup; a glance elsewhere
+      // mid-wizard should not empty the form.
+      const [picked, setPicked] = useCached('deploy', 'picked', {})
       const [busy, setBusy] = React.useState(false)
-      const [error, setError] = React.useState(null)
+      const [error, setError] = useCached('deploy', 'error', null)
+      // Transcript of the run this visit performed, and whether it finished.
+      // Not cached: both describe an action, not a view, and replaying them
+      // on a later visit would claim a deployment just happened.
       const [output, setOutput] = React.useState(null)
       const [done, setDone] = React.useState(false)
 
@@ -2870,6 +3146,19 @@ window.__ModuleLoader__.load({
      * invariant the dashboard currently holds.
      */
     function CredentialView({ t, project }) {
+      /*
+       * Deliberately NOT cached, unlike every other view here.
+       *
+       * `draft` holds a token or a password in plaintext. Caching it would
+       * keep that string in a module-level map for the lifetime of the page,
+       * long after the form was abandoned, so an unsubmitted secret would
+       * outlive the view that collected it. Retyping it is the correct cost.
+       *
+       * `state` only reports which credentials are configured, so caching it
+       * would be safe, but it is left alone too: the whole view fits one
+       * fetch, and a card that shows a stale "configured" after a save
+       * elsewhere is worse than its skeleton.
+       */
       const [state, setState] = React.useState(null)
       const [draft, setDraft] = React.useState({ claude: '', jumpserver: '' })
       const [remember, setRemember] = React.useState(false)
@@ -3042,12 +3331,14 @@ window.__ModuleLoader__.load({
      */
     function Panel() {
       const t = useText()
-      const [state, setState] = React.useState(null)
-      const [projects, setProjects] = React.useState([])
-      const [selected, setSelected] = React.useState(null)
-      const [error, setError] = React.useState(null)
+      // Cached so reopening the sidebar restores the panel as it was, rather
+      // than replaying the full-pane skeleton while `state` is null.
+      const [state, setState] = useCached('panel', 'state', null)
+      const [projects, setProjects] = useCached('panel', 'projects', [])
+      const [selected, setSelected] = useCached('panel', 'selected', null)
+      const [error, setError] = useCached('panel', 'error', null)
       const [busy, setBusy] = React.useState(false)
-      const [setup, setSetup] = React.useState(null)
+      const [setup, setSetup] = useCached('panel', 'setup', null)
 
       const load = React.useCallback(async () => {
         try {
@@ -3126,6 +3417,9 @@ window.__ModuleLoader__.load({
               ? (running ? t.stopping : t.starting)
               : (adopted ? t.adopted : (running ? t.running : (configured ? t.stopped : t.notConfigured))),
           ),
+          // Whether collection is delivering, which the process indicator
+          // above cannot say: the server answers while a fan-out fails.
+          h(CollectionBadge, { collection: state && state.collection, running, t }),
           // An externally started dashboard offers no lifecycle button: the
           // plugin does not own that process.
           adopted ? null : h('button', {
@@ -3134,7 +3428,23 @@ window.__ModuleLoader__.load({
             disabled: busy || !configured,
             onClick: () => lifecycle(running ? 'stop' : 'start'),
           }, running ? t.stop : t.start),
-          h('button', { className: 'flup-btn', type: 'button', disabled: busy, onClick: load }, t.reload),
+          /*
+           * Reload discards the cache first.
+           *
+           * Pressing it means "I do not trust what is on screen", so serving
+           * the cached copy back would defeat the button. Every view refetches
+           * on its next render; the data the cache exists to smooth over is
+           * exactly what the user is asking to replace.
+           */
+          h('button', {
+            className: 'flup-btn',
+            type: 'button',
+            disabled: busy,
+            onClick: () => { dropCache(); load() },
+          }, t.reload),
+          // Plugin self-update. Renders nothing unless a newer release exists,
+          // so it does not compete with the dashboard controls day to day.
+          h(UpdateButton, { t }),
           running && state.port
             ? h('a', {
               className: 'flup-btn',
@@ -3270,7 +3580,7 @@ window.__ModuleLoader__.load({
      * functions of their props and hold no credential, so exposing them costs
      * nothing; it is what lets the blocking rules be tested without a browser.
      */
-    globalThis.__probe = { TaskDetail, ProjectView, CreateTask, CredentialView, TaskTable, RepoCard, dictFor, Dot, Skeleton, Pending, DeviceView, DeviceTable, shortBackend }
+    globalThis.__probe = { TaskDetail, ProjectView, CreateTask, CredentialView, TaskTable, RepoCard, dictFor, Dot, Skeleton, Pending, DeviceView, DeviceTable, shortBackend, CollectionBadge, collectionVerdict, VIEW_CACHE, dropCache, useCached, UpdateButton }
 
     return {
       inject: ['slots'],

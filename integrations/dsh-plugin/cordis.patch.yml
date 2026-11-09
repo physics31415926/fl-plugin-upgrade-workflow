@@ -13,5 +13,7 @@
         # Defaults to <repoPath>/runs/configured/projects.json when empty,
         # falling back to <repoPath>/projects.json.
         projectsConfig: ''
-        # Start the dashboard process when the plugin activates.
-        autoStart: false
+        # Collection runs inside the plugin: the dashboard process starts with
+        # it, so device and PR data are there without anyone pressing Start.
+        # Set false to keep the process manual.
+        autoStart: true
