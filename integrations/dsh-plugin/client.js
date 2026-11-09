@@ -57,6 +57,7 @@ window.__ModuleLoader__.load({
         backend: 'Backend',
         integration: 'Merge',
         ci: 'CI',
+        ciLatestRun: 'Latest run at branch HEAD',
         acceptance: 'Acceptance',
         gate: 'Gate',
         noBackends: 'No backend status yet.',
@@ -297,6 +298,7 @@ window.__ModuleLoader__.load({
         backend: '后端',
         integration: '合入',
         ci: 'CI',
+        ciLatestRun: '分支 HEAD 上的最新运行',
         acceptance: '验收',
         gate: '门禁',
         noBackends: '暂无后端状态。',
@@ -1429,13 +1431,17 @@ window.__ModuleLoader__.load({
     }
 
     /** One status cell: a dot plus its word, linked when the source gives a URL. */
-    function Status({ value }) {
+    function Status({ value, extra }) {
       const text = value && typeof value === 'object' ? value.status : value
       if (!text) return h('span', { className: 'flup-meta' }, '—')
       const detail = value && typeof value === 'object' ? value.detail : null
       const url = value && typeof value === 'object' ? value.url : null
+      // `extra` is a secondary line appended under the primary detail in the
+      // hover title — used for the branch-tip CI run beside the verdict.
+      const title = [detail ? String(detail) : null, extra ? String(extra) : null]
+        .filter(Boolean).join('\n') || undefined
       const body = h(React.Fragment, null, h(Dot, { status: text }), String(text))
-      return h('span', { className: 'flup-pill', title: detail ? String(detail) : undefined },
+      return h('span', { className: 'flup-pill', title },
         url && typeof url === 'string' && /^https:\/\//.test(url)
           ? h('a', { className: 'flup-link', href: url, target: '_blank', rel: 'noreferrer noopener' }, body)
           : body,
@@ -1747,7 +1753,16 @@ window.__ModuleLoader__.load({
                 : null,
             ),
             h('td', null, h(Status, { value: backend.integration })),
-            h('td', null, h(Status, { value: backend.ci || backend.current_ci })),
+            // `backend.ci` is the resolved adaptation-CI verdict from the host
+            // (a merged-PR or accepted pass, or a stale downgrade). The
+            // branch-tip run, when it differs, rides along in the tooltip
+            // rather than replacing the verdict.
+            h('td', null, h(Status, {
+              value: backend.ci,
+              extra: backend.currentCi && backend.currentCi.detail
+                ? `${t.ciLatestRun}: ${backend.currentCi.detail}`
+                : null,
+            })),
             h('td', null, h(Status, {
               value: backend.acceptance && {
                 status: backend.acceptance.status,
