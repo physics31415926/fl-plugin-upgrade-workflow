@@ -45,6 +45,7 @@ window.__ModuleLoader__.load({
         updateCheckFailed: 'The update check failed',
         updateRateLimited: 'GitHub rate-limited the update check. Try again later.',
         updateNotes: 'Release notes',
+        updateInstalledIs: 'Installed version:',
         noProjects: 'No project is configured.',
         branch: 'Branch',
         engine: 'engine',
@@ -274,6 +275,7 @@ window.__ModuleLoader__.load({
         updateCheckFailed: '检查更新失败',
         updateRateLimited: 'GitHub 限流了更新检查，稍后再试。',
         updateNotes: '更新说明',
+        updateInstalledIs: '当前版本：',
         noProjects: '尚未配置项目。',
         branch: '分支',
         engine: '引擎',
@@ -1505,22 +1507,45 @@ window.__ModuleLoader__.load({
      * way.
      */
     function UpdateButton({ t }) {
+      /*
+       * Nothing happens until the user asks.
+       *
+       * An earlier version checked on mount and then showed a button only when
+       * a newer release existed. That had two faults. It reached GitHub every
+       * time the panel mounted, for data that changes perhaps weekly; and on
+       * an up-to-date install it rendered nothing at all, so "is there a new
+       * version?" had no answer anywhere in the UI — the honest answer, "you
+       * are current", was exactly the case that showed nothing.
+       *
+       * So the control starts as a plain "check for updates" and every network
+       * read is a direct consequence of a click.
+       */
       const [state, setState] = React.useState(null)
+      const [checking, setChecking] = React.useState(false)
       const [busy, setBusy] = React.useState(false)
       const [done, setDone] = React.useState(null)
       const [failed, setFailed] = React.useState(null)
 
-      const check = React.useCallback(async (refresh) => {
+      /*
+       * `refresh=1` bypasses the Host's cache.
+       *
+       * A click means "tell me now", so a cached answer would make the button
+       * a no-op that looks like it worked. The Host still caches between
+       * clicks, which is what keeps repeated presses from spending the
+       * unauthenticated rate limit.
+       */
+      const check = React.useCallback(async () => {
+        setChecking(true)
+        setFailed(null)
         try {
-          setState(await callJson(`${BASE}update-state${refresh ? '?refresh=1' : ''}`))
-        } catch {
-          // A failed check is not worth an error banner: the panel's own work
-          // is unaffected, and the button simply stays absent.
+          setState(await callJson(`${BASE}update-state?refresh=1`))
+        } catch (failure) {
           setState(null)
+          setFailed(failure.message)
+        } finally {
+          setChecking(false)
         }
       }, [])
-
-      React.useEffect(() => { check(false) }, [check])
 
       const install = React.useCallback(async () => {
         setBusy(true)
@@ -1543,10 +1568,54 @@ window.__ModuleLoader__.load({
           `${t.updateDone} ${done.to}`,
         )
       }
-      if (!state || !state.newer) return null
+
+      // Before the first click, and while one is in flight.
+      if (!state) {
+        return h('button', {
+          className: 'flup-btn',
+          type: 'button',
+          disabled: checking,
+          title: failed ? `${t.updateCheckFailed}: ${failed}` : undefined,
+          onClick: check,
+        }, checking ? h(Pending, { label: t.updateCheck }) : t.updateCheck)
+      }
+
+      /*
+       * The check reached the Host but the Host could not reach GitHub. This
+       * is distinct from "no update": the question went unanswered, so the
+       * control stays clickable and says why rather than claiming currency.
+       */
+      if (state.checkError) {
+        const reason = state.checkError === 'rate-limited'
+          ? t.updateRateLimited
+          : `${t.updateCheckFailed} (${state.checkError})`
+        return h('button', {
+          className: 'flup-btn',
+          type: 'button',
+          disabled: checking,
+          title: reason,
+          onClick: check,
+        }, checking ? h(Pending, { label: t.updateCheck }) : t.updateCheck)
+      }
+
+      // Checked, and already current. Clickable again, because a release can
+      // appear at any time and this is the only way to ask.
+      if (!state.newer) {
+        return h('button', {
+          className: 'flup-btn',
+          type: 'button',
+          disabled: checking,
+          title: state.installed ? `${t.updateInstalledIs} ${state.installed}` : undefined,
+          onClick: check,
+        }, checking ? h(Pending, { label: t.updateCheck }) : t.updateCurrent)
+      }
 
       const version = state.latest ? state.latest.version : ''
       if (!state.installable) {
+        // A newer release exists but this install cannot take it: a linked
+        // checkout, or a build without the plugin manager. Report the version
+        // as text so the information is not hidden from someone who can act
+        // on it another way.
         const hint = state.linked ? t.updateLinkedHint : t.updateUnsupportedHint
         return h('span', { className: 'flup-state', title: hint },
           h(Dot, { status: 'unknown' }),
@@ -1554,7 +1623,7 @@ window.__ModuleLoader__.load({
         )
       }
       return h('button', {
-        className: 'flup-btn',
+        className: 'flup-btn flup-btn-primary',
         type: 'button',
         disabled: busy,
         // The release notes are the only description of what the update
@@ -1564,7 +1633,7 @@ window.__ModuleLoader__.load({
           : [state.latest && state.latest.notes ? `${t.updateNotes}:\n${state.latest.notes}` : null]
             .filter(Boolean).join('\n\n') || undefined,
         onClick: install,
-      }, busy ? t.updateInstalling : `${t.updateAvailable} ${version}`)
+      }, busy ? h(Pending, { label: t.updateInstalling }) : `${t.updateAvailable} ${version}`)
     }
 
     async function callJson(path, init) {

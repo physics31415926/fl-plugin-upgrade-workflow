@@ -227,13 +227,88 @@ test('concurrent presses share one install', () => {
   assert(route.includes('updating = runUpdate()'), 'starts at most one');
 });
 
-test('the update button only appears when it can act', () => {
-  const block = client.slice(client.indexOf('function UpdateButton'), client.indexOf('async function callJson'));
-  // A permanently disabled control in the process header reads as a bug.
-  assert(block.includes('if (!state || !state.newer) return null'), 'hides itself with nothing to do');
-  assert(block.includes('if (!state.installable)'), 'reports a version it cannot install as text');
-  assert(block.includes('t.updateLinkedHint'), 'explains a linked checkout');
+/** The UpdateButton component source. */
+const button = () => client.slice(
+  client.indexOf('function UpdateButton'),
+  client.indexOf('async function callJson'),
+);
+
+test('checking for updates is user-initiated, never automatic', () => {
+  const block = button();
+  /*
+   * The earlier version checked on mount. That reached GitHub every time the
+   * panel mounted, for data that changes perhaps weekly, and it is the
+   * behaviour the user asked to remove: a check should be a consequence of a
+   * click.
+   */
+  assert.equal(/useEffect\(\(\)\s*=>\s*\{?\s*check/.test(block), false,
+    'no mount-time check');
+  assert.equal(block.includes('React.useEffect'), false,
+    'the component runs no effect at all');
+  // Every read of update-state is inside a click handler.
+  const reads = [...block.matchAll(/update-state/g)];
+  assert.equal(reads.length, 1, 'exactly one place reads update-state');
+  assert(/onClick: check/.test(block), 'the check is bound to a click');
+});
+
+test('a click is never answered from a stale cache', () => {
+  // A cached answer would make the button a no-op that looks like it worked.
+  assert(/update-state\?refresh=1/.test(button()), 'a click forces a refresh');
+});
+
+test('repeated clicking cannot burn the GitHub rate limit', () => {
+  const block = host.slice(host.indexOf('let releaseCache'), host.indexOf('async function updateState'));
+  assert(block.includes('RELEASE_MIN_INTERVAL_MS'), 'a floor between network checks exists');
+  // `refresh` must not be an unconditional bypass: with one, a held-down
+  // button spends the unauthenticated hourly budget in a minute.
+  assert(/refresh \? age < RELEASE_MIN_INTERVAL_MS/.test(block),
+    'a forced refresh still respects the floor');
+  const floor = /const RELEASE_MIN_INTERVAL_MS = ([0-9_]+)/.exec(host);
+  assert(floor, 'the floor is a named constant');
+  assert(Number(floor[1].replace(/_/g, '')) >= 10_000, 'the floor is a meaningful interval');
+});
+
+test('the button reports being up to date instead of vanishing', () => {
+  const block = button();
+  /*
+   * The whole point of the user's complaint: with nothing to install the
+   * component used to render null, so "am I current?" had no answer anywhere
+   * in the UI — and the answer "yes" was exactly the case that showed nothing.
+   */
+  assert(block.includes('t.updateCurrent'), 'says it is current');
+  assert(block.includes('if (!state.newer)'), 'handles the up-to-date case explicitly');
+  assert(block.includes('t.updateInstalledIs'), 'names the installed version');
+  // Still clickable: a release can appear at any time, and this is the only
+  // way to ask.
+  const upToDate = block.slice(block.indexOf('if (!state.newer)'));
+  assert(upToDate.slice(0, 400).includes('onClick: check'), 'stays clickable when current');
+});
+
+test('a failed check is distinguished from being up to date', () => {
+  const block = button();
+  // The question went unanswered; claiming currency would be a lie.
+  assert(block.includes('state.checkError'), 'inspects the reported check error');
+  assert(block.includes('t.updateRateLimited'), 'names rate limiting specifically');
+  assert(block.includes('t.updateCheckFailed'), 'reports other failures');
+  const failure = block.slice(block.indexOf('if (state.checkError)'));
+  assert(failure.slice(0, 400).includes('onClick: check'), 'stays retryable after a failure');
+});
+
+test('an unpressed button offers the check, and installing is a second press', () => {
+  const block = button();
+  assert(block.includes('t.updateCheck'), 'offers to check before any state exists');
   assert(block.includes("method: 'POST'"), 'installs over POST');
+  assert(block.includes('onClick: install'), 'the install is its own click');
+  // Two distinct actions: the check must not install anything.
+  const checkFn = block.slice(block.indexOf('const check ='), block.indexOf('const install ='));
+  assert.equal(checkFn.includes('self-update'), false, 'checking never installs');
+});
+
+test('a version it cannot install is still reported', () => {
+  const block = button();
+  assert(block.includes('if (!state.installable)'), 'reports it as text');
+  assert(block.includes('t.updateLinkedHint'), 'explains a linked checkout');
+  assert(block.includes('t.updateUnsupportedHint'), 'explains a build without the manager');
   // The new module is on disk but this page still runs the old one.
   assert(block.includes('t.updateRestart'), 'asks for a reload after installing');
 });
@@ -252,4 +327,20 @@ test('both locales describe every update string', () => {
       assert(new RegExp(`\\b${key}:`).test(block), `${locale} must define ${key}`);
     }
   }
+});
+
+test('no update string is defined but unused', () => {
+  /*
+   * This is the check that was missing. `updateCheck` ("check for updates")
+   * was translated into both locales and never referenced, so the dictionary
+   * promised a control the panel did not have — and the one-directional test
+   * above, which only proves used keys are defined, could not see it.
+   */
+  const used = new Set([...client.matchAll(/\bt\.(update[A-Za-z]+)/g)].map(m => m[1]));
+  const start = client.indexOf('      en: {');
+  const defined = [...client.slice(start, client.indexOf('\n      },', start))
+    .matchAll(/^\s{8}(update[A-Za-z]+):/gm)].map(m => m[1]);
+  assert(defined.length > 0, 'the dictionary defines update copy');
+  const orphans = defined.filter(key => !used.has(key));
+  assert.deepEqual(orphans, [], `defined but never rendered: ${orphans.join(', ')}`);
 });
