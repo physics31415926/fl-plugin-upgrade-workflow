@@ -226,14 +226,16 @@ const table = (tasks, mineOnly) => render(probe.TaskTable, {
 }
 
 // --- CredentialView ---
-// Hook order: state, draft, remember, busy, error, saved.
+// Hook order: state, draft, remember, busy, error, saved, replacing, restart.
 const credState = (over = {}) => [
   over.state !== undefined ? over.state : null,
-  over.draft || { claude: '', jumpserver: '' },
+  over.draft || { claude: '', jumpserver: '', github: '' },
   over.remember || false,
   over.busy || '',
   over.error !== undefined ? over.error : null,
   over.saved || '',
+  over.replacing || {},
+  over.restart || false,
 ]
 const cred = over => render(probe.CredentialView, { t, project: { id: 'vllm' } }, credState(over))
 {
@@ -247,9 +249,21 @@ const cred = over => render(probe.CredentialView, { t, project: { id: 'vllm' } }
     },
   })
   const body = text(tree)
-  check('github has no input, only guidance', /gh auth login/.test(body) && /no field here on purpose/i.test(body))
-  check('ssh keys are explained as never entered', /never entered anywhere/i.test(body))
+  check('the GitHub CLI alternative is still mentioned', /gh auth login/.test(body))
+  // SSH key material stays refused, and the card says why rather than leaving
+  // the user to wonder where to type it.
+  check('ssh keys are explained as never entered', /never entered here/i.test(body))
   check('the missing dashboard auth is disclosed', /no authentication of its own/i.test(body))
+  /*
+   * The intro must not claim every secret goes to the dashboard's store. It
+   * said exactly that until the GitHub token arrived, which the Harness stores
+   * instead — a sentence that was true when written and silently became a
+   * false security claim.
+   */
+  check('the intro does not promise one single store',
+    !/Each value goes straight to the dashboard/i.test(body))
+  check('the intro names the Harness store for the token',
+    /Harness credential service/i.test(body))
   const inputs = find(tree, 'input').filter(i => i.props.type === 'password')
   check('exactly two secret fields are offered', inputs.length === 2, 'got ' + inputs.length)
   check('secret fields disable autofill', inputs.every(i => i.props.autoComplete === 'off'))
@@ -257,18 +271,94 @@ const cred = over => render(probe.CredentialView, { t, project: { id: 'vllm' } }
   check('claude storage is described', /DPAPI/.test(body))
 }
 {
+  // Everything collectable is in place: the card goes quiet, but replacing a
+  // secret stays reachable. The earlier version offered no way back at all,
+  // so a rotated key or a mistyped password meant editing files by hand.
+  const ready = {
+    codex: { available: true, configured: false, authenticated: true, error: null },
+    claude: { available: true, configured: true, authenticated: false, error: null },
+    flagscale: null,
+    machineSource: 'jumpserver',
+    jumpserver: { enabled: true, authenticated: true, passwordSaved: true, canRemember: true, assetCount: 57, error: null },
+  }
+  const tree = cred({ state: ready })
+  const inputs = find(tree, 'input').filter(i => i.props.type === 'password')
+  check('a configured credential hides its field by default', inputs.length === 0, 'got ' + inputs.length)
+  const body = text(tree)
+  check('a configured claude key is confirmed', /Claude key configured and accepted/.test(body))
+  const labels = find(tree, 'button').map(b => text(b))
+  check('each configured secret offers a replace control',
+    labels.filter(l => /Replace/.test(l)).length === 2, 'got ' + JSON.stringify(labels))
+  // The old copy told the user to go to the dashboard; that is no longer true.
+  check('the card no longer redirects replacement to the dashboard',
+    !/Replacing it is done in the dashboard/i.test(body))
+
+  // Opening one replacement reveals exactly that field, not every field.
+  const opened = cred({ state: ready, replacing: { claude: true } })
+  const openedInputs = find(opened, 'input').filter(i => i.props.type === 'password')
+  check('replacing reveals one field', openedInputs.length === 1, 'got ' + openedInputs.length)
+  check('a revealed field starts empty', openedInputs.every(i => i.props.value === ''))
+  check('replacing offers a way out', /Cancel/.test(text(opened)))
+}
+{
+  // Stored but refused. This is the state the old card showed as done, hiding
+  // the field exactly when retyping was the fix.
   const tree = cred({
     state: {
-      codex: { available: true, configured: false, authenticated: true, error: null },
-      claude: { available: true, configured: true, authenticated: false, error: null },
+      codex: null,
+      claude: { available: false, configured: true, authenticated: false, error: 'invalid x-api-key' },
       flagscale: null,
-      machineSource: 'jumpserver',
-      jumpserver: { enabled: true, authenticated: true, passwordSaved: true, canRemember: true, assetCount: 57, error: null },
+      machineSource: 'local',
+      jumpserver: null,
     },
   })
   const inputs = find(tree, 'input').filter(i => i.props.type === 'password')
-  check('a configured credential offers no field', inputs.length === 0, 'got ' + inputs.length)
-  check('a configured claude key is confirmed', /Claude key configured/.test(text(tree)))
+  check('a stored but rejected key still offers its field', inputs.length === 1, 'got ' + inputs.length)
+  check('the rejection reason is shown', /invalid x-api-key/.test(text(tree)))
+}
+{
+  // The GitHub token is collectable now, with the save as the authorization.
+  const base = {
+    codex: null, claude: null, flagscale: null, machineSource: 'local', jumpserver: null,
+  }
+  const absent = cred({ state: { ...base, github: { supported: true, env: 'GITHUB_TOKEN', configured: false, writable: true, source: null } } })
+  const absentInputs = find(absent, 'input').filter(i => i.props.type === 'password')
+  check('a writable github token offers a field', absentInputs.length === 1, 'got ' + absentInputs.length)
+  check('the anonymous rate limit is explained', /60 per hour/.test(text(absent)))
+  check('the token is never sent over HTTP, and says so', /never over HTTP/i.test(text(absent)))
+
+  // An ambient token belongs to its source; the panel must not offer to
+  // overwrite it, only report where it came from.
+  const ambient = cred({ state: { ...base, github: { supported: true, env: 'GITHUB_TOKEN', configured: true, writable: false, source: 'process environment' } } })
+  check('an ambient token offers no field',
+    find(ambient, 'input').filter(i => i.props.type === 'password').length === 0)
+  check('an ambient token names its source', /process environment/.test(text(ambient)))
+  // Nor a replace control: there is nothing here to replace.
+  check('an ambient token offers no replace control', !/Replace/.test(text(ambient)))
+
+  /*
+   * The load-bearing case for `writable`, and the one a weaker test missed:
+   * read-only AND unconfigured. With `configured: true` the done-row renders
+   * no input anyway, so dropping the writable guard still passed. Here a
+   * missing guard would render a secret field for a value this plugin cannot
+   * write — the user would type a token into a form that silently cannot save.
+   */
+  const readOnlyEmpty = cred({ state: { ...base, github: { supported: true, env: 'GITHUB_TOKEN', configured: false, writable: false, source: null } } })
+  check('a read-only unconfigured token offers no field',
+    find(readOnlyEmpty, 'input').filter(i => i.props.type === 'password').length === 0,
+    'got ' + find(readOnlyEmpty, 'input').filter(i => i.props.type === 'password').length)
+
+  // A build without the credential service cannot store one at all.
+  const unsupported = cred({ state: { ...base, github: { supported: false, configured: false, writable: false, source: null } } })
+  check('an unsupported build offers no token field',
+    find(unsupported, 'input').filter(i => i.props.type === 'password').length === 0)
+
+  // Saving does not take effect until the dashboard restarts.
+  const saved = cred({
+    state: { ...base, github: { supported: true, env: 'GITHUB_TOKEN', configured: true, writable: true, source: 'credential store' } },
+    restart: true,
+  })
+  check('a saved token asks for a restart', /Restart the dashboard/i.test(text(saved)))
 }
 {
   // When machines do not come from JumpServer, its password is irrelevant.

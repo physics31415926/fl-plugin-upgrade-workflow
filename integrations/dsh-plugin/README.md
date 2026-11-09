@@ -14,7 +14,7 @@
 也可以用命令行：
 
 ```
-dsh plugin install /绝对路径/local-fl-upgrade-workflow-0.2.1.tgz
+dsh plugin install /绝对路径/local-fl-upgrade-workflow-0.3.0.tgz
 ```
 
 装过一次之后就不用再手动下载了：面板标题栏会在有新版本时出现一个「更新到 x.y.z」
@@ -29,6 +29,7 @@ dsh plugin install /绝对路径/local-fl-upgrade-workflow-0.2.1.tgz
 | `pythonPath` | 留空则用 PATH 上的 `python`，需要 3.11+ |
 | `projectsConfig` | 留空则依次找 `runs/configured/projects.json`、`projects.json` |
 | `autoStart` | 插件激活时是否自动拉起看板进程，默认 `true`。面板的全部数据都来自这个进程，所以默认让它跟着插件起；置 `false` 则改回手动点「启动」 |
+| `githubTokenEnv` | 读取 GitHub token 的环境变量名，默认 `GITHUB_TOKEN`。这里只填**名字**，不填值 —— 密钥存在 Harness 凭据库里，这个配置项是明文 YAML。置空则完全不碰 token |
 
 ```
 git clone https://github.com/physics31415926/fl-plugin-upgrade-workflow
@@ -97,12 +98,39 @@ git clone https://github.com/physics31415926/fl-plugin-upgrade-workflow
 | --- | --- | --- |
 | Claude API key | 能 | 上游用 Windows DPAPI 按当前用户加密写进 `runs/`（已 git 忽略），读回只有布尔值 |
 | JumpServer 密码 | 能 | 换成会话令牌；不勾「记住」就只在内存里 |
-| GitHub token | **不能** | 上游没有存放它的地方，只从自己的环境变量读。做成表单等于让插件自己为一个密钥发明存储，所以这里只提示用 `gh auth login`（它的优先级还更高） |
+| GitHub token | 能 | 存进 **Harness 自己的凭据服务**（加密，不在本插件也不在看板），通过看板进程的环境变量传入 |
 | SSH 私钥 | **不能** | 上游只按路径引用密钥文件，从不读取内容。接收密钥内容会破坏这个不变量 |
 
-凭据一律走 **POST 请求体**。原因很具体：看板的控制服务器没有覆盖
-`log_message`，每个请求行都会进明文日志文件，所以密钥绝对不能出现在
-query string、路径段或任何 GET 里。插件自己不保存、不回显、不写浏览器存储。
+GitHub token 走的路径和另外两个不同，值得说清楚：它**不经过 HTTP 发给看板**。
+上游没有接收 token 的接口 —— 它只从自己的进程环境里读 `GITHUB_TOKEN`（其次
+`GH_TOKEN`），而看板的控制服务器会把每个请求行写进明文日志，所以转发 token 等于
+把它写上磁盘。插件保存到 Harness 凭据库，下次启动看板时作为环境变量交给子进程。
+
+两个后果：
+
+- **保存后需要重启看板才生效** —— 运行中的进程保留着启动时的环境变量。面板会在
+  保存成功后直接说这件事，而不是让你以为已经生效。
+- **环境里已有的 token 不会被覆盖**。如果 token 来自进程环境或 `.env`，那是别人
+  的数据，面板只报告来源、不提供输入框；想改请在来源处改。
+
+`gh auth login` 仍然可用，而且上游优先用它（先试 `gh api`，失败才用 token）。
+
+SSH 私钥是**刻意**不收的，不是没做完。上游只按路径引用密钥文件、从不读内容，
+接收私钥既会破坏这个不变量，也会让插件持有一个它无法妥善保护的密钥。
+请在机器配置里指向一个已存在的密钥文件。
+
+Claude key 和 JumpServer 密码一律走 **POST 请求体**，原因同上：请求行会进明文
+日志，密钥绝不能出现在 query string、路径段或任何 GET 里。插件自己不保存、
+不回显、不写浏览器存储。
+
+### 已配置的凭据怎么改
+
+已经配好的凭据默认**收起**，只显示一行对勾加一个「更换」按钮 —— 点开才出现输入框。
+这样"已经弄好了"这个信号不会被一排常驻密码框淹掉，但密钥轮换、密码输错时有路可走。
+
+有一个状态刻意不算"已完成"：**存了但没通过验证**（`configured` 为真而
+`available` 为假，典型就是 key 打错或被吊销）。这种情况直接显示成待处理并保留
+输入框，因为那恰好是最需要重填的时候。
 
 凭据卡也是**唯一不进页面缓存的视图**。其他视图把数据存在组件树之外以免切页闪烁，
 而这张卡的输入框里是明文密钥：缓存它等于让一个没提交的密钥在模块级 Map 里

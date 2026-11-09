@@ -17,3 +17,10 @@
         # it, so device and PR data are there without anyone pressing Start.
         # Set false to keep the process manual.
         autoStart: true
+        # Environment variable holding the GitHub token, resolved through the
+        # Harness credential service and handed to the dashboard process.
+        #
+        # A NAME, never a value: this file is plain YAML in the profile, while
+        # the secret itself stays in the encrypted credential store. The panel
+        # collects it. Leave empty to opt out and rely on `gh auth login`.
+        githubTokenEnv: GITHUB_TOKEN
