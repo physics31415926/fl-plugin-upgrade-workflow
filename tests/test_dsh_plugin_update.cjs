@@ -278,10 +278,17 @@ test('the button reports being up to date instead of vanishing', () => {
   assert(block.includes('t.updateCurrent'), 'says it is current');
   assert(block.includes('if (!state.newer)'), 'handles the up-to-date case explicitly');
   assert(block.includes('t.updateInstalledIs'), 'names the installed version');
-  // Still clickable: a release can appear at any time, and this is the only
-  // way to ask.
-  const upToDate = block.slice(block.indexOf('if (!state.newer)'));
-  assert(upToDate.slice(0, 400).includes('onClick: check'), 'stays clickable when current');
+  /*
+   * Still clickable: a release can appear at any time, and this is the only
+   * way to ask. Bounded by the next branch rather than a character count, so
+   * editing a comment inside the branch cannot move the assertion off it.
+   */
+  const upToDate = block.slice(
+    block.indexOf('if (!state.newer)'),
+    block.indexOf('const version ='),
+  );
+  assert(upToDate.includes('onClick: check'), 'stays clickable when current');
+  assert(upToDate.includes('t.updateCurrent'), 'the up-to-date branch carries the label');
 });
 
 test('a failed check is distinguished from being up to date', () => {
@@ -290,8 +297,12 @@ test('a failed check is distinguished from being up to date', () => {
   assert(block.includes('state.checkError'), 'inspects the reported check error');
   assert(block.includes('t.updateRateLimited'), 'names rate limiting specifically');
   assert(block.includes('t.updateCheckFailed'), 'reports other failures');
-  const failure = block.slice(block.indexOf('if (state.checkError)'));
-  assert(failure.slice(0, 400).includes('onClick: check'), 'stays retryable after a failure');
+  // Bounded by the next branch, not a character count.
+  const failure = block.slice(
+    block.indexOf('if (state.checkError)'),
+    block.indexOf('if (!state.newer)'),
+  );
+  assert(failure.includes('onClick: check'), 'stays retryable after a failure');
 });
 
 test('an unpressed button offers the check, and installing is a second press', () => {

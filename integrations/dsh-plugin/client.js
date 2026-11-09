@@ -45,7 +45,7 @@ window.__ModuleLoader__.load({
         updateCheckFailed: 'The update check failed',
         updateRateLimited: 'GitHub rate-limited the update check. Try again later.',
         updateNotes: 'Release notes',
-        updateInstalledIs: 'Installed version:',
+        updateInstalledIs: 'Installed version',
         noProjects: 'No project is configured.',
         branch: 'Branch',
         engine: 'engine',
@@ -275,7 +275,7 @@ window.__ModuleLoader__.load({
         updateCheckFailed: '检查更新失败',
         updateRateLimited: 'GitHub 限流了更新检查，稍后再试。',
         updateNotes: '更新说明',
-        updateInstalledIs: '当前版本：',
+        updateInstalledIs: '当前版本',
         noProjects: '尚未配置项目。',
         branch: '分支',
         engine: '引擎',
@@ -1605,7 +1605,10 @@ window.__ModuleLoader__.load({
           className: 'flup-btn',
           type: 'button',
           disabled: checking,
-          title: state.installed ? `${t.updateInstalledIs} ${state.installed}` : undefined,
+          // Punctuation lives here, not in the string: a translated label that
+          // ended in a full-width colon rendered a double gap before the
+          // version.
+          title: state.installed ? `${t.updateInstalledIs}: ${state.installed}` : undefined,
           onClick: check,
         }, checking ? h(Pending, { label: t.updateCheck }) : t.updateCurrent)
       }
