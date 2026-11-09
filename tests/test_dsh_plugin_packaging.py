@@ -6,6 +6,7 @@ declared file set and the reproducibility guarantee are all checked here.
 
 import hashlib
 import json
+import re
 import tarfile
 import tempfile
 import unittest
@@ -111,11 +112,37 @@ class PackagingTests(unittest.TestCase):
         self.assertEqual(manifest["dsh"]["client"]["platform"], "web")
 
     def test_the_shipped_plugin_config_asks_for_no_credential(self):
-        # Plugin config is stored as plain text in the profile, so a credential
-        # field there would be a plaintext secret store.
-        patch = (SOURCE / "cordis.patch.yml").read_text(encoding="utf-8").lower()
-        for banned in ("password", "api_key", "apikey", "token", "secret", "private_key"):
-            self.assertNotIn(banned, patch)
+        """Plugin config is plain text in the profile, so no field may hold a secret.
+
+        The config may *name* an environment variable whose value lives in the
+        Harness credential store -- `githubTokenEnv: GITHUB_TOKEN` is a name, not
+        a secret. So instead of banning the substring "token" outright, every
+        value is checked: a key may mention a credential, but no value may look
+        like one.
+        """
+        text = (SOURCE / "cordis.patch.yml").read_text(encoding="utf-8")
+        # Comments are prose and may discuss secrets; only the settings matter.
+        settings = "\n".join(
+            line for line in text.splitlines() if line.strip() and not line.strip().startswith("#")
+        )
+        # Keys that would make this file a secret store whatever their value.
+        for banned in ("password", "api_key", "apikey", "secret", "private_key"):
+            self.assertNotIn(banned, settings.lower())
+
+        # A credential-ish key is allowed only when its value is an environment
+        # variable name: uppercase, underscores, no payload.
+        pattern = re.compile(r"^\s*([A-Za-z_]*(?:token|key|credential)[A-Za-z_]*)\s*:\s*(.*)$",
+                             re.IGNORECASE | re.MULTILINE)
+        for key, value in pattern.findall(settings):
+            cleaned = value.strip().strip("'\"")
+            if not cleaned:
+                continue
+            self.assertRegex(
+                cleaned, r"^[A-Z][A-Z0-9_]*$",
+                f"{key} must hold an environment variable name, not a value: {cleaned!r}",
+            )
+            # An env NAME is short; a real token is not.
+            self.assertLess(len(cleaned), 64, f"{key} value is too long to be a variable name")
 
 
 if __name__ == "__main__":

@@ -82,16 +82,61 @@ test('created task ids are recorded so the panel can show only its own', () => {
     'the record must hold ids only');
 });
 
-test('only the two credentials the dashboard can store are accepted', () => {
+test('only credentials with a real store are accepted', () => {
   const block = route('credential', 'task-message');
-  assert(block.includes("kind must be claude or jumpserver"));
-  // A GitHub token has no upstream store: the dashboard reads it from its own
-  // environment, so a form would mean the plugin inventing persistence.
-  assert.equal(/'github'/.test(block), false, 'must not accept a github token');
-  // SSH key files are referenced by path and never read, so accepting key
-  // material would break an invariant the dashboard holds.
+  assert(block.includes('kind must be claude, jumpserver or github'));
+  /*
+   * SSH private keys remain refused, and this is not an oversight to be
+   * relaxed later. The dashboard references key files by path and never reads
+   * their contents, so accepting key material would both break that invariant
+   * and hand this plugin a secret it has no way to protect. A GitHub token is
+   * different in kind: the Harness credential service already provides
+   * encrypted storage for exactly this, so the token has a real home.
+   */
   assert.equal(/'ssh'|private_key|passphrase/.test(block), false,
     'must not accept ssh key material');
+});
+
+test('a github token is stored by the Harness, never sent to the dashboard', () => {
+  const block = route('credential', 'task-message');
+  const github = block.slice(block.indexOf("if (kind === 'github')"));
+  /*
+   * The dashboard reads the token from its process environment and its control
+   * server logs every request line to a plaintext file, so forwarding the
+   * token over HTTP would write it to disk.
+   */
+  assert(github.includes('credentials.set('), 'stores through the credential service');
+  const toUpstream = github.slice(0, github.indexOf('sendJson(res, 200'));
+  assert.equal(/callUpstream/.test(toUpstream), false, 'never forwards the token upstream');
+  // An ambient value belongs to its source; overwriting it would diverge.
+  assert(github.includes('info.writable'), 'refuses to overwrite an ambient token');
+  // A running dashboard keeps its original environment.
+  assert(github.includes('restartRequired'), 'reports that a restart is needed');
+  // The reply must carry readiness for the project the caller named.
+  assert.equal(/credentialState\('vllm'\)|\|\| 'vllm'/.test(github), false,
+    'must not invent a project id');
+});
+
+test('the token reaches the dashboard only through its environment', () => {
+  const spawn = host.slice(host.indexOf('handle = ctx.subprocess.spawn('), host.indexOf('} catch (error) {', host.indexOf('handle = ctx.subprocess.spawn(')));
+  assert(spawn.includes('githubEnv'), 'passes the resolved token at spawn');
+  assert(spawn.includes('env:'), 'uses the environment channel');
+  // Omitted when absent: an empty variable would mask a `gh` login, which
+  // upstream prefers over the token.
+  assert(/githubEnv \?/.test(spawn), 'omits the variable when no token is held');
+  // The resolver must not retain or log the value.
+  const resolver = host.slice(host.indexOf('async function resolveGithubToken'), host.indexOf('async function githubTokenState'));
+  assert.equal(/console\.|logger\.|writeFile/.test(resolver), false, 'never logs or writes the token');
+});
+
+test('token presence is reported without the value', () => {
+  const describe = host.slice(host.indexOf('async function githubTokenState'), host.indexOf('const credentialState'));
+  assert(describe.includes('credentials.describe('), 'asks for a description, not the value');
+  assert.equal(/\.resolve\(/.test(describe), false, 'the readiness probe never resolves the secret');
+  for (const leak of ['value', 'secret', 'token:']) {
+    assert.equal(new RegExp(`${leak}\\s*:\\s*(value|resolved|secret)`).test(describe), false,
+      `must not return the ${leak}`);
+  }
 });
 
 test('a credential travels in a request body, never in a URL', () => {
@@ -117,10 +162,20 @@ test('a credential is never persisted or echoed by the plugin', () => {
   // and reads it back as a boolean; a second copy here would only add risk.
   assert.equal(/writeFile|appendFile|writeFileSync/.test(block), false,
     'must not write a secret to disk');
-  // The success reply carries readiness booleans, not the value.
+  // The success reply carries readiness booleans, not the value. Both write
+  // paths confirm from the read route rather than trusting their own write.
   assert(/credentialState\(projectId\)/.test(block), 'confirms from the read route');
-  assert.equal(/secret\s*[,}]/.test(block.slice(block.indexOf('sendJson(res, 200'))), false,
-    'must not echo the secret');
+  assert(/credentialState\(githubProject\)/.test(block), 'the token path confirms too');
+  /*
+   * No success reply carries the value. Checked per reply rather than from the
+   * first one to the end of the route: there are two write paths now, and a
+   * slice starting at the first `sendJson(res, 200` runs on into the other
+   * path's upstream payload, where `secret` legitimately appears.
+   */
+  for (const reply of block.matchAll(/sendJson\(res, 200, \{[\s\S]{0,400}?\}\)/g)) {
+    assert.equal(/\bsecret\b/.test(reply[0]), false, `must not echo the secret: ${reply[0].slice(0, 80)}`);
+  }
+  assert(block.includes('sendJson(res, 200'), 'the route has a success reply to check');
   // The browser must not keep one either.
   assert.equal(/localStorage|sessionStorage|document\.cookie|indexedDB/.test(client), false,
     'the panel must not persist a secret');

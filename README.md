@@ -27,7 +27,7 @@
 里填刚下载的那个 `.tgz` 的**绝对路径**，然后点**安装**：
 
 ```text
-C:\Users\<你>\Downloads\local-fl-upgrade-workflow-0.2.1.tgz
+C:\Users\<你>\Downloads\local-fl-upgrade-workflow-0.3.0.tgz
 ```
 
 这个输入框是文本框，不是文件选择器，所以路径要自己粘进去（在文件管理器里复制文件路径
@@ -40,7 +40,7 @@ C:\Users\<你>\Downloads\local-fl-upgrade-workflow-0.2.1.tgz
 **或者用命令行**：
 
 ```sh
-dsh plugin install /绝对路径/local-fl-upgrade-workflow-0.2.1.tgz
+dsh plugin install /绝对路径/local-fl-upgrade-workflow-0.3.0.tgz
 ```
 
 也可以自己打包，产物与发布的一致（纯标准库，不需要 Node）：

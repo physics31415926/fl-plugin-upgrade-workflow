@@ -227,7 +227,10 @@ window.__ModuleLoader__.load({
         credCodexNo: 'not signed in \u2014 run the Codex CLI login',
         credClaudeOk: 'key configured',
         credClaudeNo: 'no key configured',
-        credClaudeDone: 'Claude key configured. Replacing it is done in the dashboard.',
+        credClaudeDone: 'Claude key configured and accepted',
+        credJumpDone: 'JumpServer signed in',
+        credReplace: 'Replace',
+        credCancel: 'Cancel',
         credClaudeLabel: 'Claude API key',
         credClaudeHint: 'Stored by the dashboard, sealed with Windows DPAPI under your user account, inside a git-ignored directory. Read back only as a yes/no.',
         credJumpOk: 'signed in, assets available',
@@ -236,8 +239,15 @@ window.__ModuleLoader__.load({
         credJumpHint: 'Exchanged for a session token. Without \u201cremember\u201d it is held in memory only and never written to disk.',
         credRemember: 'Remember this password (sealed to this Windows account)',
         credGithubUnknown: 'cannot be detected \u2014 the dashboard reads it from its own environment',
-        credGithubHint: 'GitHub has no field here on purpose: the dashboard has nowhere to store a token, so a form would mean this plugin inventing storage for a secret. Sign in with the GitHub CLI instead \u2014 it takes precedence over the token variable. Without it, PR and CI columns may read \u201cunknown\u201d and anonymous requests are limited to 60 per hour.',
-        credSshHint: 'SSH keys are never entered anywhere: the dashboard references key files by path and never reads their contents.',
+        credGithubHint: 'Signing in with the GitHub CLI also works and takes precedence over the token. Without either, PR and CI columns may read \u201cunknown\u201d and anonymous requests are limited to 60 per hour.',
+        credGithubLabel: 'GitHub token',
+        credGithubFieldHint: 'Stored by the Harness credential service, not by this plugin and not by the dashboard. It reaches collection through the dashboard\u2019s process environment, never over HTTP, because that server writes every request line to a plaintext log. A fine-grained token with read access to the two plugin repositories is enough.',
+        credGithubDone: 'GitHub token stored',
+        credGithubStored: 'token stored in the Harness credential store',
+        credGithubAmbient: 'token supplied by the environment',
+        credGithubNone: 'no token \u2014 anonymous reads are limited to 60 per hour',
+        credGithubRestart: 'Saved. Restart the dashboard to let collection use the new token: a running process keeps the environment it started with.',
+        credSshHint: 'SSH private keys are deliberately never entered here. The dashboard references key files by path and never reads their contents, so accepting key material would break that invariant and give this plugin a secret it has no way to protect. Point the machine profile at an existing key file instead.',
         credSafety: 'Note that the dashboard has no authentication of its own and is reachable by any process on this machine. Only enter credentials on a machine you trust.',
       },
       zh: {
@@ -456,7 +466,10 @@ window.__ModuleLoader__.load({
         credCodexNo: '未登录 —— 请用 Codex CLI 登录',
         credClaudeOk: '密钥已配置',
         credClaudeNo: '未配置密钥',
-        credClaudeDone: 'Claude 密钥已配置。更换请在看板里操作。',
+        credClaudeDone: 'Claude 密钥已配置并通过验证',
+        credJumpDone: 'JumpServer 已登录',
+        credReplace: '更换',
+        credCancel: '取消',
         credClaudeLabel: 'Claude API 密钥',
         credClaudeHint: '由看板保存，用 Windows DPAPI 以当前用户身份加密，存放在已被 git 忽略的目录里。读回时只有“是否已配置”。',
         credJumpOk: '已登录，资产可用',
@@ -465,8 +478,15 @@ window.__ModuleLoader__.load({
         credJumpHint: '用于换取会话令牌。不勾选“记住”时只存在内存里，不落盘。',
         credRemember: '记住这个密码（加密绑定到当前 Windows 账户）',
         credGithubUnknown: '无法探测 —— 看板从自己的环境变量里读',
-        credGithubHint: 'GitHub 这里故意不做输入框：看板没有存放 token 的地方，做成表单就等于让插件自己为一个密钥发明存储。请改用 GitHub CLI 登录 —— 它的优先级高于环境变量。不配的话 PR 和 CI 列可能显示 unknown，匿名请求限额是每小时 60 次。',
-        credSshHint: 'SSH 密钥在任何地方都不需要输入：看板只按路径引用密钥文件，从不读取文件内容。',
+        credGithubHint: '也可以用 GitHub CLI 登录，它的优先级高于 token。两者都没有的话，PR 和 CI 列可能显示 unknown，匿名请求限额是每小时 60 次。',
+        credGithubLabel: 'GitHub token',
+        credGithubFieldHint: '由 Harness 的凭据服务加密保存，不经过本插件也不经过看板。它通过看板进程的环境变量传入，不走 HTTP —— 因为那个服务器会把每个请求行写进明文日志。一个对两个插件仓库有读权限的细粒度 token 就够了。',
+        credGithubDone: 'GitHub token 已保存',
+        credGithubStored: 'token 已存入 Harness 凭据库',
+        credGithubAmbient: 'token 由环境提供',
+        credGithubNone: '未配置 token —— 匿名读取限额每小时 60 次',
+        credGithubRestart: '已保存。重启看板后采集才会用上新 token：运行中的进程保留着启动时的环境变量。',
+        credSshHint: 'SSH 私钥刻意不在这里输入。看板只按路径引用密钥文件，从不读取内容；接收私钥内容会破坏这个不变量，并让插件持有一个它无法妥善保护的密钥。请在机器配置里指向一个已存在的密钥文件。',
         credSafety: '请注意看板自身没有任何认证，本机上任何进程都能访问它。只在你信任的机器上填写凭据。',
       },
     }
@@ -3232,11 +3252,33 @@ window.__ModuleLoader__.load({
        * elsewhere is worse than its skeleton.
        */
       const [state, setState] = React.useState(null)
-      const [draft, setDraft] = React.useState({ claude: '', jumpserver: '' })
+      const [draft, setDraft] = React.useState({ claude: '', jumpserver: '', github: '' })
       const [remember, setRemember] = React.useState(false)
       const [busy, setBusy] = React.useState('')
       const [error, setError] = React.useState(null)
       const [saved, setSaved] = React.useState('')
+      /*
+       * Which already-configured secrets the user has opened for replacement.
+       *
+       * A configured credential hides its field, so "done" reads as done. But
+       * keys get rotated and passwords get mistyped, and the earlier version
+       * left no way back: once configured, the only route was the dashboard or
+       * the filesystem. This opt-in reveal keeps the finished state quiet while
+       * making replacement reachable.
+       *
+       * Not cached, for the same reason the draft is not: this governs a form
+       * holding a plaintext secret, and reopening the panel should start clean.
+       */
+      const [replacing, setReplacing] = React.useState({})
+      /*
+       * Whether a saved GitHub token still needs a dashboard restart.
+       *
+       * The running process holds the environment it was spawned with, so a
+       * token stored after it started is not visible to collection yet. The
+       * Host reports this per save; keeping it in state means the notice
+       * survives until the card is left.
+       */
+      const [restart, setRestart] = React.useState(false)
 
       const projectId = project && project.id
 
@@ -3273,8 +3315,18 @@ window.__ModuleLoader__.load({
           // Clear immediately, whatever happened next.
           setDraft(current => ({ ...current, [kind]: '' }))
           if (result && result.state) setState(result.state)
-          if (result && result.ok) setSaved(kind)
-          else setError(String((result && result.error) || t.credFailed))
+          if (result && result.ok) {
+            setSaved(kind)
+            if (result.restartRequired) setRestart(true)
+            // Collapse the replacement form: the value it existed to change
+            // has been changed, and leaving an empty secret box open invites
+            // typing into a field that no longer has a purpose.
+            setReplacing(current => ({ ...current, [kind]: false }))
+          } else {
+            // Keep the form open on failure — the user has to retype anyway,
+            // and closing it would hide the only way to retry.
+            setError(String((result && result.error) || t.credFailed))
+          }
         } catch (failure) {
           setDraft(current => ({ ...current, [kind]: '' }))
           setError(String(failure.message))
@@ -3299,6 +3351,7 @@ window.__ModuleLoader__.load({
       const claude = state && state.claude
       const jump = state && state.jumpserver
       const jumpMatters = state && state.machineSource === 'jumpserver'
+      const github = state && state.github
 
       /** A write-only secret field with its own save button. */
       const field = (kind, label, hint, extra) => h('div', { className: 'flup-mt3' },
@@ -3322,10 +3375,52 @@ window.__ModuleLoader__.load({
             disabled: Boolean(busy) || !draft[kind].trim(),
             onClick: () => submit(kind),
           }, busy === kind ? `${t.credSaving}…` : t.credSave),
+          // Abandoning a replacement must also drop what was typed: leaving it
+          // in `draft` would keep a secret in memory for a form the user
+          // closed.
+          replacing[kind]
+            ? h('button', {
+              className: 'flup-btn flup-btn-sm',
+              type: 'button',
+              disabled: Boolean(busy),
+              onClick: () => {
+                setDraft(current => ({ ...current, [kind]: '' }))
+                setReplacing(current => ({ ...current, [kind]: false }))
+              },
+            }, t.credCancel)
+            : null,
           saved === kind ? h('span', { className: 'flup-ok' }, `✓ ${t.credSaved}`) : null,
         ),
         h('p', { className: 'flup-meta flup-mt2' }, hint),
       )
+
+      /**
+       * One collectable secret: its verdict, and a way to change it.
+       *
+       * Three states, because "stored" and "working" are different facts and
+       * conflating them was the bug. A secret can be `configured` while the
+       * backend still refuses it — a mistyped key is exactly that — and the
+       * earlier version rendered a tick for it, hiding the one case where
+       * retyping is most needed.
+       */
+      const slot = (kind, ready, label, hint, doneText, extra) => {
+        if (!ready) return field(kind, label, hint, extra)
+        if (replacing[kind]) return field(kind, label, hint, extra)
+        // Done, and quiet about it: a standing secret field would make a
+        // finished setup look unfinished. Replacement is one click away.
+        return h('div', { className: 'flup-line flup-mt3' },
+          h('span', { className: 'flup-meta' }, `✓ ${doneText}`),
+          h('button', {
+            className: 'flup-btn flup-btn-sm',
+            type: 'button',
+            disabled: Boolean(busy),
+            onClick: () => {
+              setSaved('')
+              setReplacing(current => ({ ...current, [kind]: true }))
+            },
+          }, t.credReplace),
+        )
+      }
 
       return h('div', { className: 'flup-card flup-card-accent' },
         h('h3', { className: 'flup-card-title' }, t.credTitle),
@@ -3360,21 +3455,36 @@ window.__ModuleLoader__.load({
                   ? `${t.credJumpOk} (${jump.assetCount})`
                   : jump.error || t.credJumpNo)
               : null,
-            // GitHub cannot be probed over HTTP, so this states the rule
-            // rather than inventing a verdict.
-            row('GitHub', false, t.credGithubUnknown, true),
+            /*
+             * GitHub. The token cannot be validated without spending an API
+             * call, so this reports whether one is *held* and from where —
+             * which is a fact, unlike the old blanket "unknown".
+             */
+            github && github.supported
+              ? row('GitHub', github.configured,
+                github.configured
+                  ? (github.writable ? t.credGithubStored : `${t.credGithubAmbient} (${github.source || '—'})`)
+                  : t.credGithubNone,
+                !github.configured)
+              : row('GitHub', false, t.credGithubUnknown, true),
           )
           : null,
 
-        // Only the two secrets the dashboard can store get a field.
-        claude && !claude.configured
-          ? field('claude', t.credClaudeLabel, t.credClaudeHint)
-          : claude
-            ? h('p', { className: 'flup-meta flup-mt3' }, `✓ ${t.credClaudeDone}`)
-            : null,
+        /*
+         * Only the secrets the dashboard can store get a field.
+         *
+         * Claude counts as done only when the key is both stored AND accepted.
+         * `configured && !available` is a real and common state — a mistyped
+         * or revoked key — and treating it as done hid the field precisely
+         * when retyping was the fix.
+         */
+        claude
+          ? slot('claude', claude.configured && claude.available,
+            t.credClaudeLabel, t.credClaudeHint, t.credClaudeDone)
+          : null,
 
-        jumpMatters && jump && !jump.authenticated
-          ? field('jumpserver', t.credJumpLabel, t.credJumpHint,
+        jumpMatters && jump
+          ? slot('jumpserver', jump.authenticated, t.credJumpLabel, t.credJumpHint, t.credJumpDone,
             jump.canRemember
               ? h('label', { className: 'flup-check flup-mt2' },
                 h('input', {
@@ -3385,6 +3495,25 @@ window.__ModuleLoader__.load({
                 t.credRemember)
               : null)
           : null,
+
+        /*
+         * The GitHub token is collectable now, with the user's explicit save
+         * as the authorization. It is stored by the Harness credential service
+         * — encrypted, outside this plugin — and handed to the dashboard
+         * through its process environment, never over HTTP: that server logs
+         * request lines to a plaintext file.
+         *
+         * An ambient token (process environment, `.env`) gets no field: it is
+         * not ours to overwrite, and the row above says where it comes from.
+         */
+        github && github.supported && github.writable
+          ? slot('github', github.configured, t.credGithubLabel, t.credGithubFieldHint, t.credGithubDone)
+          : null,
+
+        // Collection reads the environment it was started with, so a token
+        // saved now applies after a restart. Saying so avoids "I saved it and
+        // nothing changed".
+        restart ? h('p', { className: 'flup-warn flup-mt2' }, t.credGithubRestart) : null,
 
         h('p', { className: 'flup-meta flup-mt3' }, t.credGithubHint),
         h('code', { className: 'flup-code' }, 'gh auth login'),

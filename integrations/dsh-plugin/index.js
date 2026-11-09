@@ -187,6 +187,22 @@ function normalizeConfig(raw) {
      * explicit `false` is a decision and is kept.
      */
     autoStart: value.autoStart !== false,
+    /*
+     * Environment variable name holding the GitHub token, resolved through the
+     * Harness credential service.
+     *
+     * The dashboard reads `GITHUB_TOKEN` (then `GH_TOKEN`) from its own process
+     * environment, and this plugin spawns that process, so a token the Harness
+     * already holds can be handed over at spawn time instead of the user
+     * exporting it into whatever shell happens to launch the app.
+     *
+     * A name, never a value: the secret stays in the Harness store, and this
+     * config — which is plain YAML in the profile — only says which entry to
+     * read. Leave empty to opt out entirely.
+     */
+    githubTokenEnv: typeof value.githubTokenEnv === 'string' && value.githubTokenEnv.trim()
+      ? value.githubTokenEnv.trim()
+      : 'GITHUB_TOKEN',
   }
 }
 
@@ -1234,6 +1250,8 @@ export function apply(ctx, rawConfig) {
       }
     }
 
+    const githubEnv = await resolveGithubToken()
+
     let executable
     try {
       executable = await ctx.subprocess.resolveExecutable(launch.python)
@@ -1255,6 +1273,14 @@ export function apply(ctx, rawConfig) {
         },
         graceMs: 5_000,
         signal: controller.signal,
+        /*
+         * The token is passed in the environment, which is the only channel
+         * the dashboard reads it from. Spread last so an inherited value is
+         * replaced rather than shadowed, and omitted entirely when no token is
+         * held — writing an empty variable would mask a `gh` login that
+         * upstream prefers anyway.
+         */
+        ...(githubEnv ? { env: { ...process.env, ...githubEnv } } : {}),
       })
     } catch (error) {
       lastError = { reason: `spawn failed: ${error?.message ?? error}`, output: null }
@@ -1605,6 +1631,70 @@ export function apply(ctx, rawConfig) {
    * stored. Claiming to detect it would be a lie, so the panel explains the
    * `gh auth login` path instead.
    */
+  /*
+   * The GitHub token, read from the Harness credential store at spawn time.
+   *
+   * This plugin never holds the secret: `credentials.resolve` is called once,
+   * the value goes straight into the child's environment, and nothing here
+   * stores, logs or returns it. The token is not sent to the dashboard over
+   * HTTP either — that server writes every request line to a plaintext log, so
+   * the environment is the only safe channel, and it happens to be the one
+   * upstream already reads.
+   *
+   * Returns the environment entries to add, or null when no token is held.
+   */
+  async function resolveGithubToken() {
+    const name = config.githubTokenEnv
+    if (!name) return null
+    const credentials = ctx.get('credentials')
+    if (!credentials) return null
+    try {
+      const resolved = await credentials.resolve(name)
+      const value = typeof resolved?.value === 'string' ? resolved.value.trim() : ''
+      if (!value) return null
+      /*
+       * Both names are set. Upstream reads GITHUB_TOKEN first and falls back
+       * to GH_TOKEN, while the `gh` CLI it shells out to prefers GH_TOKEN, so
+       * setting only one leaves the other path unauthenticated.
+       */
+      return name === 'GITHUB_TOKEN'
+        ? { GITHUB_TOKEN: value, GH_TOKEN: value }
+        : { [name]: value, GITHUB_TOKEN: value, GH_TOKEN: value }
+    } catch {
+      // A credential store that cannot answer must not stop the dashboard:
+      // unauthenticated GitHub reads still work, just at a lower rate limit.
+      return null
+    }
+  }
+
+  /**
+   * Whether a GitHub token is available to hand to the dashboard.
+   *
+   * Reports presence and where it came from, never the value. Used by the
+   * credential view, which previously could only state the rule because the
+   * plugin had no way to know.
+   */
+  async function githubTokenState() {
+    const name = config.githubTokenEnv
+    if (!name) return { supported: false, configured: false, writable: false, source: null }
+    const credentials = ctx.get('credentials')
+    if (!credentials) return { supported: false, configured: false, writable: false, source: null }
+    try {
+      const info = await credentials.describe(name)
+      return {
+        supported: true,
+        env: name,
+        configured: info?.configured === true,
+        // A value coming from the ambient environment or a `.env` file is not
+        // ours to overwrite, so the panel must not offer to.
+        writable: info?.writable === true,
+        source: typeof info?.source === 'string' ? info.source : null,
+      }
+    } catch {
+      return { supported: false, configured: false, writable: false, source: null }
+    }
+  }
+
   const credentialState = async projectId => {
     const query = `?project=${encodeURIComponent(projectId)}`
     const read = async path => {
@@ -1617,10 +1707,11 @@ export function apply(ctx, rawConfig) {
         return null
       }
     }
-    const [providers, jump, caps] = await Promise.all([
+    const [providers, jump, caps, github] = await Promise.all([
       read('/api/agent-providers'),
       read('/api/jumpserver'),
       read('/api/capabilities'),
+      githubTokenState(),
     ])
     const agent = name => {
       const row = providers?.providers?.[name]
@@ -1643,6 +1734,8 @@ export function apply(ctx, rawConfig) {
       // Which machine source is active decides whether JumpServer credentials
       // matter at all.
       machineSource: scalar(caps?.machine_source) || null,
+      // Presence and origin only; the token itself never leaves the Host.
+      github,
       jumpserver: jump
         ? {
           enabled: jump.enabled === true,
@@ -2419,8 +2512,8 @@ export function apply(ctx, rawConfig) {
             }
             const kind = scalar(parsed?.kind)
             const secret = typeof parsed?.secret === 'string' ? parsed.secret : ''
-            if (kind !== 'claude' && kind !== 'jumpserver') {
-              sendJson(res, 400, { error: 'kind must be claude or jumpserver' })
+            if (kind !== 'claude' && kind !== 'jumpserver' && kind !== 'github') {
+              sendJson(res, 400, { error: 'kind must be claude, jumpserver or github' })
               return
             }
             if (!secret) {
@@ -2432,6 +2525,64 @@ export function apply(ctx, rawConfig) {
               sendJson(res, 400, { error: 'this value is not a valid credential' })
               return
             }
+
+            /*
+             * The GitHub token goes to the Harness credential store, not to the
+             * dashboard.
+             *
+             * Upstream has no route that accepts it — it reads the token from
+             * its own process environment — and its control server logs every
+             * request line in plaintext, so forwarding the token over HTTP
+             * would write it to disk. Storing it here means the next dashboard
+             * start inherits it, which is the mechanism upstream already uses.
+             */
+            if (kind === 'github') {
+              const credentials = ctx.get('credentials')
+              if (!credentials || !config.githubTokenEnv) {
+                sendJson(res, 501, { ok: false, error: 'this Harness build cannot store a GitHub token' })
+                return
+              }
+              // Required like every other credential write: the reply carries
+              // this project's readiness, and defaulting the id would report a
+              // project the caller never named.
+              const githubProject = scalar(parsed?.project)
+              if (!githubProject) {
+                sendJson(res, 400, { error: 'project is required' })
+                return
+              }
+              const info = await githubTokenState()
+              if (!info.writable) {
+                // An ambient value (process environment, `.env`) is not ours to
+                // replace; overwriting would silently diverge from its source.
+                sendJson(res, 409, {
+                  ok: false,
+                  error: 'this token comes from the environment and must be changed there',
+                })
+                return
+              }
+              try {
+                await credentials.set(config.githubTokenEnv, secret)
+              } catch (failure) {
+                sendJson(res, 500, {
+                  ok: false,
+                  error: redactText(failure.message, 300) ?? 'the token could not be stored',
+                })
+                return
+              }
+              /*
+               * The running dashboard keeps the environment it was started
+               * with, so a token stored now reaches collection only after a
+               * restart. Saying so is the difference between "saved" and
+               * "working".
+               */
+              sendJson(res, 200, {
+                ok: true,
+                restartRequired: current !== null || adopted,
+                state: await credentialState(githubProject),
+              })
+              return
+            }
+
             const projectId = scalar(parsed?.project)
             if (!projectId) {
               sendJson(res, 400, { error: 'project is required' })
