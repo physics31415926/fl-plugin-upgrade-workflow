@@ -603,17 +603,51 @@ function taskLabel(task) {
 }
 
 /** Reduce one backend row to the fields that decide adaptation progress. */
-function summarizeBackend(backend) {
+function summarizeBackend(backend, head) {
   const pick = value => (value && typeof value === 'object'
     ? { status: value.status ?? null, detail: value.detail ?? null, url: value.url ?? null }
     : null)
   const gate = backend?.gate && typeof backend.gate === 'object' ? backend.gate : null
+  /*
+   * The CI verdict is `ci`, not `current_ci`.
+   *
+   * Upstream reports two different facts. `ci` is the backend's adaptation CI
+   * — the run on its PR, or the accepted/merged-PR run — and is the answer to
+   * "did this backend's adaptation pass CI". `current_ci` is narrower: CI jobs
+   * observed at the *current branch HEAD*, which for an already-merged backend
+   * is almost always "unknown", because nobody reran per-backend jobs on the
+   * branch tip. An earlier version forwarded `current_ci` first, so every
+   * merged backend showed CI "unknown" while its adaptation had in fact
+   * passed.
+   *
+   * This mirrors the dashboard's own `effectiveCi`: take `ci.status`, but
+   * downgrade a branch-scoped pass to `stale` once the branch has moved past
+   * the commit that passed. A merged-PR or accepted pass is not branch-scoped
+   * and stays as reported.
+   */
+  const ci = backend?.ci && typeof backend.ci === 'object' ? backend.ci : null
+  const effectiveCiStatus = ci
+    && ci.status === 'passed'
+    && ci.scope === 'branch'
+    && ci.commit
+    && head
+    && ci.commit !== head
+    ? 'stale'
+    : (ci?.status ?? null)
   return {
     id: backend?.id ?? null,
     label: backend?.label ?? null,
     pr: backend?.pr ? { number: backend.pr.number, state: backend.pr.state, merged: backend.pr.merged, url: backend.pr.url } : null,
     integration: pick(backend?.integration),
-    ci: pick(backend?.current_ci || backend?.ci),
+    ci: ci
+      ? { status: effectiveCiStatus, scope: ci.scope ?? null, detail: ci.detail ?? null, url: ci.url ?? null }
+      : null,
+    // The latest run at the branch tip, kept as a secondary signal. Only
+    // meaningful once the adaptation CI is a merged-PR or accepted pass, which
+    // is exactly when the dashboard surfaces it too.
+    currentCi: backend?.current_ci && backend.current_ci !== backend?.ci
+      ? pick(backend.current_ci)
+      : null,
     acceptance: backend?.acceptance
       ? { status: backend.acceptance.status ?? null, summary: backend.acceptance.summary ?? null, rows_total: backend.acceptance.rows_total ?? 0 }
       : null,
@@ -626,9 +660,10 @@ function summarizeBackend(backend) {
 /** Reduce one branch status to a compact shape; per-case `results` are dropped. */
 function summarizeBranch(status) {
   if (!status || typeof status !== 'object') return status ?? null
+  const head = status.head ?? null
   return {
     branch: status.branch ?? null,
-    head: status.head ?? null,
+    head,
     head_url: status.head_url ?? null,
     engine: status.engine ?? null,
     upstream_version: status.upstream_version ?? null,
@@ -636,7 +671,8 @@ function summarizeBranch(status) {
     branch_ci: status.branch_ci
       ? { status: status.branch_ci.status, detail: status.branch_ci.detail, url: status.branch_ci.url ?? null }
       : null,
-    backends: Array.isArray(status.backends) ? status.backends.map(summarizeBackend) : [],
+    // The stale-pass downgrade needs the branch HEAD, so it is threaded in.
+    backends: Array.isArray(status.backends) ? status.backends.map(backend => summarizeBackend(backend, head)) : [],
     // Upstream `errors[]` is raw git/GitHub diagnostic text and can carry
     // remote and repository detail; `collection.error` is the sanitized,
     // user-facing message. Report only that a diagnostic exists.
