@@ -347,41 +347,39 @@ const cred = over => render(probe.CredentialView, { t, project: { id: 'vllm' } }
   const base = {
     codex: null, claude: null, flagscale: null, machineSource: 'local', jumpserver: null,
   }
-  const absent = cred({ state: { ...base, github: { supported: true, env: 'GITHUB_TOKEN', configured: false, writable: true, source: null } } })
+  const absent = cred({ state: { ...base, github: { supported: true, env: 'GITHUB_TOKEN', configured: false, writable: true, source: null, ambient: false } } })
   const absentInputs = find(absent, 'input').filter(i => i.props.type === 'password')
-  check('a writable github token offers a field', absentInputs.length === 1, 'got ' + absentInputs.length)
+  check('a github token offers a field', absentInputs.length === 1, 'got ' + absentInputs.length)
   check('the anonymous rate limit is explained', /60 per hour/.test(text(absent)))
   check('the token is never sent over HTTP, and says so', /never over HTTP/i.test(text(absent)))
 
-  // An ambient token belongs to its source; the panel must not offer to
-  // overwrite it, only report where it came from.
-  const ambient = cred({ state: { ...base, github: { supported: true, env: 'GITHUB_TOKEN', configured: true, writable: false, source: 'process environment' } } })
-  check('an ambient token offers no field',
-    find(ambient, 'input').filter(i => i.props.type === 'password').length === 0)
-  check('an ambient token names its source', /process environment/.test(text(ambient)))
-  // Nor a replace control: there is nothing here to replace.
-  check('an ambient token offers no replace control', !/Replace/.test(text(ambient)))
-
   /*
-   * The load-bearing case for `writable`, and the one a weaker test missed:
-   * read-only AND unconfigured. With `configured: true` the done-row renders
-   * no input anyway, so dropping the writable guard still passed. Here a
-   * missing guard would render a secret field for a value this plugin cannot
-   * write — the user would type a token into a form that silently cannot save.
+   * An ambient token (the shell exported GITHUB_TOKEN) STILL offers a field.
+   * The credential store always accepts a write and a stored value overrides
+   * the environment, so refusing here was the bug behind "cannot configure".
+   * The field is shown with a note that saving overrides the environment one.
    */
-  const readOnlyEmpty = cred({ state: { ...base, github: { supported: true, env: 'GITHUB_TOKEN', configured: false, writable: false, source: null } } })
-  check('a read-only unconfigured token offers no field',
-    find(readOnlyEmpty, 'input').filter(i => i.props.type === 'password').length === 0,
-    'got ' + find(readOnlyEmpty, 'input').filter(i => i.props.type === 'password').length)
+  const ambient = cred({ state: { ...base, github: { supported: true, env: 'GITHUB_TOKEN', configured: true, writable: true, source: 'env', ambient: true } } })
+  check('an ambient token still offers a field',
+    find(ambient, 'input').filter(i => i.props.type === 'password').length === 1,
+    'got ' + find(ambient, 'input').filter(i => i.props.type === 'password').length)
+  check('an ambient token names its source', /env/.test(text(ambient)))
+  check('an ambient token explains the override', /overrides|takes precedence/i.test(text(ambient)))
+
+  // A token stored in our own managed file shows done, with Replace available.
+  const stored = cred({ state: { ...base, github: { supported: true, env: 'GITHUB_TOKEN', configured: true, writable: true, source: 'file', ambient: false } } })
+  check('a stored token shows done',
+    find(stored, 'input').filter(i => i.props.type === 'password').length === 0)
+  check('a stored token offers replace', /Replace/.test(text(stored)))
 
   // A build without the credential service cannot store one at all.
-  const unsupported = cred({ state: { ...base, github: { supported: false, configured: false, writable: false, source: null } } })
+  const unsupported = cred({ state: { ...base, github: { supported: false, configured: false, writable: false, source: null, ambient: false } } })
   check('an unsupported build offers no token field',
     find(unsupported, 'input').filter(i => i.props.type === 'password').length === 0)
 
   // Saving does not take effect until the dashboard restarts.
   const saved = cred({
-    state: { ...base, github: { supported: true, env: 'GITHUB_TOKEN', configured: true, writable: true, source: 'credential store' } },
+    state: { ...base, github: { supported: true, env: 'GITHUB_TOKEN', configured: true, writable: true, source: 'file', ambient: false } },
     restart: true,
   })
   check('a saved token asks for a restart', /Restart the dashboard/i.test(text(saved)))
