@@ -144,6 +144,44 @@ class PackagingTests(unittest.TestCase):
             # An env NAME is short; a real token is not.
             self.assertLess(len(cleaned), 64, f"{key} value is too long to be a variable name")
 
+    def test_the_install_instructions_name_the_shipped_version(self):
+        """A stale filename in the install example sends users to a 404.
+
+        Both READMEs paste an absolute path with the version in it, and the
+        release asset is named from `package.json`. These drifted apart twice
+        while shipping 0.2.0 and 0.2.1, so the version is checked rather than
+        remembered.
+        """
+        version = json.loads((SOURCE / "package.json").read_text(encoding="utf-8"))["version"]
+        expected = f"local-fl-upgrade-workflow-{version}.tgz"
+        for readme in (REPO / "README.md", SOURCE / "README.md"):
+            text = readme.read_text(encoding="utf-8")
+            examples = re.findall(r"local-fl-upgrade-workflow-[0-9][^\s`'\"]*\.tgz", text)
+            self.assertTrue(examples, f"{readme.name} shows no install example")
+            for found in set(examples):
+                self.assertEqual(found, expected,
+                                 f"{readme.name} still names {found}, but the package is {version}")
+
+    def test_the_readmes_do_not_repeat_withdrawn_claims(self):
+        """Documentation that describes a secret's handling must not go stale.
+
+        Each of these sentences was true when written and became false as the
+        plugin changed. A wrong claim about where a credential is stored, or
+        about whether a field exists, is worse than an awkward one: someone
+        decides whether to paste a token based on it.
+        """
+        withdrawn = {
+            "默认 `false`": "autoStart now defaults on",
+            "只从环境变量读": "the token is collected and stored by the Harness now",
+            "更换请在看板": "replacement happens in the panel now",
+            "只有前两个": "three credentials are collectable now",
+            "Each value goes straight to the dashboard": "the token goes to the Harness store",
+        }
+        for readme in (REPO / "README.md", SOURCE / "README.md"):
+            text = readme.read_text(encoding="utf-8")
+            for claim, why in withdrawn.items():
+                self.assertNotIn(claim, text, f"{readme.name} repeats a withdrawn claim ({why})")
+
 
 if __name__ == "__main__":
     unittest.main()
