@@ -899,19 +899,39 @@ export function apply(ctx, rawConfig) {
   })()
 
   /**
-   * The newest release, cached briefly.
+   * The newest release, cached between checks.
    *
-   * The panel asks on mount, so an uncached check would hit GitHub on every
-   * mount and spend the unauthenticated rate limit on data that changes
-   * perhaps weekly. A failed check is cached too, for less time, so a
-   * disconnected machine is not retried on every render.
+   * Checking is user-initiated, so this is not about saving work the panel
+   * does on its own; it is about what repeated clicking costs. The
+   * unauthenticated GitHub API allows 60 requests an hour per address, shared
+   * with everything else on it, and a release changes perhaps weekly, so an
+   * uncached check would let one impatient minute exhaust the budget and turn
+   * every later check into a rate-limit error.
+   *
+   * A failed check is cached for much less time: the usual cause is a network
+   * that is briefly down, and the user is entitled to retry that soon.
    */
   let releaseCache = null
 
+  /** Cache lifetime for a successful check; a release is not urgent news. */
+  const RELEASE_CACHE_MS = 15 * 60_000
+
+  /** Cache lifetime for a failed check, so a retry is not pointless. */
+  const RELEASE_ERROR_CACHE_MS = 60_000
+
+  /*
+   * Floor between two network checks, however insistently the button is
+   * pressed. `refresh` exists so a click is never answered from a stale cache
+   * — otherwise the control would be a no-op that looks like it worked — but
+   * an unconditional bypass makes the button a manual rate-limit burner. A
+   * second click inside this window is answered from the cache instead.
+   */
+  const RELEASE_MIN_INTERVAL_MS = 30_000
+
   async function latestRelease({ refresh = false } = {}) {
-    const fresh = releaseCache
-      && !refresh
-      && Date.now() - releaseCache.at < (releaseCache.error ? 60_000 : 15 * 60_000)
+    const age = releaseCache ? Date.now() - releaseCache.at : Infinity
+    const ttl = releaseCache?.error ? RELEASE_ERROR_CACHE_MS : RELEASE_CACHE_MS
+    const fresh = releaseCache && (refresh ? age < RELEASE_MIN_INTERVAL_MS : age < ttl)
     if (fresh) return releaseCache.value
 
     let value
