@@ -23,8 +23,17 @@ test('an absent autoStart setting still starts collection', () => {
    * Read the normalizer directly rather than asserting on source text: the
    * question is what an old profile (no such key) resolves to.
    */
-  const body = host.slice(host.indexOf('function normalizeConfig'), host.indexOf('function resolveLaunch'))
-  const sandbox = { resolvePath: p => p, Number, Boolean, String }
+  // Include defaultRepoPath too: normalizeConfig calls it for the repoPath
+  // fallback, and it sits just above in the source.
+  const body = host.slice(host.indexOf('function defaultRepoPath'), host.indexOf('function resolveLaunch'))
+  // normalizeConfig now falls back to defaultRepoPath() when repoPath is unset;
+  // that helper needs join + a DSH_HOME, so both are supplied to the sandbox.
+  const sandbox = {
+    resolvePath: p => p, Number, Boolean, String,
+    join: (...parts) => parts.join('/'),
+    homedir: () => '/home/test',
+    process: { env: { DSH_HOME: '/home/test/.dsh' } },
+  }
   vm.createContext(sandbox)
   vm.runInContext(`${body}\nglobalThis.__out = normalizeConfig`, sandbox)
   const normalize = sandbox.__out

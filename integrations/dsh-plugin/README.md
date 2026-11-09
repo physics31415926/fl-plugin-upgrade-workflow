@@ -14,22 +14,27 @@
 也可以用命令行：
 
 ```
-dsh plugin install /绝对路径/local-fl-upgrade-workflow-0.4.1.tgz
+dsh plugin install /绝对路径/local-fl-upgrade-workflow-0.5.0.tgz
 ```
 
 装过一次之后就不用再手动下载了：面板标题栏会在有新版本时出现一个「更新到 x.y.z」
 按钮，点一下就从 GitHub Releases 拉取并安装（见下面「关于自动更新」）。
 
-安装后必须填 `repoPath`：
+装好即用，不用先手动 clone 看板仓库：
 
 | 配置项 | 说明 |
 | --- | --- |
-| `repoPath` | **必填**，fl-plugin-upgrade-workflow 检出的绝对路径 |
+| `repoPath` | 留空则首次激活时自动 clone 到 `~/.dsh/fl-plugin-upgrade-workflow`；填了就用你指定的检出，且绝不往该目录 clone |
+| `autoClone` | 留空的 `repoPath` 是否自动拉取，默认 `true`；置 `false` 完全手动管理检出 |
 | `port` | 看板监听的回环端口，默认 `8766` |
 | `pythonPath` | 留空则用 PATH 上的 `python`，需要 3.11+ |
 | `projectsConfig` | 留空则依次找 `runs/configured/projects.json`、`projects.json` |
 | `autoStart` | 插件激活时是否自动拉起看板进程，默认 `true`。面板的全部数据都来自这个进程，所以默认让它跟着插件起；置 `false` 则改回手动点「启动」 |
 | `githubTokenEnv` | 读取 GitHub token 的环境变量名，默认 `GITHUB_TOKEN`。这里只填**名字**，不填值 —— 密钥存在 Harness 凭据库里，这个配置项是明文 YAML。置空则完全不碰 token |
+
+自动 clone 走 HTTPS、浅克隆、目标目录写死，只拉本插件自己的看板仓库。需要 PATH 上有
+`git`；拉取时标题栏显示「正在拉取看板…」，失败会说明原因并可改回手动（自己 clone 后
+填 `repoPath`）。
 
 ```
 git clone https://github.com/physics31415926/fl-plugin-upgrade-workflow

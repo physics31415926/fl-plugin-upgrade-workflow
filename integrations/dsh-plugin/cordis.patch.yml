@@ -3,9 +3,15 @@
       name: '@local/fl-upgrade-workflow'
       config:
         # Absolute path to your fl-plugin-upgrade-workflow checkout.
-        # Required: the panel cannot do anything until this points at one.
-        #   git clone https://github.com/physics31415926/fl-plugin-upgrade-workflow
+        #
+        # Leave empty (default) and the plugin clones its own dashboard repo
+        # into ~/.dsh/fl-plugin-upgrade-workflow on first activation — no manual
+        # clone needed. Set this only to point at a checkout you manage; an
+        # explicit path is never cloned into.
         repoPath: ''
+        # Clone the dashboard repo when repoPath is unset and nothing is at the
+        # default directory. Set false to manage the checkout entirely by hand.
+        autoClone: true
         # Loopback port the Python dashboard listens on.
         port: 8766
         # Leave empty to resolve `python` on PATH. Python 3.11+ is required.

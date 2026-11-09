@@ -20,6 +20,7 @@ window.__ModuleLoader__.load({
         stopped: 'Stopped',
         starting: 'Starting',
         stopping: 'Stopping',
+        cloning: 'Fetching the dashboard…',
         notConfigured: 'Not configured',
         openDashboard: 'Open dashboard',
         adopted: 'External',
@@ -268,6 +269,7 @@ window.__ModuleLoader__.load({
         stopped: '已停止',
         starting: '启动中',
         stopping: '停止中',
+        cloning: '正在拉取看板…',
         notConfigured: '尚未配置',
         openDashboard: '打开看板',
         adopted: '外部',
@@ -3717,6 +3719,10 @@ window.__ModuleLoader__.load({
       const configured = Boolean(state && state.configured)
       const adopted = Boolean(state && state.adopted)
       const project = projects.find(row => row.id === selected) || null
+      // A first-run clone of the dashboard is in flight; say so rather than
+      // showing a bare "not configured" while it fetches.
+      const cloning = Boolean(state && state.clone && state.clone.phase === 'cloning')
+      const cloneError = state && state.clone && state.clone.phase === 'error' ? state.clone.error : null
 
       return h('div', { className: 'flup-root' },
         // Component-local stylesheet: unmounting the panel removes it.
@@ -3724,11 +3730,12 @@ window.__ModuleLoader__.load({
         h('div', { className: 'flup-head' },
           h('h2', { className: 'flup-title' }, t.heading),
           h('span', { className: 'flup-spacer' }),
-          h('span', { className: 'flup-state', title: adopted ? t.adoptedHint : undefined },
-            h(Dot, { status: running ? 'online' : (configured ? 'idle' : 'unknown') }),
+          h('span', { className: 'flup-state', title: adopted ? t.adoptedHint : (cloneError || undefined) },
+            h(Dot, { status: running ? 'online' : (cloning ? 'idle' : (configured ? 'idle' : 'unknown')) }),
             busy
               ? (running ? t.stopping : t.starting)
-              : (adopted ? t.adopted : (running ? t.running : (configured ? t.stopped : t.notConfigured))),
+              : (cloning ? t.cloning
+                : (adopted ? t.adopted : (running ? t.running : (configured ? t.stopped : t.notConfigured)))),
           ),
           // Whether collection is delivering, which the process indicator
           // above cannot say: the server answers while a fan-out fails.
