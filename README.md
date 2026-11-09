@@ -4,9 +4,7 @@
 进展：各 backend 的 PR、CI、验收结果、GPU 设备和 agent 任务，都在一个原生面板里，跟随
 主题和语言，不用 iframe。
 
-![双仓库适配进展快照](docs/images/dashboard-demo.jpg)
-
-*适配进展总览（2026-10-15）。在线状态以最新采集结果为准。*
+<!-- 截图待补：Harness 左栏「FL 适配」图标 + 右侧原生面板。旧的独立看板快照已移到 docs/STANDALONE.md。 -->
 
 面板读的是本机一个 Python 看板进程。那个看板也可以单独用浏览器打开，还带局域网只读访问
 和分享链接 —— 见[独立使用](docs/STANDALONE.md)。两种用法共用同一份配置和采集数据。
@@ -27,7 +25,7 @@
 里填刚下载的那个 `.tgz` 的**绝对路径**，然后点**安装**：
 
 ```text
-C:\Users\<你>\Downloads\local-fl-upgrade-workflow-0.4.1.tgz
+C:\Users\<你>\Downloads\local-fl-upgrade-workflow-0.5.0.tgz
 ```
 
 这个输入框是文本框，不是文件选择器，所以路径要自己粘进去（在文件管理器里复制文件路径
@@ -40,7 +38,7 @@ C:\Users\<你>\Downloads\local-fl-upgrade-workflow-0.4.1.tgz
 **或者用命令行**：
 
 ```sh
-dsh plugin install /绝对路径/local-fl-upgrade-workflow-0.4.1.tgz
+dsh plugin install /绝对路径/local-fl-upgrade-workflow-0.5.0.tgz
 ```
 
 **装过一次之后就不用再手动下载了。** 面板标题栏有个「检查更新」按钮，点一下才去问
@@ -65,16 +63,23 @@ python -B scripts/pack_dsh_plugin.py --output-dir dist
 
 ## 配置
 
-安装后必须填 `repoPath`，面板在这之前什么也做不了：
+装好就能用：没配 `repoPath` 时，插件会在首次激活时把自己的看板仓库 clone 到
+`~/.dsh/fl-plugin-upgrade-workflow` 并使用它 —— 不用手动 clone 再粘路径。标题栏在拉取
+时显示「正在拉取看板…」。
 
 | 配置项 | 说明 |
 | --- | --- |
-| `repoPath` | **必填**，本项目检出的绝对路径 |
+| `repoPath` | 留空则自动 clone 到 `~/.dsh/fl-plugin-upgrade-workflow`；填了就用你指定的检出，且**绝不会**往那个目录里 clone |
+| `autoClone` | 留空的 `repoPath` 是否自动拉取，默认 `true`。置 `false` 则完全手动管理检出 |
 | `port` | 看板监听的回环端口，默认 `8766` |
 | `pythonPath` | 留空则用 PATH 上的 `python`，需要 3.11+ |
 | `projectsConfig` | 留空则依次找 `runs/configured/projects.json`、`projects.json` |
 | `autoStart` | 插件激活时是否自动拉起看板进程，默认 `true`。面板的全部数据都来自这个进程，所以默认让它跟着插件起；置 `false` 改回手动 |
 | `githubTokenEnv` | 读取 GitHub token 的环境变量名，默认 `GITHUB_TOKEN`。这里只填**名字**不填值 —— 密钥存在 Harness 凭据库，而插件配置是明文 YAML |
+
+自动 clone 只做本插件自己的看板仓库,是公开只读仓库、走 HTTPS、浅克隆、目标目录写死。
+需要 PATH 上有 `git`;没有 `git` 或 clone 失败时,面板会说明原因,并可改回手动:
+自己 clone 后把路径填进 `repoPath`。
 
 还没有配置过看板也没关系：面板里「在本机部署」是高亮的入口，勾选项目、填检出路径和
 目标分支，它会调用本项目自带的 `configure.py` 和启动器完成配置并启动，不重新实现一套

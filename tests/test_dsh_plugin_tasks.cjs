@@ -160,16 +160,25 @@ test('a github token is stored by the Harness, never sent to the dashboard', () 
 });
 
 test('the token reaches the dashboard only through its environment', () => {
-  const spawn = host.slice(host.indexOf('handle = ctx.subprocess.spawn('), host.indexOf('} catch (error) {', host.indexOf('handle = ctx.subprocess.spawn(')));
-  assert(spawn.includes('githubEnv'), 'passes the resolved token at spawn');
-  assert(spawn.includes('env:'), 'uses the environment channel');
+  // There are two spawns now (the dashboard, and the one-time repo clone); the
+  // token belongs to the dashboard spawn, which is the one carrying githubEnv.
+  const dashSpawn = host.indexOf('const githubEnv = await resolveGithubToken()')
+  assert.notEqual(dashSpawn, -1, 'the dashboard spawn resolves a token')
+  // End at the spawn's own failure handler (the `spawn failed` catch), not the
+  // earlier executable-resolve catch between githubEnv and the spawn.
+  const spawn = host.slice(dashSpawn, host.indexOf('spawn failed', dashSpawn))
+  assert(spawn.includes('githubEnv'), 'passes the resolved token at spawn')
+  assert(spawn.includes('env:'), 'uses the environment channel')
   // Omitted when absent: an empty variable would mask a `gh` login, which
   // upstream prefers over the token.
-  assert(/githubEnv \?/.test(spawn), 'omits the variable when no token is held');
+  assert(/githubEnv \?/.test(spawn), 'omits the variable when no token is held')
+  // The clone spawn must never carry the token.
+  const clone = host.slice(host.indexOf('async function cloneDashboardIfMissing'), host.indexOf('function snapshot'))
+  assert.equal(/githubEnv|GITHUB_TOKEN|env:/.test(clone), false, 'the clone spawn carries no token')
   // The resolver must not retain or log the value.
-  const resolver = host.slice(host.indexOf('async function resolveGithubToken'), host.indexOf('async function githubTokenState'));
-  assert.equal(/console\.|logger\.|writeFile/.test(resolver), false, 'never logs or writes the token');
-});
+  const resolver = host.slice(host.indexOf('async function resolveGithubToken'), host.indexOf('async function githubTokenState'))
+  assert.equal(/console\.|logger\.|writeFile/.test(resolver), false, 'never logs or writes the token')
+})
 
 test('token presence is reported without the value', () => {
   const describe = host.slice(host.indexOf('async function githubTokenState'), host.indexOf('const credentialState'));
@@ -336,16 +345,30 @@ test('a conversation is named after the branch', () => {
   assert(/slice\(0, 200\)/.test(rename), 'bounds the title length');
 });
 
-test('cloning is never performed by the plugin', () => {
-  // Cloning writes to disk and reaches the network, so it stays a command the
-  // user runs. Nothing in the plugin may spawn it.
-  assert.equal(/'clone'|"clone"|git clone['"]/.test(host), false,
-    'the host must not run a clone');
-  // The panel shows the command as copyable text only.
-  assert(/git clone https:\/\/github\.com\//.test(client), 'offers the command');
+test('the only clone is the dashboard repo into the default directory', () => {
+  /*
+   * The plugin clones exactly one thing: its own dashboard repository, and
+   * only into the default directory it owns. The monitored *project* repos
+   * (vllm-plugin-FL, sglang-plugin-FL) are still never cloned — those stay a
+   * command the user runs, shown as copyable text — and an explicit repoPath
+   * is never cloned into.
+   */
+  const clone = host.slice(host.indexOf('async function cloneDashboardIfMissing'), host.indexOf('function snapshot'));
+  assert(/'clone'/.test(clone), 'the dashboard clone exists');
+  // It targets the pinned dashboard URL and the default path, not caller input.
+  assert(/DASHBOARD_REPO_URL, config\.repoPath/.test(clone), 'clones the pinned repo to the default path');
+  // Guarded: off switch, explicit path, and an existing checkout each skip it.
+  assert(/if \(!config\.autoClone\) return/.test(clone), 'honours the off switch');
+  assert(/if \(config\.repoPathExplicit\) return/.test(clone), 'never clones over an explicit path');
+  assert(/scripts', 'flflow\.py'\)\)\) return/.test(clone), 'never re-clones an existing checkout');
+  // The monitored project repos are never cloned by the plugin.
+  assert.equal(/vllm-plugin-FL\.git|sglang-plugin-FL\.git/.test(host), false,
+    'must not clone a monitored project repo');
+  // The panel still shows the project-repo clone command as copyable text only.
+  assert(/git clone https:\/\/github\.com\//.test(client), 'offers the project clone command');
   const spawns = [...client.matchAll(/host\.call\([^)]*\)/g)].map(m => m[0]);
   for (const call of spawns) {
-    assert.equal(/clone/.test(call), false, 'must not ask the host to clone');
+    assert.equal(/clone/.test(call), false, 'the browser never asks the host to clone');
   }
 });
 

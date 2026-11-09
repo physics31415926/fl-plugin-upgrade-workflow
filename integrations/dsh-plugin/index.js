@@ -14,7 +14,7 @@ import { realpath, rm, writeFile } from 'node:fs/promises'
 import { basename, dirname, isAbsolute, join, resolve as resolvePath } from 'node:path'
 import { createServer as createSocketServer } from 'node:net'
 import { createHash } from 'node:crypto'
-import { tmpdir } from 'node:os'
+import { tmpdir, homedir } from 'node:os'
 
 /*
  * Only hard dependencies are injected. `workspaceRegistry` is read through
@@ -154,6 +154,38 @@ const MAX_ASSET_BYTES = 8 * 1024 * 1024
 const RELEASE_TIMEOUT_MS = 20_000
 const DOWNLOAD_TIMEOUT_MS = 120_000
 
+/*
+ * The dashboard repository, for the one-time auto-clone.
+ *
+ * The plugin needs a checkout of its own dashboard (fl-plugin-upgrade-workflow)
+ * to run; requiring the user to clone it by hand and paste the path was a step
+ * people missed. When `repoPath` is unset, the plugin clones this over HTTPS
+ * into a default directory and uses it.
+ *
+ * Pinned, like the release source: the clone becomes code this plugin then
+ * runs, so the URL must not be configurable from a profile setting or a
+ * request. HTTPS so no key is needed for a public read-only clone.
+ */
+const DASHBOARD_REPO_URL = 'https://github.com/physics31415926/fl-plugin-upgrade-workflow.git'
+
+/** How long a clone may take before it is abandoned. */
+const CLONE_TIMEOUT_MS = 180_000
+
+/**
+ * The default checkout directory when `repoPath` is unset.
+ *
+ * Under the Harness home (`$DSH_HOME`, else `~/.dsh`), so the clone sits beside
+ * the profile and credentials it belongs with and is obvious to find or
+ * remove. A single, predictable location also means a second activation finds
+ * the existing clone instead of making another.
+ */
+function defaultRepoPath() {
+  const home = (typeof process.env.DSH_HOME === 'string' && process.env.DSH_HOME.trim())
+    ? process.env.DSH_HOME.trim()
+    : join(homedir(), '.dsh')
+  return join(home, 'fl-plugin-upgrade-workflow')
+}
+
 /**
  * Timeout for upstream reads that block on a cold cache instead of answering
  * from one. `/api/adaptation-tasks` was measured at 40-50 s on a first read
@@ -163,14 +195,25 @@ const SLOW_UPSTREAM_TIMEOUT_MS = 90_000
 
 function normalizeConfig(raw) {
   const value = raw && typeof raw === 'object' ? raw : {}
-  const repoPath = typeof value.repoPath === 'string' && value.repoPath.trim()
+  /*
+   * An explicit repoPath always wins. When it is unset, fall back to the
+   * default checkout directory so the auto-clone has a fixed home and the
+   * launcher looks there. `repoConfigured` (in the snapshot) still reflects
+   * whether the user set one, so the panel can tell "default" from "chosen".
+   */
+  const explicitRepoPath = typeof value.repoPath === 'string' && value.repoPath.trim()
     ? resolvePath(value.repoPath.trim())
     : ''
+  const repoPath = explicitRepoPath || defaultRepoPath()
   const port = Number.isInteger(value.port) && value.port >= 1 && value.port <= 65535
     ? value.port
     : 8766
   return {
     repoPath,
+    // Whether the user set a path, as distinct from falling back to the
+    // default. The auto-clone only ever writes the default directory; an
+    // explicit path is the user's and is never cloned into.
+    repoPathExplicit: Boolean(explicitRepoPath),
     port,
     pythonPath: typeof value.pythonPath === 'string' ? value.pythonPath.trim() : '',
     projectsConfig: typeof value.projectsConfig === 'string' ? value.projectsConfig.trim() : '',
@@ -203,6 +246,16 @@ function normalizeConfig(raw) {
     githubTokenEnv: typeof value.githubTokenEnv === 'string' && value.githubTokenEnv.trim()
       ? value.githubTokenEnv.trim()
       : 'GITHUB_TOKEN',
+    /*
+     * Whether to clone the dashboard repository when it is missing.
+     *
+     * On by default: the plugin needs its own dashboard checkout to run, and
+     * requiring a manual clone was the step people missed. The clone only ever
+     * targets the default directory and only when nothing is there — an
+     * explicit `repoPath`, or an existing checkout, is never touched. Set
+     * false to opt out and manage the checkout by hand.
+     */
+    autoClone: value.autoClone !== false,
   }
 }
 
@@ -852,6 +905,89 @@ export function apply(ctx, rawConfig) {
   let lastError = null
 
   /*
+   * Auto-clone state, surfaced in the snapshot.
+   *
+   * `phase` is one of: idle (nothing to do / a checkout already present),
+   * cloning (a clone is in flight), done (this activation cloned it), error
+   * (the clone failed, with a redacted reason). The panel shows "fetching the
+   * dashboard…" on a first run rather than a bare "not configured".
+   */
+  let cloneState = { phase: 'idle', error: null }
+  const cloneSnapshot = () => ({ phase: cloneState.phase, error: cloneState.error })
+
+  /**
+   * Clone the dashboard repository into the default directory, once.
+   *
+   * Only ever runs when: auto-clone is enabled, the user did not set an
+   * explicit `repoPath` (the default directory is ours to create; a chosen
+   * one is not), and nothing is already at the target. It is a shallow HTTPS
+   * clone of a public repository — no credentials, no history — into a path
+   * fixed in code, so there is nothing a caller can redirect.
+   *
+   * A failure is recorded and swallowed: the panel still loads and the setup
+   * prompt still explains the missing checkout, rather than the plugin failing
+   * to activate.
+   */
+  async function cloneDashboardIfMissing() {
+    if (!config.autoClone) return
+    if (config.repoPathExplicit) return
+    // Already there: a scripts/flflow.py is the marker resolveLaunch uses, so
+    // treat its presence as "a usable checkout exists" and never re-clone.
+    if (existsSync(join(config.repoPath, 'scripts', 'flflow.py'))) return
+    // A non-empty directory that is not a checkout is the user's; do not
+    // clobber it or clone into it.
+    if (existsSync(config.repoPath)) {
+      cloneState = { phase: 'error', error: 'the default directory exists but is not a dashboard checkout' }
+      return
+    }
+
+    let git
+    try {
+      git = await ctx.subprocess.resolveExecutable('git')
+    } catch {
+      cloneState = { phase: 'error', error: 'git was not found on PATH; install Git or set repoPath to a manual checkout' }
+      return
+    }
+
+    cloneState = { phase: 'cloning', error: null }
+    const controller = new AbortController()
+    const timer = setTimeout(() => controller.abort(), CLONE_TIMEOUT_MS)
+    try {
+      const handle = ctx.subprocess.spawn({
+        // Shallow, single-branch, no checkout history: enough to run the
+        // dashboard, fast, and small. The URL and destination are both fixed
+        // constants, never caller input.
+        argv: [git, 'clone', '--depth', '1', DASHBOARD_REPO_URL, config.repoPath],
+        cwd: dirname(config.repoPath),
+        stdio: {
+          stdin: 'ignore',
+          stdout: { maxBytes: OUTPUT_LIMIT },
+          stderr: { maxBytes: OUTPUT_LIMIT },
+        },
+        graceMs: 5_000,
+        signal: controller.signal,
+      })
+      const outcome = await handle.done
+      if (outcome.exitCode === 0 && existsSync(join(config.repoPath, 'scripts', 'flflow.py'))) {
+        cloneState = { phase: 'done', error: null }
+      } else {
+        // git's stderr can name a proxy or a path, so it is redacted.
+        const err = redactText(readOutput(handle), 300)
+        cloneState = { phase: 'error', error: err || `git clone exited with code ${outcome.exitCode ?? 'null'}` }
+      }
+    } catch (failure) {
+      cloneState = {
+        phase: 'error',
+        error: controller.signal.aborted
+          ? 'the clone timed out'
+          : (redactText(failure?.message, 300) ?? 'the clone failed'),
+      }
+    } finally {
+      clearTimeout(timer)
+    }
+  }
+
+  /*
    * The dashboard's own stdout and stderr, as diagnostics for a failed start.
    *
    * Redacted, because this is the least predictable text the plugin forwards.
@@ -1158,15 +1294,19 @@ export function apply(ctx, rawConfig) {
     return {
       port: config.port,
       /*
-       * Whether a checkout is configured, never where it is.
+       * Whether a usable checkout is present, never where it is.
        *
-       * The panel only ever needs the boolean: it decides whether to show the
-       * setup prompt. Sending the path put an absolute filesystem path — and
-       * the account name inside it — into every browser payload, which is
-       * exactly what this plugin says it does not do. `expected` is dropped
-       * for the same reason; the panel names the file, not its location.
+       * `config.repoPath` is always set now (an explicit path or the default
+       * clone target), so the useful boolean is whether a checkout actually
+       * exists on disk — that is what decides the setup prompt. The path, and
+       * the account name inside it, never leave the Host.
        */
-      repoConfigured: Boolean(config.repoPath),
+      repoConfigured: Boolean(config.repoPath) && existsSync(config.repoPath),
+      // Whether the user chose the path, versus the default clone location.
+      repoPathExplicit: config.repoPathExplicit,
+      // Clone progress, so the panel can show "fetching the dashboard…" on a
+      // first run instead of a bare "not configured".
+      clone: cloneSnapshot(),
       configured: launch.configured === true,
       configReason: launch.configured ? null : (launch.reason ?? 'unknown'),
       launchSource: launch.source ?? null,
@@ -3173,9 +3313,28 @@ export function apply(ctx, rawConfig) {
     }
   })
 
-  if (config.autoStart) {
-    start().catch(() => {
-      // A failed autostart is reported through `state`, not thrown at load.
+  /*
+   * On activation: clone the dashboard if it is missing, then autostart.
+   *
+   * The clone must finish before the start, or `start()` would look for a
+   * checkout that is not there yet. Both are best-effort — a clone or start
+   * failure is reported through `state`, never thrown at load — so the panel
+   * always comes up and can explain what went wrong.
+   *
+   * Sequenced in one chain rather than awaited at the top level, because
+   * `apply` is synchronous: the Loader does not wait on it, and blocking it on
+   * a network clone would stall activation.
+   */
+  cloneDashboardIfMissing()
+    .catch(() => {
+      // Already recorded in cloneState; nothing more to do.
     })
-  }
+    .then(() => {
+      if (config.autoStart) {
+        return start().catch(() => {
+          // A failed autostart is reported through `state`, not thrown at load.
+        })
+      }
+      return undefined
+    })
 }
