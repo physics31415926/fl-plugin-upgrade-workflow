@@ -254,6 +254,16 @@ const cred = over => render(probe.CredentialView, { t, project: { id: 'vllm' } }
   // the user to wonder where to type it.
   check('ssh keys are explained as never entered', /never entered here/i.test(body))
   check('the missing dashboard auth is disclosed', /no authentication of its own/i.test(body))
+  /*
+   * The intro must not claim every secret goes to the dashboard's store. It
+   * said exactly that until the GitHub token arrived, which the Harness stores
+   * instead — a sentence that was true when written and silently became a
+   * false security claim.
+   */
+  check('the intro does not promise one single store',
+    !/Each value goes straight to the dashboard/i.test(body))
+  check('the intro names the Harness store for the token',
+    /Harness credential service/i.test(body))
   const inputs = find(tree, 'input').filter(i => i.props.type === 'password')
   check('exactly two secret fields are offered', inputs.length === 2, 'got ' + inputs.length)
   check('secret fields disable autofill', inputs.every(i => i.props.autoComplete === 'off'))
