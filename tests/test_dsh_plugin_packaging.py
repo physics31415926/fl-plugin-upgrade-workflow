@@ -153,10 +153,10 @@ class PackagingTests(unittest.TestCase):
         remembered.
         """
         version = json.loads((SOURCE / "package.json").read_text(encoding="utf-8"))["version"]
-        expected = f"local-fl-upgrade-workflow-{version}.tgz"
+        expected = f"physics31415926-fl-upgrade-workflow-{version}.tgz"
         for readme in (REPO / "README.md", SOURCE / "README.md"):
             text = readme.read_text(encoding="utf-8")
-            examples = re.findall(r"local-fl-upgrade-workflow-[0-9][^\s`'\"]*\.tgz", text)
+            examples = re.findall(r"physics31415926-fl-upgrade-workflow-[0-9][^\s`'\"]*\.tgz", text)
             self.assertTrue(examples, f"{readme.name} shows no install example")
             for found in set(examples):
                 self.assertEqual(found, expected,

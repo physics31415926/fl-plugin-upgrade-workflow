@@ -98,7 +98,7 @@ class DocLinkTests(unittest.TestCase):
                 f"{name}: stale artifact name",
             )
             if "dsh plugin install" in text:
-                self.assertIn("local-fl-upgrade-workflow", text, f"{name}: names the real asset")
+                self.assertIn("physics31415926-fl-upgrade-workflow", text, f"{name}: names the real asset")
 
     def test_standalone_doc_is_self_contained(self) -> None:
         """Someone who never installs Harness must be able to start from it alone."""

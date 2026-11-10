@@ -87,8 +87,8 @@ test('a prerelease never looks newer than its own release', () => {
 });
 
 const asset = (over = {}) => ({
-  name: 'local-fl-upgrade-workflow-0.2.0.tgz',
-  browser_download_url: 'https://github.com/physics31415926/fl-plugin-upgrade-workflow/releases/download/dsh-plugin-v0.2.0/local-fl-upgrade-workflow-0.2.0.tgz',
+  name: 'physics31415926-fl-upgrade-workflow-0.2.0.tgz',
+  browser_download_url: 'https://github.com/physics31415926/fl-plugin-upgrade-workflow/releases/download/dsh-plugin-v0.2.0/physics31415926-fl-upgrade-workflow-0.2.0.tgz',
   size: 76605,
   digest: `sha256:${'a'.repeat(64)}`,
   ...over,
@@ -126,8 +126,8 @@ test('an asset served from anywhere but a GitHub release host is refused', () =>
   // The URL comes from a network response and becomes an install source, so a
   // repointed host must yield no release at all rather than be downloaded.
   for (const url of [
-    'https://evil.example/local-fl-upgrade-workflow-0.2.0.tgz',
-    'http://github.com/x/y/releases/download/t/local-fl-upgrade-workflow-0.2.0.tgz',
+    'https://evil.example/physics31415926-fl-upgrade-workflow-0.2.0.tgz',
+    'http://github.com/x/y/releases/download/t/physics31415926-fl-upgrade-workflow-0.2.0.tgz',
     'https://github.com.evil.example/x.tgz',
     'not-a-url',
   ]) {
@@ -135,7 +135,7 @@ test('an asset served from anywhere but a GitHub release host is refused', () =>
   }
   // The advertised asset host is `github.com` and nothing else: the CDN name
   // only ever appears as the redirect target, checked separately below.
-  const url = 'https://github.com/path/local-fl-upgrade-workflow-0.2.0.tgz';
+  const url = 'https://github.com/path/physics31415926-fl-upgrade-workflow-0.2.0.tgz';
   assert.equal(selectRelease([release({ assets: [asset({ browser_download_url: url })] })]).url, url);
   assert.equal(selectRelease([release({ assets: [asset({ browser_download_url: 'https://objects.githubusercontent.com/x.tgz' })] })]), null);
 });
