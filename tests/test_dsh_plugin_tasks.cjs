@@ -281,7 +281,7 @@ test('a project repository is detected, never typed in', () => {
   // A relative repo path is relative to the config that named it.
   assert(/isAbsolute/.test(resolver), 'resolves a relative path correctly');
 
-  const adopt = route('adopt-repo', 'workspaces');
+  const adopt = route('adopt-repo', 'clone-repo');
   // Accepting a path from the browser would make this a way to register an
   // arbitrary directory.
   assert.equal(/parsed\??\.(path|dir|repo|worktree)/.test(adopt), false,
@@ -289,9 +289,37 @@ test('a project repository is detected, never typed in', () => {
   assert(/resolveProjectRepo\(config, projectId\)/.test(adopt), 'derives the path');
   // Registration only: the directory must already exist.
   assert(/not on disk yet/.test(adopt), 'refuses a missing directory');
+  // Checked against code, not prose: the next route's doc comment legitimately
+  // describes cloning, which this route must not do.
   for (const verb of ['mkdir', 'clone', 'rmdir', 'unlink', 'rename']) {
-    assert.equal(adopt.includes(verb), false, 'must not ' + verb);
+    assert.equal(code(adopt).includes(verb), false, 'must not ' + verb);
   }
+});
+
+test('cloning a project repo takes both endpoints from config, never the body', () => {
+  const clone = route('clone-repo', 'workspaces');
+  // The request names a project and nothing else: no URL, path or ref to
+  // redirect the clone at.
+  assert.equal(/parsed\??\.(path|dir|repo|url|branch|ref)/.test(clone), false,
+    'must not read a path, URL or ref from the body');
+  // Destination from the configured monitor `repo`; source from github_repo.
+  assert(/resolveProjectRepo\(config, projectId\)/.test(clone), 'derives the destination');
+  assert(/resolved\.path/.test(clone), 'clones to the configured path');
+  assert(/https:\/\/github\.com\/\$\{resolved\.githubRepo\}\.git/.test(clone),
+    'clones from the configured GitHub repo over HTTPS');
+  // The repo slug is validated before it is spliced into a URL, and a missing
+  // one means no clone rather than a guessed source.
+  assert(/\^\[\\w\.-\]\+\\\/\[\\w\.-\]\+\$/.test(clone), 'validates the repo slug');
+  assert(/no GitHub repository configured/.test(clone), 'refuses an unconfigured source');
+  // Never overwrites an existing checkout.
+  assert(/if \(existsSync\(resolved\.path\)\) \{/.test(clone), 'refuses an existing directory');
+  // Bounded, and git output redacted (it can name a proxy or a path).
+  assert(/CLONE_TIMEOUT_MS/.test(clone), 'the clone is time-bounded');
+  assert(/redactText\(readOutput\(handle\), 300\)/.test(clone), 'redacts git output');
+  // Only the directory name goes back, never the path.
+  const reply = clone.slice(clone.indexOf('name: basename(resolved.path)'))
+  assert(reply.length > 0, 'reports the directory name')
+  assert.equal(/path: resolved\.path/.test(clone), false, 'never returns the path');
 });
 
 test('a project workspace is named without its branch', () => {
@@ -345,13 +373,15 @@ test('a conversation is named after the branch', () => {
   assert(/slice\(0, 200\)/.test(rename), 'bounds the title length');
 });
 
-test('the only clone is the dashboard repo into the default directory', () => {
+test('the dashboard clone is automatic, the project clone is user-initiated', () => {
   /*
-   * The plugin clones exactly one thing: its own dashboard repository, and
-   * only into the default directory it owns. The monitored *project* repos
-   * (vllm-plugin-FL, sglang-plugin-FL) are still never cloned — those stay a
-   * command the user runs, shown as copyable text — and an explicit repoPath
-   * is never cloned into.
+   * Two different clones, with different triggers.
+   *
+   * The dashboard repo is cloned automatically on activation, because the
+   * plugin needs it to run and its URL and destination are pinned constants.
+   * A monitored project repo is cloned only when the user clicks, into the
+   * path the dashboard config already names, from the configured GitHub repo —
+   * both endpoints from config, never from the request.
    */
   const clone = host.slice(host.indexOf('async function cloneDashboardIfMissing'), host.indexOf('function snapshot'));
   assert(/'clone'/.test(clone), 'the dashboard clone exists');
@@ -361,16 +391,22 @@ test('the only clone is the dashboard repo into the default directory', () => {
   assert(/if \(!config\.autoClone\) return/.test(clone), 'honours the off switch');
   assert(/if \(config\.repoPathExplicit\) return/.test(clone), 'never clones over an explicit path');
   assert(/scripts', 'flflow\.py'\)\)\) return/.test(clone), 'never re-clones an existing checkout');
-  // The monitored project repos are never cloned by the plugin.
-  assert.equal(/vllm-plugin-FL\.git|sglang-plugin-FL\.git/.test(host), false,
-    'must not clone a monitored project repo');
-  // The panel still shows the project-repo clone command as copyable text only.
-  assert(/git clone https:\/\/github\.com\//.test(client), 'offers the project clone command');
-  const spawns = [...client.matchAll(/host\.call\([^)]*\)/g)].map(m => m[0]);
-  for (const call of spawns) {
-    assert.equal(/clone/.test(call), false, 'the browser never asks the host to clone');
+
+  // The project clone is a POST route the browser triggers, not an automatic
+  // one: it appears in the route table, never in the activation chain.
+  assert(/action === 'clone-repo'/.test(host), 'a clone-repo route exists')
+  const activation = host.slice(host.indexOf('cloneDashboardIfMissing()\n'))
+  assert.equal(/clone-repo/.test(activation), false, 'the project clone never runs on activation')
+  // The panel still shows the command as text too, for a manual clone.
+  assert(/git clone https:\/\/github\.com\//.test(client), 'offers the project clone command')
+  // The browser asks only by project id: no path or URL crosses the boundary.
+  const calls = [...client.matchAll(/clone-repo`[\s\S]{0,200}?\)/g)].map(m => m[0])
+  assert(calls.length > 0, 'the client calls clone-repo')
+  for (const call of calls) {
+    assert.equal(/(path|url|dir|repo)\s*:/.test(call), false, 'the request carries no path or URL')
+    assert(/project: project\.id/.test(call), 'the request carries the project id')
   }
-});
+})
 
 test('a repository path never reaches the browser', () => {
   const repos = route('repos', 'adopt-repo');

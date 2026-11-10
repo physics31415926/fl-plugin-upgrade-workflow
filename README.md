@@ -18,7 +18,7 @@
 命令行等价写法：
 
 ```sh
-dsh plugin install /绝对路径/local-fl-upgrade-workflow-0.5.0.tgz
+dsh plugin install /绝对路径/local-fl-upgrade-workflow-0.6.0.tgz
 ```
 
 **装好即用，不用先手动 clone 看板仓库。** `repoPath` 留空时，插件首次激活会把看板仓库
@@ -42,9 +42,6 @@ dsh plugin install /绝对路径/local-fl-upgrade-workflow-0.5.0.tgz
 还没配过看板也行：面板里「在本机部署」勾选项目、填分支，它会调用仓库自带的 `configure.py`
 完成配置并启动。看板已在运行（含你自己在终端起的）时，插件会识别并接管显示。
 
-要监控的插件仓库需自行 clone 到本地：[vLLM-Plugin-FL](https://github.com/flagos-ai/vllm-plugin-FL)、
-[SGLang-Plugin-FL](https://github.com/flagos-ai/sglang-plugin-FL)。
-
 ## 面板能做什么
 
 - **进展**：项目/分支切换，后端视图（合入、CI、验收、门禁），任务视图
@@ -52,9 +49,28 @@ dsh plugin install /绝对路径/local-fl-upgrade-workflow-0.5.0.tgz
 - **任务**：详情页看计划、消息、进展和对话，并可发送后续消息；新建任务可选分支下拉、
   provider（codex / claude / flagscale）、就地补远端工作目录。新建**只准备不启动** ——
   启动会烧额度、在远端执行命令，留在看板里做
-- **仓库**：一键把项目检出加入 Harness 工作区并开一个带上下文的对话
+- **仓库**：自动识别项目检出、一键加入 Harness 工作区并开一个带上下文的对话。检出不在本地时，
+  面板里一键 clone —— 目标路径和仓库源都取看板已有配置，不用手打
 - **凭据**：Claude / JumpServer / GitHub 可在面板里填，已配置的可「更换」
 - **采集状态小标 / 检查更新**：标题栏里，分别反映采集是否在出数据、以及有无新版本
+
+要监控的插件仓库（[vLLM-Plugin-FL](https://github.com/flagos-ai/vllm-plugin-FL)、
+[SGLang-Plugin-FL](https://github.com/flagos-ai/sglang-plugin-FL)）不需要预先 clone：
+面板检测到缺失时会给出「立即克隆」按钮。
+
+### FlagScale Agent 预设（可选）
+
+想让 agent 带 FlagScale-Agent 的工作流和知识库，跑一条命令即可 —— 缺检出就 clone，
+已有就 fast-forward 拉取，然后链接技能并重建知识索引：
+
+```sh
+python scripts/setup_flagscale_agent.py              # clone 或 pull，然后同步
+python scripts/setup_flagscale_agent.py --install-schedule   # 顺带注册每日自动更新
+```
+
+默认 checkout 在 `~/.dsh/FlagScale-Agent`，技能根 `~/.dsh/flagscale-preset/skills`
+（preset 的 `customSkillDirs` 要指向它）。检出有未提交改动时拒绝拉取；只做
+fast-forward；技能根里的真实目录绝不删除。
 
 ## 安全边界（摘要）
 

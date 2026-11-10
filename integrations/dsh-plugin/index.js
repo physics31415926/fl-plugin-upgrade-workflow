@@ -2482,6 +2482,105 @@ export function apply(ctx, rawConfig) {
         }
 
         /*
+         * Clone one monitored project's repository into place.
+         *
+         * The panel already detects whether the checkout exists and shows the
+         * clone command to copy. This runs that same clone on the user's click,
+         * because it was the step people missed.
+         *
+         * Both endpoints come from the dashboard's own config, never from the
+         * request: the destination is the `repo` path the branch-monitor config
+         * already names (resolved against that config), and the source is the
+         * configured `github_repo`. So there is nothing a caller can redirect —
+         * no URL, no path, no ref. The request names only a project id.
+         *
+         * Refused when the destination already exists: this never overwrites a
+         * checkout, and a half-finished directory is the user's to resolve.
+         */
+        if (req.method === 'POST' && action === 'clone-repo') {
+          const raw = await readBody(req)
+          let parsed = {}
+          if (raw.trim()) {
+            try {
+              parsed = JSON.parse(raw)
+            } catch {
+              sendJson(res, 400, { error: 'body must be JSON' })
+              return
+            }
+          }
+          const projectId = scalar(parsed?.project)
+          if (!projectId) {
+            sendJson(res, 400, { error: 'project is required' })
+            return
+          }
+          const resolved = resolveProjectRepo(config, projectId)
+          if (!resolved) {
+            sendJson(res, 404, { error: 'this project has no repository configured' })
+            return
+          }
+          if (existsSync(resolved.path)) {
+            // Already there is a success for the caller's purpose, not an error:
+            // the panel's next read will show it as present.
+            sendJson(res, 200, { ok: true, alreadyPresent: true })
+            return
+          }
+          // Without a configured GitHub repo there is nothing to clone from,
+          // and guessing one would be inventing a source.
+          if (!resolved.githubRepo || !/^[\w.-]+\/[\w.-]+$/.test(resolved.githubRepo)) {
+            sendJson(res, 409, { error: 'this project has no GitHub repository configured to clone from' })
+            return
+          }
+
+          let git
+          try {
+            git = await ctx.subprocess.resolveExecutable('git')
+          } catch {
+            sendJson(res, 409, { error: 'git was not found on PATH' })
+            return
+          }
+
+          // HTTPS, public read: no credential is involved or stored.
+          const url = `https://github.com/${resolved.githubRepo}.git`
+          const controller = new AbortController()
+          const timer = setTimeout(() => controller.abort(), CLONE_TIMEOUT_MS)
+          let failureText = null
+          try {
+            const handle = ctx.subprocess.spawn({
+              argv: [git, 'clone', url, resolved.path],
+              // The parent of the destination, which exists: the target itself
+              // must not be created by the clone's cwd.
+              cwd: dirname(resolved.path),
+              stdio: {
+                stdin: 'ignore',
+                stdout: { maxBytes: OUTPUT_LIMIT },
+                stderr: { maxBytes: OUTPUT_LIMIT },
+              },
+              graceMs: 5_000,
+              signal: controller.signal,
+            })
+            const outcome = await handle.done
+            if (outcome.exitCode !== 0) failureText = redactText(readOutput(handle), 300)
+          } catch (failure) {
+            failureText = controller.signal.aborted
+              ? 'the clone timed out'
+              : (redactText(failure?.message, 300) ?? 'the clone failed')
+          } finally {
+            clearTimeout(timer)
+          }
+
+          if (existsSync(resolved.path) && !failureText) {
+            // Only the directory name goes back, never the path.
+            sendJson(res, 200, { ok: true, name: basename(resolved.path) })
+            return
+          }
+          sendJson(res, 502, {
+            ok: false,
+            error: failureText ?? 'the clone did not produce a checkout',
+          })
+          return
+        }
+
+        /*
          * Which tasks already have a Harness workspace.
          *
          * The browser never sends or receives a filesystem path: it names a

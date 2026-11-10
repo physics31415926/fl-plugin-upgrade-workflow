@@ -181,7 +181,10 @@ window.__ModuleLoader__.load({
         repoTitle: 'Project repository',
         repoUnknown: 'This project has no repository recorded in the dashboard config, so there is nothing to detect.',
         repoMissing: 'The configured checkout is not on disk yet.',
-        repoCloneHint: 'Clone it next to the dashboard checkout. Run this yourself so nothing reaches the network without you asking:',
+        repoCloneHint: 'It clones into the path the dashboard already configured for this project, from its configured GitHub repository.',
+        repoClone: 'Clone it now',
+        repoCloning: 'Cloning',
+        repoCloneFailed: 'the clone failed',
         repoAdopted: 'In the sidebar.',
         repoNotAdopted: 'Detected on disk, not in the sidebar yet.',
         repoAdopt: 'Add to sidebar',
@@ -429,7 +432,10 @@ window.__ModuleLoader__.load({
         repoTitle: '项目仓库',
         repoUnknown: '看板配置里没有记录这个项目的仓库，所以无法自动识别。',
         repoMissing: '配置里的仓库目录还不在本地。',
-        repoCloneHint: '请克隆到看板仓库旁边。这条命令由你自己执行，这样不会在你没要求的情况下访问网络：',
+        repoCloneHint: '会克隆到看板已为该项目的配置指定的路径，源是它的 GitHub 仓库配置。',
+        repoClone: '立即克隆',
+        repoCloning: '克隆中',
+        repoCloneFailed: '克隆失败',
         repoAdopted: '已在左侧列表中。',
         repoNotAdopted: '已在本地识别到，但还没加入左侧列表。',
         repoAdopt: '加入左侧列表',
@@ -2709,6 +2715,13 @@ window.__ModuleLoader__.load({
       const [repo, setRepo] = useCached(scope, 'repo', null)
       const [busy, setBusy] = React.useState(false)
       const [error, setError] = useCached(scope, 'error', null)
+      /*
+       * Clone-in-flight, kept separate from `busy` because a clone outlasts a
+       * normal action (it is a network fetch) and the button should say so.
+       * Not cached: a stale "cloning" restored on a later visit would claim
+       * work that is not happening.
+       */
+      const [cloning, setCloning] = React.useState(false)
 
       const load = React.useCallback(async () => {
         try {
@@ -2737,6 +2750,32 @@ window.__ModuleLoader__.load({
           setError(String(failure.message))
         } finally {
           setBusy(false)
+        }
+      }
+
+      /**
+       * Clone the project's repository, then re-read so the card flips to
+       * "present". The request carries only the project id — the Host takes
+       * both the source and the destination from the dashboard's own config.
+       */
+      const cloneRepo = async () => {
+        setCloning(true)
+        setError(null)
+        try {
+          const body = await callJson(`${BASE}clone-repo`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ project: project.id }),
+          })
+          if (body && body.ok === false) {
+            setError(String(body.error || t.repoCloneFailed))
+            return
+          }
+          await load()
+        } catch (failure) {
+          setError(String(failure.message))
+        } finally {
+          setCloning(false)
         }
       }
 
@@ -2803,7 +2842,23 @@ window.__ModuleLoader__.load({
           ? h('div', null,
             h('p', { className: 'flup-warn' }, `⚠ ${t.repoMissing}`),
             h('p', { className: 'flup-meta' }, t.repoCloneHint),
-            h('code', { className: 'flup-code' },
+            // One click runs the clone. Both endpoints come from the
+            // dashboard's config, so the button carries no path or URL.
+            repo.remote
+              ? h('div', { className: 'flup-line flup-mt2' },
+                h('button', {
+                  className: 'flup-btn flup-btn-sm flup-btn-accent',
+                  type: 'button',
+                  disabled: busy || cloning,
+                  onClick: cloneRepo,
+                }, cloning ? h(Pending, { label: t.repoCloning }) : t.repoClone),
+                h('span', { className: 'flup-meta' }, repo.name),
+              )
+              // No configured source means no clone; the command stays visible
+              // so the user can still do it, but the button is withheld rather
+              // than guessing a repository.
+              : null,
+            h('code', { className: 'flup-code flup-mt2' },
               `git clone https://github.com/${repo.remote || 'OWNER/REPO'}.git ${repo.name}`),
           )
           : repo.adopted
