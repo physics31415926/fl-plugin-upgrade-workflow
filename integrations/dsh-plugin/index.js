@@ -349,6 +349,9 @@ function readProjectsFromDisk(config) {
           id: p.id,
           label: typeof p.label === 'string' && p.label ? p.label : p.id,
           engine: typeof p.engine === 'string' ? p.engine : null,
+          // Preserved for resolveProjectRepo, which follows this reference to
+          // find the checkout path. Stripping it was what made detection fail.
+          monitor_config: typeof p.monitor_config === 'string' ? p.monitor_config : null,
         }))
       if (projects.length) return { projects, source: file }
     } catch {
@@ -1570,22 +1573,32 @@ export function apply(ctx, rawConfig) {
   function deployPreflight() {
     const checks = []
     const repoOk = Boolean(config.repoPath) && existsSync(config.repoPath)
-    // The directory's own name is enough to recognise the checkout; the path
-    // to it is not the browser's business.
     checks.push({ id: 'repo', ok: repoOk, detail: repoOk ? basename(config.repoPath) : null })
     const entry = repoOk ? join(config.repoPath, 'scripts', 'configure.py') : ''
     checks.push({ id: 'configure-script', ok: Boolean(entry) && existsSync(entry) })
     const launch = resolveLaunch(config)
     checks.push({ id: 'configured', ok: launch.configured === true, detail: launch.configured ? launch.source : launch.reason })
-    return {
-      ready: checks.every(check => check.ok),
-      checks,
-      // Projects the wizard can configure, with the inputs each one needs.
-      projects: [
-        { id: 'vllm', label: 'vLLM-Plugin-FL', repo: 'https://github.com/flagos-ai/vllm-plugin-FL' },
-        { id: 'sglang', label: 'SGLang-Plugin-FL', repo: 'https://github.com/flagos-ai/sglang-plugin-FL' },
-      ],
-    }
+
+    /*
+     * Per-project detection: whether the branch-monitor config already names a
+     * checkout and whether that checkout is on disk. If it is, the deploy form
+     * can skip the path input and use it automatically.
+     */
+    const projects = [
+      { id: 'vllm', label: 'vLLM-Plugin-FL', repo: 'https://github.com/flagos-ai/vllm-plugin-FL' },
+      { id: 'sglang', label: 'SGLang-Plugin-FL', repo: 'https://github.com/flagos-ai/sglang-plugin-FL' },
+    ].map(project => {
+      const resolved = repoOk ? resolveProjectRepo(config, project.id) : null
+      const detected = resolved !== null && existsSync(resolved.path)
+      return {
+        ...project,
+        detected,
+        // Only the directory name goes to the browser; the path stays on the Host.
+        detectedName: detected ? basename(resolved.path) : null,
+      }
+    })
+
+    return { ready: checks.every(check => check.ok), checks, projects }
   }
 
   /**
@@ -1676,9 +1689,23 @@ export function apply(ctx, rawConfig) {
       if (id !== 'vllm' && id !== 'sglang') {
         return { ok: false, error: `unsupported project id: ${String(entry?.id)}`, state: snapshot() }
       }
-      const repo = scalar(entry?.repoPath)
-      if (!repo) return { ok: false, error: `${id}: a plugin checkout path is required`, state: snapshot() }
-      if (!existsSync(repo)) return { ok: false, error: `${id}: that path does not exist: ${repo}`, state: snapshot() }
+      /*
+       * Path resolution: when the client sends `useDetected: true` the host
+       * reads the path from the dashboard's own config (the branch-monitor
+       * `repo` field), so the browser never needs to send a path at all.
+       * When a path is supplied explicitly it is validated as before.
+       */
+      let repo
+      if (entry?.useDetected === true) {
+        const resolved = resolveProjectRepo(config, id)
+        if (!resolved) return { ok: false, error: `${id}: no repository path found in the dashboard config`, state: snapshot() }
+        if (!existsSync(resolved.path)) return { ok: false, error: `${id}: the configured checkout is not on disk`, state: snapshot() }
+        repo = resolved.path
+      } else {
+        repo = scalar(entry?.repoPath)
+        if (!repo) return { ok: false, error: `${id}: a plugin checkout path is required`, state: snapshot() }
+        if (!existsSync(repo)) return { ok: false, error: `${id}: that path does not exist: ${repo}`, state: snapshot() }
+      }
       const branch = scalar(entry?.branch)
       if (!branch) return { ok: false, error: `${id}: a target branch is required`, state: snapshot() }
       const remote = scalar(entry?.remote) || 'origin'
@@ -2178,6 +2205,58 @@ export function apply(ctx, rawConfig) {
         }
         if (req.method === 'GET' && action === 'deploy-preflight') {
           sendJson(res, 200, deployPreflight())
+          return
+        }
+
+        /*
+         * Local branch list for a project's detected checkout.
+         *
+         * Returns remote-tracking branches (git branch -r), trimmed and
+         * sorted, with the common `origin/` prefix stripped so the names
+         * match what `--branch` expects. Never returns the checkout path.
+         */
+        if (req.method === 'GET' && action === 'project-branches') {
+          const projectId = scalar(url.searchParams.get('project'))
+          if (!projectId) {
+            sendJson(res, 400, { error: 'project is required' })
+            return
+          }
+          const resolved = resolveProjectRepo(config, projectId)
+          if (!resolved || !existsSync(resolved.path)) {
+            sendJson(res, 200, { branches: [] })
+            return
+          }
+          let git
+          try { git = await ctx.subprocess.resolveExecutable('git') } catch {
+            sendJson(res, 200, { branches: [] })
+            return
+          }
+          try {
+            const handle = ctx.subprocess.spawn({
+              argv: [git, 'branch', '-r', '--format=%(refname:short)'],
+              cwd: resolved.path,
+              stdio: { stdin: 'ignore', stdout: { maxBytes: 128 * 1024 }, stderr: { maxBytes: 4096 } },
+              graceMs: 3_000,
+            })
+            const outcome = await handle.done
+            if (outcome.exitCode !== 0) {
+              sendJson(res, 200, { branches: [] })
+              return
+            }
+            const raw = readOutput(handle)
+            const branches = raw.split('\n')
+              .map(l => l.trim())
+              .filter(Boolean)
+              .filter(l => !l.includes('HEAD'))
+              // Strip the leading remote prefix (e.g. "origin/") so the name
+              // is what --branch and git checkout expect.
+              .map(l => l.replace(/^[^/]+\//, ''))
+              .filter((v, i, a) => a.indexOf(v) === i)
+              .sort()
+            sendJson(res, 200, { branches })
+          } catch {
+            sendJson(res, 200, { branches: [] })
+          }
           return
         }
 

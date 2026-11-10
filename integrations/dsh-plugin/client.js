@@ -101,13 +101,17 @@ window.__ModuleLoader__.load({
         deployWhereConfig: 'Clone it, then set repoPath to its absolute path: Plugins → FL adaptation workbench → configure. Reopen this panel afterwards.',
         deployNeedScript: 'The configured directory is not an fl-plugin-upgrade-workflow checkout: it has no scripts/configure.py.',
         deployFoundDir: 'Configured directory',
-        deployPickProjects: 'Choose the projects to track, and give each one a local plugin checkout and target branch.',
+        deployPickProjects: 'Choose the projects to track. A detected checkout is used automatically; for one not on disk, type its path.',
+        deployDetected: 'detected',
+        deployNotDetected: 'not on disk',
+        deployUsingDetected: 'Using checkout',
+        deployBranchPlaceholder: 'Select a branch',
+        deployHint: 'Requires Python 3.11+ and Git.',
         deployRepoPath: 'Plugin checkout path',
         deployRemote: 'Remote',
         deployBranch: 'Target branch',
         deployRun: 'Configure and start',
         deployRunning: 'Configuring…',
-        deployHint: 'Requires Python 3.11+ and Git. Clone the plugin repository first:',
         deployDone: 'Configured. The dashboard is starting.',
         deployAlready: 'Already configured.',
         reqRepo: 'Repository',
@@ -356,13 +360,17 @@ window.__ModuleLoader__.load({
         deployWhereConfig: '先 clone 下来，再把 repoPath 填成它的绝对路径：插件 → FL 适配工作台 → 配置。填完重新打开本面板。',
         deployNeedScript: '配置的目录不是 fl-plugin-upgrade-workflow 的检出：里面没有 scripts/configure.py。',
         deployFoundDir: '当前配置的目录',
-        deployPickProjects: '选择需要跟踪的项目，并为每个项目填写本地插件检出路径和目标分支。',
+        deployPickProjects: '选择需要跟踪的项目。已识别到本地检出的会自动使用；不在磁盘上的需要手动填写路径。',
+        deployDetected: '已识别',
+        deployNotDetected: '未找到本地检出',
+        deployUsingDetected: '使用已识别的检出',
+        deployBranchPlaceholder: '选择分支',
+        deployHint: '需要 Python 3.11+ 和 Git。',
         deployRepoPath: '插件检出路径',
         deployRemote: 'Remote',
         deployBranch: '目标分支',
         deployRun: '配置并启动',
         deployRunning: '配置中…',
-        deployHint: '需要 Python 3.11+ 和 Git。请先 clone 插件仓库：',
         deployDone: '配置完成，看板正在启动。',
         deployAlready: '已配置。',
         reqRepo: '仓库',
@@ -3221,10 +3229,33 @@ window.__ModuleLoader__.load({
       const repoCheck = check('repo')
       const scriptCheck = check('configure-script')
 
+      /*
+       * Branches per detected project, fetched lazily for the dropdown. Keyed
+       * by project id; null while loading, [] when none, and a list otherwise.
+       */
+      const [branches, setBranches] = useCached('deploy', 'branches', {})
+
+      const fetchBranches = React.useCallback(async (projectId) => {
+        if (branches[projectId]) return
+        setBranches(current => ({ ...current, [projectId]: [] }))
+        try {
+          const body = await callJson(`${BASE}project-branches?project=${encodeURIComponent(projectId)}`)
+          setBranches(current => ({ ...current, [projectId]: body.branches || [] }))
+        } catch {
+          setBranches(current => ({ ...current, [projectId]: [] }))
+        }
+      }, [branches])
+
+      /*
+       * Toggle a project's selection. A detected project defaults to
+       * useDetected:true (the host resolves its path from config); an
+       * undetected one needs a manual path typed in.
+       */
       const toggle = id => setPicked(current => {
         const next = { ...current }
+        const detected = (preflight && preflight.projects || []).find(p => p.id === id)?.detected
         if (next[id]) delete next[id]
-        else next[id] = { repoPath: '', remote: 'origin', branch: '' }
+        else next[id] = detected ? { useDetected: true, remote: 'origin', branch: '' } : { repoPath: '', remote: 'origin', branch: '' }
         return next
       })
       const edit = (id, field, value) => setPicked(current => ({
@@ -3259,7 +3290,11 @@ window.__ModuleLoader__.load({
       }, [picked, onDone])
 
       const chosen = Object.entries(picked)
-      const complete = chosen.length > 0 && chosen.every(([, value]) => value.repoPath.trim() && value.branch.trim())
+      const complete = chosen.length > 0 && chosen.every(([id, value]) => {
+        const project = (preflight && preflight.projects || []).find(p => p.id === id)
+        const pathOk = (project && project.detected) ? true : Boolean(value.repoPath && value.repoPath.trim())
+        return pathOk && Boolean(value.branch && value.branch.trim())
+      })
 
       /*
        * Once the dashboard is configured, the wizard has nothing left to ask
@@ -3322,54 +3357,86 @@ window.__ModuleLoader__.load({
           ? h('div', { className: 'flup-card' },
             h('p', { className: 'flup-meta' }, t.deployPickProjects),
             h('div', { className: 'flup-form flup-mt3' },
-              (preflight.projects || []).map(project => h('div', { key: project.id },
-                h('label', { className: 'flup-check' },
-                  h('input', {
-                    type: 'checkbox',
-                    checked: Boolean(picked[project.id]),
-                    onChange: () => toggle(project.id),
-                  }),
-                  String(project.label),
-                ),
-                picked[project.id]
-                  // Indented under its checkbox, so the fields read as
-                  // belonging to the project above them.
-                  ? h('div', { className: 'flup-grid flup-mt2 flup-nest' },
-                    h('div', { className: 'flup-field' },
-                      h('span', { className: 'flup-label' }, t.deployRepoPath),
-                      h('input', {
-                        className: 'flup-input',
-                        type: 'text',
-                        value: picked[project.id].repoPath,
-                        placeholder: project.repo,
-                        onChange: event => edit(project.id, 'repoPath', event.target.value),
-                      }),
+              (preflight.projects || []).map(project => {
+                const p = picked[project.id]
+                // Lazily fetch branch list when this project becomes checked.
+                if (p) fetchBranches(project.id)
+                const projectBranches = branches[project.id] || []
+                return h('div', { key: project.id, className: 'flup-mt2' },
+                  h('label', { className: 'flup-check' },
+                    h('input', {
+                      type: 'checkbox',
+                      checked: Boolean(p),
+                      onChange: () => toggle(project.id),
+                    }),
+                    h('span', null, String(project.label),
+                      // Show a detected badge so the user knows the path was
+                      // found automatically and no typing is needed.
+                      project.detected
+                        ? h('span', { className: 'flup-tag flup-ok' }, `✓ ${t.deployDetected}`)
+                        : h('span', { className: 'flup-tag flup-warn' }, t.deployNotDetected),
                     ),
-                    h('div', { className: 'flup-field' },
-                      h('span', { className: 'flup-label' }, t.deployRemote),
-                      h('input', {
-                        className: 'flup-input',
-                        type: 'text',
-                        value: picked[project.id].remote,
-                        onChange: event => edit(project.id, 'remote', event.target.value),
-                      }),
-                    ),
-                    h('div', { className: 'flup-field' },
-                      h('span', { className: 'flup-label' }, t.deployBranch),
-                      h('input', {
-                        className: 'flup-input',
-                        type: 'text',
-                        value: picked[project.id].branch,
-                        onChange: event => edit(project.id, 'branch', event.target.value),
-                      }),
-                    ),
-                  )
-                  : null,
-              )),
-              h('p', { className: 'flup-meta' }, t.deployHint),
-              h('code', { className: 'flup-code' },
-                (preflight.projects || []).map(project => `git clone ${project.repo}`).join('\n')),
-              h('div', null,
+                  ),
+                  p
+                    ? h('div', { className: 'flup-grid flup-mt2 flup-nest' },
+                      /*
+                       * Path: skip the input when the host already knows it.
+                       * A detected project sends useDetected:true in the
+                       * payload; the host resolves the path from its own
+                       * config and the browser never sees an absolute path.
+                       */
+                      !project.detected
+                        ? h('div', { className: 'flup-field' },
+                          h('span', { className: 'flup-label' }, t.deployRepoPath),
+                          h('input', {
+                            className: 'flup-input',
+                            type: 'text',
+                            value: p.repoPath || '',
+                            placeholder: project.repo,
+                            onChange: event => edit(project.id, 'repoPath', event.target.value),
+                          }),
+                        )
+                        : h('p', { className: 'flup-meta' },
+                          `${t.deployUsingDetected}: `,
+                          h('b', null, project.detectedName || project.label),
+                        ),
+                      /*
+                       * Branch: a dropdown when the list is available, a text
+                       * input otherwise (no git, or list failed to load).
+                       */
+                      h('div', { className: 'flup-field' },
+                        h('span', { className: 'flup-label' }, t.deployBranch),
+                        projectBranches.length > 0
+                          ? h('select', {
+                            className: 'flup-input',
+                            value: p.branch,
+                            onChange: event => edit(project.id, 'branch', event.target.value),
+                          },
+                          h('option', { value: '' }, t.deployBranchPlaceholder),
+                          projectBranches.map(b => h('option', { key: b, value: b }, b)),
+                          )
+                          : h('input', {
+                            className: 'flup-input',
+                            type: 'text',
+                            value: p.branch,
+                            placeholder: t.deployBranchPlaceholder,
+                            onChange: event => edit(project.id, 'branch', event.target.value),
+                          }),
+                      ),
+                      h('div', { className: 'flup-field' },
+                        h('span', { className: 'flup-label' }, t.deployRemote),
+                        h('input', {
+                          className: 'flup-input',
+                          type: 'text',
+                          value: p.remote || '',
+                          onChange: event => edit(project.id, 'remote', event.target.value),
+                        }),
+                      ),
+                    )
+                    : null,
+                )
+              }),
+              h('div', { className: 'flup-mt3' },
                 h('button', {
                   className: 'flup-btn flup-btn-primary',
                   type: 'button',
