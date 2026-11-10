@@ -372,6 +372,30 @@ const cred = over => render(probe.CredentialView, { t, project: { id: 'vllm' } }
     find(stored, 'input').filter(i => i.props.type === 'password').length === 0)
   check('a stored token offers replace', /Replace/.test(text(stored)))
 
+  /*
+   * A signed-in `gh` CLI authenticates collection on its own (the dashboard
+   * tries `gh api` first), so a missing token is no longer "60 per hour".
+   * This was the report: a user with gh signed in was told they had no auth.
+   */
+  const noTok = { supported: true, env: 'GITHUB_TOKEN', configured: false, writable: true, source: null, ambient: false }
+  const ghOnly = cred({ state: { ...base, github: { ...noTok, cli: { installed: true, authenticated: true } } } })
+  check('gh signed in: no token field is demanded',
+    find(ghOnly, 'input').filter(i => i.props.type === 'password').length === 0,
+    'got ' + find(ghOnly, 'input').filter(i => i.props.type === 'password').length)
+  check('gh signed in: says so', /signed in with the GitHub CLI/.test(text(ghOnly)))
+  check('gh signed in: never claims the anonymous limit', !/60 per hour[^.]*$|no token \u2014 anonymous/.test(text(ghOnly)))
+  check('gh signed in: a token can still be added', /Add a token anyway/.test(text(ghOnly)))
+
+  // Both ways at once: still green, and names the token as the fallback.
+  const both = cred({ state: { ...base, github: { ...noTok, configured: true, source: 'file', cli: { installed: true, authenticated: true } } } })
+  check('gh and token: both reported', /signed in with the GitHub CLI/.test(text(both)) && /fallback/.test(text(both)))
+
+  // gh installed but signed out: back to the token, field shown.
+  const signedOut = cred({ state: { ...base, github: { ...noTok, cli: { installed: true, authenticated: false } } } })
+  check('gh signed out: the token field is offered',
+    find(signedOut, 'input').filter(i => i.props.type === 'password').length === 1)
+  check('gh signed out: the anonymous limit is stated', /no token \u2014 anonymous reads are limited to 60 per hour/.test(text(signedOut)))
+
   // A build without the credential service cannot store one at all.
   const unsupported = cred({ state: { ...base, github: { supported: false, configured: false, writable: false, source: null, ambient: false } } })
   check('an unsupported build offers no token field',

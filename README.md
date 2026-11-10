@@ -18,7 +18,7 @@
 命令行等价写法：
 
 ```sh
-dsh plugin install /绝对路径/local-fl-upgrade-workflow-0.6.0.tgz
+dsh plugin install /绝对路径/local-fl-upgrade-workflow-0.6.1.tgz
 ```
 
 **装好即用，不用先手动 clone 看板仓库。** `repoPath` 留空时，插件首次激活会把看板仓库
@@ -51,7 +51,8 @@ dsh plugin install /绝对路径/local-fl-upgrade-workflow-0.6.0.tgz
   启动会烧额度、在远端执行命令，留在看板里做
 - **仓库**：自动识别项目检出、一键加入 Harness 工作区并开一个带上下文的对话。检出不在本地时，
   面板里一键 clone —— 目标路径和仓库源都取看板已有配置，不用手打
-- **凭据**：Claude / JumpServer / GitHub 可在面板里填，已配置的可「更换」
+- **凭据**：Claude / JumpServer 可在面板里填，已配置的可「更换」。GitHub 两种方式任选其一：
+  已登录 `gh` CLI（面板自动识别，不用再填 token），或填一个 token
 - **采集状态小标 / 检查更新**：标题栏里，分别反映采集是否在出数据、以及有无新版本
 
 要监控的插件仓库（[vLLM-Plugin-FL](https://github.com/flagos-ai/vllm-plugin-FL)、
