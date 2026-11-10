@@ -259,6 +259,10 @@ window.__ModuleLoader__.load({
         credGithubAmbient: 'token supplied by the environment',
         credGithubNone: 'no token \u2014 anonymous reads are limited to 60 per hour',
         credGithubRestart: 'Saved. Restart the dashboard to let collection use the new token: a running process keeps the environment it started with.',
+        credGithubCli: 'signed in with the GitHub CLI',
+        credGithubCliAndToken: 'a stored token is the fallback',
+        credGithubCliDone: 'GitHub CLI signed in \u2014 no token needed',
+        credGithubAddToken: 'Add a token anyway',
         credSshHint: 'SSH private keys are deliberately never entered here. The dashboard references key files by path and never reads their contents, so accepting key material would break that invariant and give this plugin a secret it has no way to protect. Point the machine profile at an existing key file instead.',
         credSafety: 'Note that the dashboard has no authentication of its own and is reachable by any process on this machine. Only enter credentials on a machine you trust.',
       },
@@ -510,6 +514,10 @@ window.__ModuleLoader__.load({
         credGithubAmbient: 'token 由环境提供',
         credGithubNone: '未配置 token —— 匿名读取限额每小时 60 次',
         credGithubRestart: '已保存。重启看板后采集才会用上新 token：运行中的进程保留着启动时的环境变量。',
+        credGithubCli: '已通过 GitHub CLI 登录',
+        credGithubCliAndToken: '另存有 token 作后备',
+        credGithubCliDone: '已通过 GitHub CLI 登录 —— 无需 token',
+        credGithubAddToken: '仍然添加 token',
         credSshHint: 'SSH 私钥刻意不在这里输入。看板只按路径引用密钥文件，从不读取内容；接收私钥内容会破坏这个不变量，并让插件持有一个它无法妥善保护的密钥。请在机器配置里指向一个已存在的密钥文件。',
         credSafety: '请注意看板自身没有任何认证，本机上任何进程都能访问它。只在你信任的机器上填写凭据。',
       },
@@ -3517,6 +3525,10 @@ window.__ModuleLoader__.load({
       const jump = state && state.jumpserver
       const jumpMatters = state && state.machineSource === 'jumpserver'
       const github = state && state.github
+      // Either way in authenticates GitHub reads. `gh` is what the dashboard
+      // tries first; a token stored in our own store is the fallback.
+      const ghCli = Boolean(github && github.cli && github.cli.authenticated === true)
+      const ghStored = Boolean(github && github.supported && github.configured && !github.ambient)
 
       /** A write-only secret field with its own save button. */
       const field = (kind, label, hint, extra) => h('div', { className: 'flup-mt3' },
@@ -3568,7 +3580,7 @@ window.__ModuleLoader__.load({
        * earlier version rendered a tick for it, hiding the one case where
        * retyping is most needed.
        */
-      const slot = (kind, ready, label, hint, doneText, extra) => {
+      const slot = (kind, ready, label, hint, doneText, extra, replaceLabel) => {
         if (!ready) return field(kind, label, hint, extra)
         if (replacing[kind]) return field(kind, label, hint, extra)
         // Done, and quiet about it: a standing secret field would make a
@@ -3583,7 +3595,7 @@ window.__ModuleLoader__.load({
               setSaved('')
               setReplacing(current => ({ ...current, [kind]: true }))
             },
-          }, t.credReplace),
+          }, replaceLabel || t.credReplace),
         )
       }
 
@@ -3621,17 +3633,21 @@ window.__ModuleLoader__.load({
                   : jump.error || t.credJumpNo)
               : null,
             /*
-             * GitHub. The token cannot be validated without spending an API
-             * call, so this reports whether one is *held* and from where —
-             * which is a fact, unlike the old blanket "unknown".
+             * GitHub, which has two ways in. The dashboard reads through a
+             * signed-in `gh` CLI first and falls back to the token, so either
+             * one alone authenticates collection. The row is green when either
+             * is present, and names which.
              */
-            github && github.supported
-              ? row('GitHub', github.configured,
-                github.configured
-                  ? (github.ambient ? `${t.credGithubAmbient} (${github.source || '—'})` : t.credGithubStored)
-                  : t.credGithubNone,
-                Boolean(github.ambient) || !github.configured)
-              : row('GitHub', false, t.credGithubUnknown, true),
+            ghCli
+              ? row('GitHub', true,
+                ghStored ? `${t.credGithubCli} · ${t.credGithubCliAndToken}` : t.credGithubCli)
+              : github && github.supported
+                ? row('GitHub', github.configured,
+                  github.configured
+                    ? (github.ambient ? `${t.credGithubAmbient} (${github.source || '—'})` : t.credGithubStored)
+                    : t.credGithubNone,
+                  Boolean(github.ambient) || !github.configured)
+                : row('GitHub', false, t.credGithubUnknown, true),
           )
           : null,
 
@@ -3672,11 +3688,18 @@ window.__ModuleLoader__.load({
          * only ambient (the shell exported GITHUB_TOKEN) still shows the field,
          * with a note that saving here overrides it, rather than a dead tick.
          */
+        /*
+         * A signed-in `gh` makes the token optional, so the field collapses
+         * to a done line with an "add a token anyway" button rather than
+         * asking for something the user does not need.
+         */
         github && github.supported
-          ? slot('github', github.configured && !github.ambient,
+          ? slot('github', ghStored || ghCli,
             t.credGithubLabel,
             github.ambient ? t.credGithubAmbientHint : t.credGithubFieldHint,
-            t.credGithubDone)
+            ghStored ? t.credGithubDone : t.credGithubCliDone,
+            undefined,
+            ghStored ? undefined : t.credGithubAddToken)
           : null,
 
         // Collection reads the environment it was started with, so a token

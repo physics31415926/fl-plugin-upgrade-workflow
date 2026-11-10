@@ -373,6 +373,27 @@ test('a conversation is named after the branch', () => {
   assert(/slice\(0, 200\)/.test(rename), 'bounds the title length');
 });
 
+test('a signed-in gh CLI is detected without forwarding its output', () => {
+  const probe = host.slice(host.indexOf('async function probeGhCli'), host.indexOf('async function ghCliState'))
+  // `gh auth status` exit code is the whole verdict; it never contacts a repo.
+  assert(/'auth', 'status'/.test(probe), 'asks gh for its auth status')
+  assert(/authenticated: outcome\.exitCode === 0/.test(probe), 'success is exit code 0')
+  // Its output names the account and must stay on the Host.
+  assert.equal(/readOutput\(/.test(probe), false, 'never reads the output')
+  assert(/GH_STATUS_TIMEOUT_MS/.test(probe), 'the probe is time-bounded')
+  // The subprocess service rejects a spawn with no working directory. Without
+  // one the probe threw, was swallowed as "unknown", and a signed-in user kept
+  // seeing the anonymous-limit warning — found only against the live service.
+  assert(/cwd: tmpdir\(\)/.test(probe), 'the spawn carries a working directory')
+  assert(/installed: false/.test(probe), 'a missing gh is reported, not thrown')
+  // Polled by the credential view, so cached and de-duplicated.
+  const state = host.slice(host.indexOf('async function ghCliState'), host.indexOf('async function githubState'))
+  assert(/GH_STATUS_TTL_MS/.test(state), 'cached')
+  assert(/ghStatusFlight/.test(state), 'concurrent probes share one subprocess')
+  // The credential view reports both ways in.
+  assert(/githubState\(\)/.test(host.slice(host.indexOf('const credentialState'))), 'the view includes the gh state')
+})
+
 test('the dashboard clone is automatic, the project clone is user-initiated', () => {
   /*
    * Two different clones, with different triggers.

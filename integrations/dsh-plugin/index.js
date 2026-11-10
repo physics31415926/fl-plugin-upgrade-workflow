@@ -1877,6 +1877,79 @@ export function apply(ctx, rawConfig) {
     }
   }
 
+  /*
+   * Whether the GitHub CLI is signed in on this machine.
+   *
+   * The dashboard reads GitHub through `gh api` first and falls back to the
+   * token only when that fails, so a signed-in `gh` is a complete way to
+   * authenticate collection on its own — a stored token is then optional. The
+   * panel used to look only at the credential store and reported "no token,
+   * 60 per hour" to users whose `gh` was already giving them 5000.
+   *
+   * `gh auth status` exits 0 when a usable credential exists and non-zero
+   * otherwise (including a revoked token). Only that boolean is kept: its
+   * output names the account, which never leaves the Host. Cached briefly,
+   * because the credential view polls and each check is a subprocess that may
+   * make a network round trip.
+   */
+  const GH_STATUS_TTL_MS = 60_000
+  const GH_STATUS_TIMEOUT_MS = 10_000
+  let ghStatusCache = null
+  let ghStatusFlight = null
+
+  async function probeGhCli() {
+    let gh
+    try {
+      gh = await ctx.subprocess.resolveExecutable('gh')
+    } catch {
+      return { installed: false, authenticated: false }
+    }
+    const controller = new AbortController()
+    const timer = setTimeout(() => controller.abort(), GH_STATUS_TIMEOUT_MS)
+    try {
+      const handle = ctx.subprocess.spawn({
+        argv: [gh, 'auth', 'status', '--hostname', 'github.com'],
+        // The subprocess service needs a working directory; gh does not care
+        // which, and the temp directory always exists.
+        cwd: tmpdir(),
+        stdio: {
+          stdin: 'ignore',
+          // Captured only so the pipe drains; never read or forwarded.
+          stdout: { maxBytes: 4096 },
+          stderr: { maxBytes: 4096 },
+        },
+        graceMs: 2_000,
+        signal: controller.signal,
+      })
+      const outcome = await handle.done
+      return { installed: true, authenticated: outcome.exitCode === 0 }
+    } catch {
+      // A timeout or spawn failure says nothing either way.
+      return { installed: true, authenticated: null }
+    } finally {
+      clearTimeout(timer)
+    }
+  }
+
+  async function ghCliState() {
+    if (ghStatusCache && Date.now() - ghStatusCache.at < GH_STATUS_TTL_MS) return ghStatusCache.value
+    if (!ghStatusFlight) {
+      ghStatusFlight = probeGhCli()
+        .then(value => {
+          ghStatusCache = { at: Date.now(), value }
+          return value
+        })
+        .finally(() => { ghStatusFlight = null })
+    }
+    return ghStatusFlight
+  }
+
+  /** The token state plus the gh sign-in, for the credential view. */
+  async function githubState() {
+    const [token, cli] = await Promise.all([githubTokenState(), ghCliState()])
+    return { ...token, cli }
+  }
+
   const credentialState = async projectId => {
     const query = `?project=${encodeURIComponent(projectId)}`
     const read = async path => {
@@ -1893,7 +1966,7 @@ export function apply(ctx, rawConfig) {
       read('/api/agent-providers'),
       read('/api/jumpserver'),
       read('/api/capabilities'),
-      githubTokenState(),
+      githubState(),
     ])
     const agent = name => {
       const row = providers?.providers?.[name]
