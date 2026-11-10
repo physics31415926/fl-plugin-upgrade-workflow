@@ -14,7 +14,7 @@
 也可以用命令行：
 
 ```
-dsh plugin install /绝对路径/local-fl-upgrade-workflow-0.5.0.tgz
+dsh plugin install /绝对路径/local-fl-upgrade-workflow-0.6.0.tgz
 ```
 
 装过一次之后就不用再手动下载了：面板标题栏会在有新版本时出现一个「更新到 x.y.z」
@@ -66,7 +66,9 @@ git clone https://github.com/physics31415926/fl-plugin-upgrade-workflow
   一个起来了但没有 agent 密钥的部署看着像好了、实际开不了任务
 - 新建任务：面板内直接准备一个适配任务，**只准备不启动**（见下）
 - 项目仓库：按看板配置自动识别检出目录，一键加入左侧工作区列表，
-  并在该工作区里新建一个带好上下文的对话
+  并在该工作区里新建一个带好上下文的对话。检出不在本地时给一个「立即克隆」按钮 ——
+  目标路径和源都取看板的 `repo` / `github_repo` 配置，请求里只有一个项目 id，
+  没有路径也没有 URL 可传；目标已存在时直接算作完成，绝不覆盖
 - 凭据：显示 Claude / JumpServer / GitHub / SSH 各自是否就绪，能填的那两个就地填。
   看板已经在跑时，凭据卡排在部署卡**前面** —— 那时候要填的就剩它了
 
