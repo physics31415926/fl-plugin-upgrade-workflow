@@ -14,7 +14,7 @@
 也可以用命令行：
 
 ```
-dsh plugin install /绝对路径/local-fl-upgrade-workflow-0.6.1.tgz
+dsh plugin install /绝对路径/physics31415926-fl-upgrade-workflow-0.6.1.tgz
 ```
 
 装过一次之后就不用再手动下载了：面板标题栏会在有新版本时出现一个「更新到 x.y.z」

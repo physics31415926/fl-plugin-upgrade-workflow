@@ -11,14 +11,14 @@
 
 ## 安装
 
-从 [Releases](../../releases) 下载 `local-fl-upgrade-workflow-<版本>.tgz`，在左侧边栏
+从 [Releases](../../releases) 下载 `physics31415926-fl-upgrade-workflow-<版本>.tgz`，在左侧边栏
 **插件 → 添加插件**里填它的**绝对路径**，点安装。需要本机有 **Python 3.11+ 和 Git**
 （看板只用 Python 标准库，无需 pip 依赖，也不需要 GPU）。
 
 命令行等价写法：
 
 ```sh
-dsh plugin install /绝对路径/local-fl-upgrade-workflow-0.6.1.tgz
+dsh plugin install /绝对路径/physics31415926-fl-upgrade-workflow-0.6.1.tgz
 ```
 
 **装好即用，不用先手动 clone 看板仓库。** `repoPath` 留空时，插件首次激活会把看板仓库

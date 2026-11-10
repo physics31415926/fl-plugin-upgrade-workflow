@@ -1,6 +1,6 @@
 - insert:
     - id: fl-upgrade-workflow
-      name: '@local/fl-upgrade-workflow'
+      name: '@physics31415926/fl-upgrade-workflow'
       config:
         # Absolute path to your fl-plugin-upgrade-workflow checkout.
         #

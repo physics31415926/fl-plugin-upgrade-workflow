@@ -1,5 +1,5 @@
 window.__ModuleLoader__.load({
-  id: '@local/fl-upgrade-workflow',
+  id: '@physics31415926/fl-upgrade-workflow',
   factory(require) {
     const React = require('react')
     const h = React.createElement
