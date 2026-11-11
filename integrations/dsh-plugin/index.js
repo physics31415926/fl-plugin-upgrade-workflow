@@ -402,9 +402,11 @@ function resolveProjectRepo(config, projectId) {
   const repoPath = isAbsolute(repoRef) ? repoRef : resolvePath(join(dirname(monitorPath), repoRef))
   const branch = typeof monitor?.branch === 'string' ? monitor.branch : null
   const githubRepo = typeof monitor?.github_repo === 'string' ? monitor.github_repo : null
+  const remote = typeof monitor?.remote === 'string' && monitor.remote.trim() ? monitor.remote.trim() : null
   return {
     path: repoPath,
     branch,
+    remote,
     githubRepo,
     /*
      * A sidebar title the user can recognise, with no path in it.
@@ -1595,6 +1597,13 @@ export function apply(ctx, rawConfig) {
         detected,
         // Only the directory name goes to the browser; the path stays on the Host.
         detectedName: detected ? basename(resolved.path) : null,
+        /*
+         * The branch and remote the monitor config already names, so the form
+         * can preselect them instead of making the user find one entry among
+         * dozens of branches sorted alphabetically.
+         */
+        configuredBranch: detected ? resolved.branch : null,
+        configuredRemote: detected ? resolved.remote : null,
       }
     })
 
@@ -2209,11 +2218,14 @@ export function apply(ctx, rawConfig) {
         }
 
         /*
-         * Local branch list for a project's detected checkout.
+         * Branch and remote lists for a project's detected checkout.
          *
-         * Returns remote-tracking branches (git branch -r), trimmed and
-         * sorted, with the common `origin/` prefix stripped so the names
-         * match what `--branch` expects. Never returns the checkout path.
+         * Branches come from both `git branch` and `git branch -r`, so a
+         * branch that exists only locally (never pushed) is still selectable;
+         * the remote prefix is stripped so the names match what `--branch`
+         * expects. Remotes come from `git remote`, because the remote named in
+         * the monitor config is not always present in the checkout. Never
+         * returns the checkout path.
          */
         if (req.method === 'GET' && action === 'project-branches') {
           const projectId = scalar(url.searchParams.get('project'))
@@ -2221,42 +2233,48 @@ export function apply(ctx, rawConfig) {
             sendJson(res, 400, { error: 'project is required' })
             return
           }
+          const empty = { branches: [], remotes: [] }
           const resolved = resolveProjectRepo(config, projectId)
           if (!resolved || !existsSync(resolved.path)) {
-            sendJson(res, 200, { branches: [] })
+            sendJson(res, 200, empty)
             return
           }
           let git
           try { git = await ctx.subprocess.resolveExecutable('git') } catch {
-            sendJson(res, 200, { branches: [] })
+            sendJson(res, 200, empty)
             return
           }
-          try {
-            const handle = ctx.subprocess.spawn({
-              argv: [git, 'branch', '-r', '--format=%(refname:short)'],
-              cwd: resolved.path,
-              stdio: { stdin: 'ignore', stdout: { maxBytes: 128 * 1024 }, stderr: { maxBytes: 4096 } },
-              graceMs: 3_000,
-            })
-            const outcome = await handle.done
-            if (outcome.exitCode !== 0) {
-              sendJson(res, 200, { branches: [] })
-              return
+          // One helper for all three reads: same cwd, same failure handling.
+          const gitLines = async (...args) => {
+            try {
+              const handle = ctx.subprocess.spawn({
+                argv: [git, ...args],
+                cwd: resolved.path,
+                stdio: { stdin: 'ignore', stdout: { maxBytes: 128 * 1024 }, stderr: { maxBytes: 4096 } },
+                graceMs: 3_000,
+              })
+              const outcome = await handle.done
+              if (outcome.exitCode !== 0) return []
+              return readOutput(handle).split('\n').map(l => l.trim()).filter(Boolean)
+            } catch {
+              return []
             }
-            const raw = readOutput(handle)
-            const branches = raw.split('\n')
-              .map(l => l.trim())
-              .filter(Boolean)
-              .filter(l => !l.includes('HEAD'))
-              // Strip the leading remote prefix (e.g. "origin/") so the name
-              // is what --branch and git checkout expect.
-              .map(l => l.replace(/^[^/]+\//, ''))
-              .filter((v, i, a) => a.indexOf(v) === i)
-              .sort()
-            sendJson(res, 200, { branches })
-          } catch {
-            sendJson(res, 200, { branches: [] })
           }
+          const [localRaw, remoteRaw, remotes] = await Promise.all([
+            gitLines('branch', '--format=%(refname:short)'),
+            gitLines('branch', '-r', '--format=%(refname:short)'),
+            gitLines('remote'),
+          ])
+          const branches = [
+            ...localRaw,
+            // Strip the leading remote prefix (e.g. "origin/") so the name is
+            // what --branch and git checkout expect.
+            ...remoteRaw.filter(l => !l.includes('HEAD')).map(l => l.replace(/^[^/]+\//, '')),
+          ]
+            .filter(Boolean)
+            .filter((v, i, a) => a.indexOf(v) === i)
+            .sort()
+          sendJson(res, 200, { branches, remotes })
           return
         }
 

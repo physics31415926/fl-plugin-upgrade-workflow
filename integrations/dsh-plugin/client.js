@@ -3230,32 +3230,63 @@ window.__ModuleLoader__.load({
       const scriptCheck = check('configure-script')
 
       /*
-       * Branches per detected project, fetched lazily for the dropdown. Keyed
-       * by project id; null while loading, [] when none, and a list otherwise.
+       * Branch and remote lists per project, for the dropdowns. Keyed by
+       * project id, each entry `{ branches, remotes }`; a missing entry means
+       * not loaded yet, and empty lists mean the form falls back to text input.
        */
-      const [branches, setBranches] = useCached('deploy', 'branches', {})
-
-      const fetchBranches = React.useCallback(async (projectId) => {
-        if (branches[projectId]) return
-        setBranches(current => ({ ...current, [projectId]: [] }))
-        try {
-          const body = await callJson(`${BASE}project-branches?project=${encodeURIComponent(projectId)}`)
-          setBranches(current => ({ ...current, [projectId]: body.branches || [] }))
-        } catch {
-          setBranches(current => ({ ...current, [projectId]: [] }))
-        }
-      }, [branches])
+      const [gitLists, setGitLists] = React.useState({})
+      // Which ids have been requested, so a re-render never re-fetches. A ref
+      // rather than state: reading it must not make the effect run again.
+      const requested = React.useRef(new Set())
 
       /*
-       * Toggle a project's selection. A detected project defaults to
-       * useDetected:true (the host resolves its path from config); an
-       * undetected one needs a manual path typed in.
+       * Load the lists for every checked project.
+       *
+       * In an effect, not in render: the fetch sets state, and setting state
+       * during render queues another render on every keystroke in the form.
+       */
+      const pickedIds = Object.keys(picked).sort().join(',')
+      React.useEffect(() => {
+        let cancelled = false
+        for (const id of pickedIds ? pickedIds.split(',') : []) {
+          if (requested.current.has(id)) continue
+          requested.current.add(id)
+          callJson(`${BASE}project-branches?project=${encodeURIComponent(id)}`)
+            .then(body => {
+              if (cancelled) return
+              setGitLists(current => ({
+                ...current,
+                [id]: { branches: body.branches || [], remotes: body.remotes || [] },
+              }))
+            })
+            .catch(() => {
+              if (cancelled) return
+              setGitLists(current => ({ ...current, [id]: { branches: [], remotes: [] } }))
+            })
+        }
+        return () => { cancelled = true }
+      }, [pickedIds])
+
+      /*
+       * Toggle a project's selection.
+       *
+       * A detected project defaults to useDetected:true (the host resolves its
+       * path from config) and preselects the branch and remote the monitor
+       * config already names, so checking the box is usually the only step.
+       * An undetected one needs a path typed in.
        */
       const toggle = id => setPicked(current => {
         const next = { ...current }
-        const detected = (preflight && preflight.projects || []).find(p => p.id === id)?.detected
-        if (next[id]) delete next[id]
-        else next[id] = detected ? { useDetected: true, remote: 'origin', branch: '' } : { repoPath: '', remote: 'origin', branch: '' }
+        if (next[id]) {
+          delete next[id]
+          return next
+        }
+        const project = (preflight && preflight.projects || []).find(p => p.id === id)
+        const branch = project && project.configuredBranch ? project.configuredBranch : ''
+        const remote = project && project.configuredRemote ? project.configuredRemote : 'origin'
+        next[id] = project && project.detected
+          ? { useDetected: true, remote, branch }
+          : { repoPath: '', remote, branch }
         return next
       })
       const edit = (id, field, value) => setPicked(current => ({
@@ -3359,9 +3390,9 @@ window.__ModuleLoader__.load({
             h('div', { className: 'flup-form flup-mt3' },
               (preflight.projects || []).map(project => {
                 const p = picked[project.id]
-                // Lazily fetch branch list when this project becomes checked.
-                if (p) fetchBranches(project.id)
-                const projectBranches = branches[project.id] || []
+                const lists = gitLists[project.id] || { branches: [], remotes: [] }
+                const projectBranches = lists.branches
+                const projectRemotes = lists.remotes
                 return h('div', { key: project.id, className: 'flup-mt2' },
                   h('label', { className: 'flup-check' },
                     h('input', {
@@ -3372,9 +3403,12 @@ window.__ModuleLoader__.load({
                     h('span', null, String(project.label),
                       // Show a detected badge so the user knows the path was
                       // found automatically and no typing is needed.
+                      // flup-tag-active / flup-tag-warn are the badge modifiers;
+                      // flup-warn is a block-level callout and flup-ok sets its
+                      // own font-size, so neither belongs on an inline badge.
                       project.detected
-                        ? h('span', { className: 'flup-tag flup-ok' }, `✓ ${t.deployDetected}`)
-                        : h('span', { className: 'flup-tag flup-warn' }, t.deployNotDetected),
+                        ? h('span', { className: 'flup-tag flup-tag-active' }, `✓ ${t.deployDetected}`)
+                        : h('span', { className: 'flup-tag flup-tag-warn' }, t.deployNotDetected),
                     ),
                   ),
                   p
@@ -3413,6 +3447,11 @@ window.__ModuleLoader__.load({
                             onChange: event => edit(project.id, 'branch', event.target.value),
                           },
                           h('option', { value: '' }, t.deployBranchPlaceholder),
+                          // A configured branch missing from the list would
+                          // otherwise render as a blank selection.
+                          p.branch && !projectBranches.includes(p.branch)
+                            ? h('option', { value: p.branch }, p.branch)
+                            : null,
                           projectBranches.map(b => h('option', { key: b, value: b }, b)),
                           )
                           : h('input', {
@@ -3423,14 +3462,33 @@ window.__ModuleLoader__.load({
                             onChange: event => edit(project.id, 'branch', event.target.value),
                           }),
                       ),
+                      /*
+                       * Remote: a dropdown of the remotes the checkout really
+                       * has. The monitor config names one, but it is not always
+                       * present in the checkout, so the list is read from git
+                       * and the configured name is only the default.
+                       */
                       h('div', { className: 'flup-field' },
                         h('span', { className: 'flup-label' }, t.deployRemote),
-                        h('input', {
-                          className: 'flup-input',
-                          type: 'text',
-                          value: p.remote || '',
-                          onChange: event => edit(project.id, 'remote', event.target.value),
-                        }),
+                        projectRemotes.length > 0
+                          ? h('select', {
+                            className: 'flup-input',
+                            value: p.remote || '',
+                            onChange: event => edit(project.id, 'remote', event.target.value),
+                          },
+                          // Keep a configured-but-absent remote selectable
+                          // rather than silently switching it to another one.
+                          projectRemotes.includes(p.remote)
+                            ? null
+                            : h('option', { value: p.remote || '' }, p.remote || ''),
+                          projectRemotes.map(r => h('option', { key: r, value: r }, r)),
+                          )
+                          : h('input', {
+                            className: 'flup-input',
+                            type: 'text',
+                            value: p.remote || '',
+                            onChange: event => edit(project.id, 'remote', event.target.value),
+                          }),
                       ),
                     )
                     : null,
