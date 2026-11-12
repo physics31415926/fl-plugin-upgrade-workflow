@@ -39,10 +39,14 @@ def adaptation_backend(pr):
     targets = set()
     scoped = re.match(r"^(?:adapt|upgrade|migrate|port)\(([^)]+)\)!?:", title)
     feature = re.match(r"^feat\(([^)]+)\)!?:\s*(.+)", title)
+    bracketed = re.match(r"^\[([^\]]+)\]\s*(.+)", title)
     if feature and re.search(r"\b(?:upgrade|adaptation|adapt|support)\b", feature[2]) and re.search(r"\b(?:sglang|vllm)\s+\d", feature[2]):
         targets.update(_backends(feature[1]))
     if scoped:
         targets.update(_backends(scoped[1]))
+    if bracketed and re.search(r"\b(?:adapt|adapts|upgrade|upgrades|migrate|migrates|port|ports|restore|restores)\b", bracketed[2]):
+        targets.update(_backends(bracketed[1]))
+        targets.update(_backends(bracketed[2]))
     for line in _purpose(pr.get("body")):
         for sentence in re.split(r"(?<=[.!?。])\s+", line):
             statement = sentence.strip(" -*").casefold()
@@ -61,7 +65,17 @@ def adaptation_backend(pr):
         return None
     target = next(iter(targets))
     head = pr.get("head") or {}
-    match = re.match(r"^(?:codex/backend-|adapt/)([a-z0-9]+)-", str(head.get("ref", "")))
-    if match and _backends(match[1]) != {target}:
+    ref = str(head.get("ref", ""))
+    # codex/backend-<name>- and adapt/<name>- are strict: an unrecognised or
+    # mismatched segment rejects. codex/<name>- (e.g. codex/ascend-vllm-0.32.0)
+    # is lenient: only reject on a positive mismatch.
+    strict_match = re.match(r"^(?:codex/backend-|adapt/)([a-z0-9]+)-", ref)
+    if strict_match and _backends(strict_match[1]) != {target}:
         return None
+    if not strict_match:
+        lenient_match = re.match(r"^codex/([a-z0-9]+)-", ref)
+        if lenient_match:
+            lb = _backends(lenient_match[1])
+            if lb and lb != {target}:
+                return None
     return target

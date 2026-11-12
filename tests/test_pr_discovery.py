@@ -75,3 +75,46 @@ class DiscoveryTests(unittest.TestCase):
         self.assertIsNone(adaptation_backend({
             "body": "Adds AMD and MetaX as a vllm-plugin-FL backend on vLLM 0.32."
         }))
+
+    def test_bracketed_title_prefix_identifies_adaptation(self):
+        # PR #703 style: [Backend] verb ...
+        self.assertEqual(adaptation_backend({
+            "title": "[Ascend] Adapt vLLM 0.32 Runner V2 and enable full CI",
+            "head": {"ref": "codex/ascend-vllm-0.32.0"},
+        }), "ascend")
+        self.assertEqual(adaptation_backend({
+            "title": "[Ascend] Restore Ascend support on 0.5.0-dev",
+        }), "ascend")
+        self.assertEqual(adaptation_backend({
+            "title": "[MetaX] Upgrade runtime to vLLM 0.32",
+        }), "metax")
+        # bracket + mismatched head branch must reject
+        self.assertIsNone(adaptation_backend({
+            "title": "[Ascend] Adapt vLLM 0.32 Runner V2",
+            "head": {"ref": "codex/cuda-runtime"},
+        }))
+        # bracket without adaptation verb must not match
+        self.assertIsNone(adaptation_backend({
+            "title": "[Ascend] Fix CI matrix",
+        }))
+        # bracket with two backends must not match
+        self.assertIsNone(adaptation_backend({
+            "title": "[Ascend] Adapt and upgrade iluvatar runtime",
+        }))
+
+    def test_codex_backend_shortform_head_branch(self):
+        # codex/<backend>-* head branch with matching title should pass
+        self.assertEqual(adaptation_backend({
+            "title": "adapt(ascend): runtime",
+            "head": {"ref": "codex/ascend-vllm-0.32.0"},
+        }), "ascend")
+        # codex/<backend>-* head with mismatched title backend must reject
+        self.assertIsNone(adaptation_backend({
+            "title": "adapt(metax): runtime",
+            "head": {"ref": "codex/ascend-vllm-0.32.0"},
+        }))
+        # codex prefix with unrecognised segment does not reject
+        self.assertEqual(adaptation_backend({
+            "title": "adapt(ascend): runtime",
+            "head": {"ref": "codex/work-branch"},
+        }), "ascend")
