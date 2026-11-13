@@ -283,6 +283,54 @@ class BranchMonitorTests(unittest.TestCase):
         config["backend_prs"] = {"kunlunxin": 902}
         self.assertEqual(self._backend(BranchMonitor(config, transport=transport).status(), "kunlunxin")["pr"]["number"], 902)
 
+    def test_unmatched_backend_lists_open_prs_that_name_it(self):
+        # Free-form titles that discovery rightly refuses to auto-select.
+        candidates = [
+            self._adaptation_pr("x", 674, title="Adapt Iluvatar backend to vLLM 0.32", head={"ref": "adapt/iluvatar-vllm032", "sha": "b" * 40}),
+            self._adaptation_pr("x", 697, title="Adapt to vLLM 0.32 with Runner V2", head={"ref": "codex/sunrise-vllm-0.32.0", "sha": "b" * 40}),
+            self._adaptation_pr("x", 698, title="Docs for kunlunxin", state="closed"),
+        ]
+        transport, _ = self._discovery_transport(candidates)
+        config = dict(self.config, backend_labels={"corex": "Iluvatar", "sunrise": "Sunrise", "kunlunxin": "Kunlunxin"})
+        status = BranchMonitor(config, transport=transport).status()
+        iluvatar = self._backend(status, "corex")
+        self.assertIsNone(iluvatar["pr"])
+        self.assertEqual([row["number"] for row in iluvatar["pr_candidates"]], [674])
+        self.assertEqual(iluvatar["pr_candidates"][0]["url"], "https://example.test/pr/674")
+        self.assertEqual([row["number"] for row in self._backend(status, "sunrise")["pr_candidates"]], [697])
+        # Closed PRs are not offered.
+        self.assertEqual(self._backend(status, "kunlunxin")["pr_candidates"], [])
+        # A matched backend offers nothing.
+        self.assertEqual(self._backend(status)["pr_candidates"], [])
+
+    def test_pin_is_per_branch_and_outranks_configuration(self):
+        pinned = self._adaptation_pr("x", 674, title="Adapt Iluvatar backend", head={"ref": "adapt/iluvatar-vllm032", "sha": "b" * 40})
+        other_branch = self._adaptation_pr("x", 675, base={"ref": "0.5.0-dev"})
+        transport, _ = self._discovery_transport([pinned], details={674: pinned, 675: other_branch})
+        config = dict(self.config, backend_labels={"corex": "Iluvatar"})
+        monitor = BranchMonitor(config, transport=transport)
+        self.assertEqual(monitor.pin_pr("0.4.0-dev", "corex", 674), {"branch": "0.4.0-dev", "backend": "corex", "number": 674})
+        with self.assertRaisesRegex(MonitorError, "does not target 0.4.0-dev"):
+            monitor.pin_pr("0.4.0-dev", "cuda", 675)
+        with self.assertRaisesRegex(MonitorError, "Invalid backend"):
+            monitor.pin_pr("0.4.0-dev", "../x", 674)
+        self.assertEqual(monitor.pins("0.4.0-dev"), {"corex": 674})
+        self.assertEqual(monitor.pins("0.5.0-dev"), {})
+        # A fresh monitor reads the pin back from disk.
+        row = self._backend(BranchMonitor(config, transport=transport).status(), "corex")
+        self.assertEqual(row["pr"]["number"], 674)
+        self.assertEqual(row["pr"]["selected_by"], "pinned")
+        self.assertEqual(row["pr_candidates"], [])
+        # Pinning a configured backend overrides its configured PR.
+        monitor.pin_pr("0.4.0-dev", "cuda", 674)
+        self.assertEqual(self._backend(BranchMonitor(config, transport=transport).status())["pr"]["selected_by"], "pinned")
+        monitor.pin_pr("0.4.0-dev", "cuda", None)
+        cuda = self._backend(BranchMonitor(config, transport=transport).status())
+        self.assertEqual((cuda["pr"]["number"], cuda["pr"]["selected_by"]), (484, "configured"))
+        monitor.pin_pr("0.4.0-dev", "corex", None)
+        self.assertEqual(monitor.pins("0.4.0-dev"), {})
+        self.assertFalse((self.root / "pr-pins.json").read_text(encoding="utf-8").strip("{} \n"))
+
     def test_default_discovery_can_find_registry_backend_without_label_configuration(self):
         transport, _ = self._discovery_transport([self._adaptation_pr("ascend")])
         status = BranchMonitor(self.config, transport=transport).status()

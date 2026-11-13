@@ -695,7 +695,17 @@ function summarizeBackend(backend, head) {
   return {
     id: backend?.id ?? null,
     label: backend?.label ?? null,
-    pr: backend?.pr ? { number: backend.pr.number, state: backend.pr.state, merged: backend.pr.merged, url: backend.pr.url } : null,
+    pr: backend?.pr
+      ? { number: backend.pr.number, state: backend.pr.state, merged: backend.pr.merged, url: backend.pr.url, selectedBy: backend.pr.selected_by ?? null }
+      : null,
+    // Open PRs on this branch that name the backend, offered for pinning
+    // when nothing was matched automatically.
+    prCandidates: Array.isArray(backend?.pr_candidates)
+      ? backend.pr_candidates
+        .filter(row => row && Number.isInteger(row.number) && row.number > 0)
+        .slice(0, 8)
+        .map(row => ({ number: row.number, title: String(row.title ?? '').slice(0, 200), url: typeof row.url === 'string' ? row.url : null, draft: row.draft === true }))
+      : [],
     integration: pick(backend?.integration),
     ci: ci
       ? { status: effectiveCiStatus, scope: ci.scope ?? null, detail: ci.detail ?? null, url: ci.url ?? null }
@@ -1495,6 +1505,101 @@ export function apply(ctx, rawConfig) {
     return { ok: current !== null, error: current ? null : lastError?.reason ?? 'the dashboard exited immediately', state: snapshot() }
   }
 
+  /*
+   * Whether the running dashboard still matches the code on disk.
+   *
+   * A long-lived `flflow serve` keeps the modules it imported at start, so a
+   * `git pull` or an edit is invisible until the process restarts — which is
+   * how a PR-discovery fix once sat unused overnight. The dashboard reports
+   * its start-time HEAD and the sources changed since it started; null means
+   * an older dashboard without that route, which the panel shows as unknown
+   * rather than as "up to date". Cached briefly: every state poll asks.
+   */
+  let codeCache = { at: 0, value: null }
+  async function codeVersion(fresh = false) {
+    if (!fresh && Date.now() - codeCache.at < 15_000) return codeCache.value
+    let value = null
+    try {
+      const upstream = await callUpstream(config.port, 'GET', '/api/code-version')
+      if (upstream.status === 200) {
+        const body = JSON.parse(upstream.text)
+        const files = Array.isArray(body?.changed_files) ? body.changed_files.filter(f => typeof f === 'string') : []
+        value = {
+          stale: body?.stale === true,
+          headMoved: body?.head_moved === true,
+          startedAt: typeof body?.started_at === 'string' ? body.started_at : null,
+          startedHead: typeof body?.started_head === 'string' ? body.started_head.slice(0, 12) : null,
+          currentHead: typeof body?.current_head === 'string' ? body.current_head.slice(0, 12) : null,
+          changedFiles: files.slice(0, 20),
+          changedCount: Number.isInteger(body?.changed_count) ? body.changed_count : files.length,
+          canRestart: body?.can_restart === true,
+        }
+      }
+    } catch {
+      value = null
+    }
+    codeCache = { at: Date.now(), value }
+    return value
+  }
+
+  /** Poll until the dashboard answers again (or `ms` passes). */
+  async function waitForUpstream(ms) {
+    const deadline = Date.now() + ms
+    while (Date.now() < deadline) {
+      await sleep(700)
+      if (await probeUpstream()) return true
+    }
+    return false
+  }
+
+  /*
+   * Restart the dashboard so it loads the code on disk.
+   *
+   * A managed process is stopped and started like the two buttons would. An
+   * adopted one is not ours to kill, but a dashboard that reports
+   * `can_restart` re-executes itself with its own original arguments when
+   * asked, which keeps the operator's flags (sharing, port, project config)
+   * instead of replacing them with this plugin's launch line.
+   */
+  async function restart() {
+    if (current) {
+      await stop()
+      const started = await start()
+      codeCache = { at: 0, value: null }
+      return { ...started, restarted: started.ok === true }
+    }
+    if (!(await syncAdoption())) {
+      return { ok: false, error: 'the dashboard is not running', state: snapshot() }
+    }
+    const code = await codeVersion(true)
+    if (!code || !code.canRestart) {
+      return {
+        ok: false,
+        error: 'this dashboard predates in-place restart; restart it where it was started once, and later restarts work from here',
+        state: snapshot(),
+      }
+    }
+    let accepted
+    try {
+      accepted = await callUpstream(config.port, 'POST', '/api/restart', '{}')
+    } catch (error) {
+      return { ok: false, error: `restart request failed: ${error?.message ?? error}`, state: snapshot() }
+    }
+    if (accepted.status !== 202) {
+      return { ok: false, error: `the dashboard refused the restart (HTTP ${accepted.status})`, state: snapshot() }
+    }
+    // The old process must release the port before the new one can answer;
+    // wait for the gap first so the old listener does not count as "back".
+    const gapDeadline = Date.now() + 10_000
+    while (Date.now() < gapDeadline && await probeUpstream()) await sleep(300)
+    const back = await waitForUpstream(45_000)
+    await syncAdoption()
+    codeCache = { at: 0, value: null }
+    return back
+      ? { ok: true, restarted: true, state: snapshot() }
+      : { ok: false, error: 'the dashboard did not come back within 45 s; check its log', state: snapshot() }
+  }
+
   async function stop() {
     const entry = current
     if (!entry) {
@@ -2061,7 +2166,8 @@ export function apply(ctx, rawConfig) {
       try {
         if (req.method === 'GET' && action === 'state') {
           await syncAdoption()
-          sendJson(res, 200, snapshot())
+          const running = current !== null || adopted
+          sendJson(res, 200, { ...snapshot(), code: running ? await codeVersion() : null })
           return
         }
 
@@ -2937,6 +3043,10 @@ export function apply(ctx, rawConfig) {
             sendJson(res, 200, await stop())
             return
           }
+          if (action === 'restart') {
+            sendJson(res, 200, await restart())
+            return
+          }
           if (action === 'deploy') {
             const raw = await readBody(req)
             let parsed = {}
@@ -3427,6 +3537,43 @@ export function apply(ctx, rawConfig) {
             sendJson(res, upstream.status, accepted)
             return
           }
+          if (action === 'pin-pr') {
+            const raw = await readBody(req)
+            let parsed
+            try {
+              parsed = JSON.parse(raw || '{}')
+            } catch {
+              sendJson(res, 400, { error: 'body must be JSON' })
+              return
+            }
+            const projectId = typeof parsed?.project === 'string' ? parsed.project : ''
+            const branch = typeof parsed?.branch === 'string' ? parsed.branch : ''
+            const backend = typeof parsed?.backend === 'string' ? parsed.backend : ''
+            const number = parsed?.number === null ? null : parsed?.number
+            if (!projectId || !branch || !backend || !(number === null || (Number.isInteger(number) && number > 0))) {
+              sendJson(res, 400, { error: 'project, branch, backend and number (positive integer or null) are required' })
+              return
+            }
+            if (!current && !(await syncAdoption())) {
+              sendJson(res, 503, { error: 'dashboard is not running' })
+              return
+            }
+            const upstream = await callUpstream(
+              config.port,
+              'POST',
+              `/api/pin-pr?project=${encodeURIComponent(projectId)}`,
+              JSON.stringify({ branch, backend, number }),
+            )
+            res.writeHead(upstream.status, {
+              'Content-Type': upstream.contentType,
+              'Content-Length': Buffer.byteLength(upstream.text),
+              'Cache-Control': 'no-store',
+              'X-Content-Type-Options': 'nosniff',
+            })
+            res.end(upstream.text)
+            return
+          }
+
           if (action === 'refresh') {
             const raw = await readBody(req)
             let parsed = {}

@@ -16,6 +16,20 @@ window.__ModuleLoader__.load({
         start: 'Start',
         stop: 'Stop',
         reload: 'Reload',
+        restart: 'Restart dashboard',
+        restarting: 'Restarting…',
+        codeStale: 'Code updated — restart needed',
+        codeStaleHint: (count, from, to) => `The dashboard is running code from when it started. ${to && from && to !== from ? `HEAD moved ${from} → ${to}. ` : ''}${count ? `${count} source file(s) changed since then. ` : ''}Restart to load it.`,
+        codeUnknown: 'This dashboard is too old to report its code version; restart it once where it was started.',
+        prCandidates: 'No PR matched automatically. Open PRs on this branch that name this backend:',
+        noPrCandidates: 'No adaptation PR found on this branch.',
+        pin: 'Pin',
+        unpin: 'Unpin',
+        pinning: 'Saving…',
+        pinned: 'pinned',
+        pinnedHint: 'Chosen by hand for this branch; outranks the config and automatic matching.',
+        unpinHint: 'Go back to the configured or automatically matched PR.',
+        draft: 'draft',
         running: 'Running',
         stopped: 'Stopped',
         starting: 'Starting',
@@ -276,6 +290,20 @@ window.__ModuleLoader__.load({
         start: '启动',
         stop: '停止',
         reload: '刷新',
+        restart: '重启看板',
+        restarting: '重启中…',
+        codeStale: '代码已更新，需要重启',
+        codeStaleHint: (count, from, to) => `看板仍在运行启动时的代码。${to && from && to !== from ? `HEAD 已从 ${from} 变为 ${to}。` : ''}${count ? `启动后有 ${count} 个源文件改动。` : ''}重启后生效。`,
+        codeUnknown: '该看板版本较旧，无法报告代码版本；请在启动它的地方手动重启一次。',
+        prCandidates: '没有自动匹配到 PR。本分支上提到该后端的开放 PR：',
+        noPrCandidates: '本分支上没有找到适配 PR。',
+        pin: '固定',
+        unpin: '取消固定',
+        pinning: '保存中…',
+        pinned: '已固定',
+        pinnedHint: '在本分支上手动指定，优先于配置和自动匹配。',
+        unpinHint: '恢复为配置或自动匹配的 PR。',
+        draft: '草稿',
         running: '运行中',
         stopped: '已停止',
         starting: '启动中',
@@ -852,6 +880,10 @@ window.__ModuleLoader__.load({
 /* A label and its value on one line, used wherever a row needs a leading dot. */
 .flup-line { display: flex; align-items: center; gap: var(--flup-s2); }
 .flup-inline-note { margin-left: var(--flup-s1); font-size: 11px; }
+.flup-muted { color: var(--dsw-alias-label-secondary); }
+.flup-pr-candidates { display: flex; flex-direction: column; gap: var(--flup-s1); margin-top: var(--flup-s1); font-size: 11px; }
+.flup-pr-candidate { display: flex; align-items: center; gap: var(--flup-s1); min-width: 0; }
+.flup-pr-title { flex: 1; min-width: 0; max-width: 320px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--dsw-alias-label-secondary); }
 /* Fields that belong to the checkbox above them, indented to say so. */
 .flup-nest { margin-left: var(--flup-s4); }
 .flup-rail-empty { padding: 0 var(--flup-s3); }
@@ -1759,7 +1791,44 @@ window.__ModuleLoader__.load({
       return name || '—'
     }
 
-    function BackendTable({ status, t }) {
+    /**
+     * The PR cell's secondary line: an unpin control for a pinned PR, or,
+     * when nothing matched, the open PRs on this branch that name the
+     * backend, each pinnable in one click.
+     */
+    function PrPicker({ backend, t, onPin, pinning }) {
+      if (!onPin) return null
+      const busy = pinning === backend.id
+      if (backend.pr && backend.pr.selectedBy === 'pinned') {
+        return h('button', {
+          type: 'button',
+          className: 'flup-btn flup-btn-sm flup-inline-note',
+          disabled: busy,
+          title: t.unpinHint,
+          onClick: () => onPin(String(backend.id), null),
+        }, busy ? t.pinning : t.unpin)
+      }
+      if (backend.pr) return null
+      const candidates = Array.isArray(backend.prCandidates) ? backend.prCandidates : []
+      if (!candidates.length) return h('div', { className: 'flup-inline-note flup-muted' }, t.noPrCandidates)
+      return h('div', { className: 'flup-pr-candidates' },
+        h('span', { className: 'flup-muted' }, t.prCandidates),
+        candidates.map(row => h('div', { key: row.number, className: 'flup-pr-candidate' },
+          row.url
+            ? h('a', { className: 'flup-link', href: String(row.url), target: '_blank', rel: 'noreferrer noopener', title: row.title }, `#${row.number}`)
+            : h('span', null, `#${row.number}`),
+          h('span', { className: 'flup-pr-title', title: row.title }, row.title + (row.draft ? ` (${t.draft})` : '')),
+          h('button', {
+            type: 'button',
+            className: 'flup-btn flup-btn-sm',
+            disabled: busy,
+            onClick: () => onPin(String(backend.id), row.number),
+          }, busy ? t.pinning : t.pin),
+        )),
+      )
+    }
+
+    function BackendTable({ status, t, onPin, pinning }) {
       const backends = (status && Array.isArray(status.backends)) ? status.backends : []
       if (!backends.length) return h('p', { className: 'flup-empty' }, t.noBackends)
       // Same vendor colours as the fleet view. A backend here and a machine
@@ -1789,6 +1858,10 @@ window.__ModuleLoader__.load({
                   rel: 'noreferrer noopener',
                 }, `#${backend.pr.number}`)
                 : null,
+              backend.pr && backend.pr.selectedBy === 'pinned'
+                ? h('span', { className: 'flup-tag flup-inline-note', title: t.pinnedHint }, t.pinned)
+                : null,
+              h(PrPicker, { backend, t, onPin, pinning }),
             ),
             h('td', null, h(Status, { value: backend.integration })),
             // `backend.ci` is the resolved adaptation-CI verdict from the host
@@ -2616,6 +2689,30 @@ window.__ModuleLoader__.load({
         }
       }, [project.id, branch, load])
 
+      /*
+       * Pin (number) or unpin (null) a backend's PR on the shown branch. The
+       * dashboard re-collects that branch before answering, so one reload
+       * shows the result.
+       */
+      const [pinning, setPinning] = React.useState(null)
+      const pinPr = React.useCallback(async (backend, number) => {
+        const target = (status && status.branch) || branch
+        if (!target) return
+        setPinning(backend)
+        try {
+          await callJson(`${BASE}pin-pr`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ project: project.id, branch: target, backend, number }),
+          })
+          await load()
+        } catch (failure) {
+          setError(String(failure.message))
+        } finally {
+          setPinning(null)
+        }
+      }, [project.id, branch, status, load])
+
       if (!running) {
         return h('div', { className: 'flup-body' }, h('p', { className: 'flup-empty' }, t.dashboardDown))
       }
@@ -2693,7 +2790,7 @@ window.__ModuleLoader__.load({
             ? h('p', { className: 'flup-err' }, /branch limit/i.test(error) ? t.branchLimit : `${t.error}: ${error}`)
             : null,
           !status && !error ? h(Skeleton, { rows: 5, label: t.loading }) : null,
-          tab === 'backends' && status ? h(BackendTable, { status, t }) : null,
+          tab === 'backends' && status ? h(BackendTable, { status, t, onPin: pinPr, pinning }) : null,
           tab === 'tasks'
             ? h(React.Fragment, null,
               h(RepoCard, { t, project }),
@@ -3856,6 +3953,7 @@ window.__ModuleLoader__.load({
       const [selected, setSelected] = useCached('panel', 'selected', null)
       const [error, setError] = useCached('panel', 'error', null)
       const [busy, setBusy] = React.useState(false)
+      const [restarting, setRestarting] = React.useState(false)
       const [setup, setSetup] = useCached('panel', 'setup', null)
 
       const load = React.useCallback(async () => {
@@ -3921,6 +4019,7 @@ window.__ModuleLoader__.load({
       const running = Boolean(state && state.running)
       const configured = Boolean(state && state.configured)
       const adopted = Boolean(state && state.adopted)
+      const code = state && state.code ? state.code : null
       const project = projects.find(row => row.id === selected) || null
       // A first-run clone of the dashboard is in flight; say so rather than
       // showing a bare "not configured" while it fetches.
@@ -3965,6 +4064,22 @@ window.__ModuleLoader__.load({
             disabled: busy,
             onClick: () => { dropCache(); load() },
           }, t.reload),
+          /*
+           * Restart, offered only when the running process is behind the code
+           * on disk. Works for an adopted dashboard too: it re-executes itself
+           * with its own arguments, so the plugin never kills a process it
+           * does not own.
+           */
+          code && code.stale ? h('button', {
+            className: 'flup-btn flup-btn-primary',
+            type: 'button',
+            disabled: busy,
+            title: t.codeStaleHint(code.changedCount, code.startedHead, code.currentHead),
+            onClick: async () => {
+              setRestarting(true)
+              try { await lifecycle('restart'); dropCache() } finally { setRestarting(false) }
+            },
+          }, restarting ? t.restarting : t.restart) : null,
           // Plugin self-update. Renders nothing unless a newer release exists,
           // so it does not compete with the dashboard controls day to day.
           h(UpdateButton, { t }),
@@ -3979,6 +4094,12 @@ window.__ModuleLoader__.load({
         ),
 
         error ? h('div', { className: 'flup-sub' }, h('span', { className: 'flup-err' }, `${t.error}: ${error}`)) : null,
+        // Stale code is easy to miss in a tooltip, so it also gets a line.
+        code && code.stale ? h('div', { className: 'flup-sub', role: 'status' },
+          h('span', { className: 'flup-tag flup-tag-warn' }, t.codeStale),
+          ' ',
+          t.codeStaleHint(code.changedCount, code.startedHead, code.currentHead),
+        ) : null,
 
         h('div', { className: 'flup-split' },
           h('nav', { className: 'flup-rail', 'aria-label': t.heading },

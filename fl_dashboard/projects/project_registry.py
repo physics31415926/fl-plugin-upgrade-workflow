@@ -49,8 +49,8 @@ class ProjectContext:
     def cached_status(self, branch=None):
         return self.snapshot_cache().get(branch)
 
-    def refresh_status(self, branch=None):
-        return self.snapshot_cache().refresh(branch)
+    def refresh_status(self, branch=None, *, throttle=True):
+        return self.snapshot_cache().refresh(branch, throttle=throttle)
 
     def close_cache(self):
         with self._snapshot_lock:

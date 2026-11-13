@@ -18,7 +18,7 @@
 命令行等价写法：
 
 ```sh
-dsh plugin install /绝对路径/physics31415926-fl-upgrade-workflow-0.6.4.tgz
+dsh plugin install /绝对路径/physics31415926-fl-upgrade-workflow-0.7.0.tgz
 ```
 
 **装好即用，不用先手动 clone 看板仓库。** `repoPath` 留空时，插件首次激活会把看板仓库

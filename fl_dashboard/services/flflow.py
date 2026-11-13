@@ -728,6 +728,8 @@ def make_server(engine: Engine | None, host: str, port: int, monitor: object | N
     if access_shares is not None and not access_shares.public_url:
         raise WorkflowError("Access sharing requires a public HTTPS URL")
     registry = registry or ProjectRegistry.single(engine, monitor, sessions)
+    from fl_dashboard.services.code_version import CodeVersion
+    code_version = CodeVersion()
 
     from fl_dashboard.tasks.ssh_profile_sync import SSHProfileSync
     ssh_syncs = {}
@@ -951,6 +953,9 @@ def make_server(engine: Engine | None, host: str, port: int, monitor: object | N
                 except Exception:
                     self._json(HTTPStatus.INTERNAL_SERVER_ERROR, {"error": "Session history unavailable"})
                 return
+            if target.path == "/api/code-version":
+                self._json(200, code_version.snapshot())
+                return
             if target.path == "/api/capabilities":
                 self._json(200, {"read_only": False, "sessions": sessions is not None,
                                  "refresh": monitor is not None, "workflow": engine is not None,
@@ -1157,6 +1162,16 @@ def make_server(engine: Engine | None, host: str, port: int, monitor: object | N
                 body = json.loads(self.rfile.read(length) or b"{}")
                 if not isinstance(body, dict):
                     raise WorkflowError("Request body must be a JSON object")
+                if target == "/api/restart":
+                    # Local control only: the share gateway does not forward this route.
+                    if body:
+                        raise WorkflowError("Restart does not accept fields")
+                    self._json(HTTPStatus.ACCEPTED, {"accepted": True, "pid": os.getpid()})
+                    self.server.restart_requested = True
+                    # shutdown() blocks until serve_forever returns, so it must not
+                    # run on the request thread serve_forever is waiting for.
+                    threading.Thread(target=self.server.shutdown, daemon=True).start()
+                    return
                 if target in ("/api/jumpserver/settings", "/api/jumpserver/login", "/api/jumpserver/refresh", "/api/jumpserver/logout"):
                     if sessions is None:
                         self._json(503, {"error": "本机任务服务尚未配置"})
@@ -1306,6 +1321,19 @@ def make_server(engine: Engine | None, host: str, port: int, monitor: object | N
                         if branch is not None and not isinstance(branch, str):
                             raise WorkflowError("branch must be a string")
                         self._json(200, project.refresh_status(branch=branch))
+                elif target == "/api/pin-pr":
+                    if monitor is None or not hasattr(monitor, "pin_pr"):
+                        self._json(HTTPStatus.SERVICE_UNAVAILABLE, {"error": "Branch monitor is not configured"})
+                    else:
+                        if set(body) - {"branch", "backend", "number"}:
+                            raise WorkflowError("Pinning accepts only branch, backend and number")
+                        number = body.get("number")
+                        if number is not None and (type(number) is not int or number <= 0):
+                            raise WorkflowError("number must be a positive integer or null")
+                        result = monitor.pin_pr(body.get("branch"), body.get("backend"), number)
+                        # Re-collect now so the panel shows the pinned PR at once.
+                        project.refresh_status(branch=result["branch"], throttle=False)
+                        self._json(200, result)
                 elif target == "/api/start":
                     engine.launch(dry_run=body.get("dry_run", False) is True)
                     self._json(HTTPStatus.ACCEPTED, {"accepted": True})
@@ -1322,6 +1350,8 @@ def make_server(engine: Engine | None, host: str, port: int, monitor: object | N
                 self._json(HTTPStatus.INTERNAL_SERVER_ERROR, {"error": f"Request failed: {exc}"})
 
     class DashboardServer(ThreadingHTTPServer):
+        restart_requested = False
+
         def server_close(self):
             device_fleet.close()
             jumpserver.close()
@@ -1350,6 +1380,11 @@ def serve(engine: Engine | None, host: str, port: int, monitor: object | None = 
             registry.close()
         elif sessions is not None:
             sessions.close()
+    if getattr(server, "restart_requested", False):
+        # The socket is closed above, so the copy can bind the same port.
+        from fl_dashboard.services.code_version import respawn
+        print("FL workflow dashboard: restarting with the code on disk", flush=True)
+        respawn()
 
 
 def main(argv: list[str] | None = None) -> int:

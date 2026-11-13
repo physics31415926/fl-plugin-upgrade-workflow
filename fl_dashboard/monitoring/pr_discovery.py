@@ -33,6 +33,20 @@ def _purpose(body):
         if active and not stripped.startswith((">", "|", "- [", "* [")):
             yield stripped.replace(chr(96), "").replace("**", "")
 
+def mentioned_backends(pr):
+    """Backends a PR's title or source branch names, without judging intent.
+
+    Looser than ``adaptation_backend`` on purpose: it only shortlists PRs for
+    a person to confirm, and never selects one by itself.
+    """
+    head = pr.get("head") or {}
+    ref = str(head.get("ref") or "") if isinstance(head, dict) else ""
+    # Branch names join words with separators that the alias matcher treats
+    # as part of a word ("sunrise-vllm"), so split them first.
+    text = str(pr.get("title") or "")[:1000] + " " + re.sub(r"[-/_.]+", " ", ref[:255])
+    return _backends(text)
+
+
 def adaptation_backend(pr):
     """Source branch names alone never prove adaptation intent."""
     title = str(pr.get("title") or "")[:1000].casefold()

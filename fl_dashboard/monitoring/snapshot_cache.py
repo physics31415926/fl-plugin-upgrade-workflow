@@ -174,14 +174,16 @@ class MonitorSnapshotCache:
                 self._begin(branch, entry, manual=False)
             return self._view(branch, entry)
 
-    def refresh(self, branch=None):
+    def refresh(self, branch=None, *, throttle=True):
+        # ``throttle=False`` is for a local state change (a PR pin) that the
+        # next snapshot must reflect; the 30 s guard exists for repeated clicks.
         with self._lock:
             branch, entry = self._entry(branch)
             if self._closed:
                 return self._view(branch, entry)
             if entry.flight is not None:
                 flight = entry.flight
-            elif entry.last_manual is not None and time.monotonic() - entry.last_manual < 30:
+            elif throttle and entry.last_manual is not None and time.monotonic() - entry.last_manual < 30:
                 return self._view(branch, entry)
             else:
                 flight = self._begin(branch, entry, manual=True)

@@ -35,7 +35,7 @@ from urllib.parse import quote, urlencode, urlsplit
 from urllib.request import Request, urlopen
 
 from fl_dashboard.monitoring.pr_acceptance import acceptance_summary
-from fl_dashboard.monitoring.pr_discovery import adaptation_backend
+from fl_dashboard.monitoring.pr_discovery import adaptation_backend, mentioned_backends
 
 
 SHA = re.compile(r"^[0-9a-f]{40}$")
@@ -176,6 +176,12 @@ class BranchMonitor:
                         not all(isinstance(value, str) and value.strip() and len(value) <= 200 and
                                 not any(ord(char) < 32 for char in value) for value in values)):
                     raise MonitorError("PR discovery requires explicit head_prefixes and optional title_terms")
+        # PR numbers a person pinned from the panel, per branch and backend.
+        # Kept beside the evidence store, outside the monitor config: pinning
+        # is runtime state, and writing it into the config would change the
+        # snapshot cache fingerprint and drop every cached branch.
+        self.pins_path = self.evidence_dir.parent / "pr-pins.json"
+        self._pins_lock = threading.Lock()
         self.transport = transport or self._http_json
         self._api_cache: dict[str, tuple[float, dict[str, Any] | list[Any]]] = {}
         self._cache_lock = threading.RLock()
@@ -503,8 +509,87 @@ class BranchMonitor:
                 (not selector.get("title_terms") or
                  any(term.casefold() in str(pr.get("title", "")).casefold() for term in selector["title_terms"])))
 
+    def _all_pins(self) -> dict[str, dict[str, int]]:
+        try:
+            raw = json.loads(self.pins_path.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            return {}
+        if not isinstance(raw, dict):
+            return {}
+        return {branch: {backend: number for backend, number in pins.items()
+                         if isinstance(backend, str) and PLATFORM.fullmatch(backend)
+                         and type(number) is int and number > 0}
+                for branch, pins in raw.items() if isinstance(branch, str) and isinstance(pins, dict)}
+
+    def pins(self, branch: str) -> dict[str, int]:
+        """Pinned PR numbers for one branch, by backend."""
+        return self._all_pins().get(branch, {})
+
+    def pin_pr(self, branch: str, backend: str, number: int | None) -> dict[str, Any]:
+        """Pin (or with ``None`` unpin) one backend's PR on one branch.
+
+        The PR must exist and target ``branch``: a pin is the branch-scoped
+        answer to "which PR is this backend's adaptation", so a PR aimed at
+        another branch is refused rather than stored and silently ignored.
+        """
+        self._validate_branch(branch)
+        if not isinstance(backend, str) or not PLATFORM.fullmatch(backend):
+            raise MonitorError("Invalid backend ID")
+        if number is not None:
+            if type(number) is not int or number <= 0:
+                raise MonitorError("PR number must be a positive integer")
+            if not self.github_repo:
+                raise MonitorError("Pinning a PR requires github_repo")
+            data = self._api(f"pulls/{number}", True)
+            if data.get("number") != number or (data.get("base") or {}).get("ref") != branch:
+                raise MonitorError(f"PR #{number} does not target {branch}")
+        with self._pins_lock:
+            pins = self._all_pins()
+            row = dict(pins.get(branch, {}))
+            if number is None:
+                row.pop(backend, None)
+            else:
+                row[backend] = number
+            if row:
+                pins[branch] = row
+            else:
+                pins.pop(branch, None)
+            self.pins_path.parent.mkdir(parents=True, exist_ok=True)
+            temporary = self.pins_path.with_suffix(".json.tmp")
+            temporary.write_text(json.dumps(pins, indent=2, sort_keys=True), encoding="utf-8")
+            os.replace(temporary, self.pins_path)
+        return {"branch": branch, "backend": backend, "number": number}
+
+    @staticmethod
+    def _pr_candidates(backend: str, candidate_prs: list[dict[str, Any]] | None) -> list[dict[str, Any]]:
+        """Open PRs on this branch that name the backend, for a person to pin."""
+        rows = []
+        for pr in candidate_prs or []:
+            if pr.get("state") != "open" or type(pr.get("number")) is not int:
+                continue
+            if backend not in mentioned_backends(pr):
+                continue
+            rows.append({"number": pr["number"], "title": str(pr.get("title") or "")[:200],
+                         "url": pr.get("html_url"), "draft": pr.get("draft") is True})
+        return rows[:8]
+
     def _pr(self, backend: str, branch: str, force: bool, errors: list[str],
-            candidate_prs: list[dict[str, Any]] | None = None, head: str | None = None) -> tuple[dict[str, Any] | None, dict[str, Any] | None]:
+            candidate_prs: list[dict[str, Any]] | None = None, head: str | None = None,
+            pinned: int | None = None) -> tuple[dict[str, Any] | None, dict[str, Any] | None]:
+        if pinned:
+            # A person chose this PR for this branch; it outranks configuration
+            # and discovery, but still has to target the branch.
+            try:
+                data = self._api(f"pulls/{pinned}", force)
+            except (OSError, ValueError, MonitorError) as exc:
+                errors.append(f"Pinned {backend} PR #{pinned} unavailable: {exc}")
+                data = None
+            if data and data.get("number") == pinned and (data.get("base") or {}).get("ref") == branch:
+                return {"number": pinned, "url": data.get("html_url") or f"https://github.com/{self.github_repo}/pull/{pinned}",
+                        "title": data.get("title"), "draft": data.get("draft"), "state": data.get("state"),
+                        "merged": data.get("merged"), "selected_by": "pinned"}, data
+            if data:
+                errors.append(f"Pinned {backend} PR #{pinned} no longer targets {branch}")
         value = self.backend_prs.get(backend)
         number = value.get("number") if isinstance(value, dict) else value
         number = number if type(number) is int and number > 0 else None
@@ -970,8 +1055,9 @@ class BranchMonitor:
         manifests = self._manifests()
         registry_backends = [self._ci_backend_ids.get(platform, platform) for platform in registry]
         registry_backends = ["cuda" if backend == "nvidia" else backend for backend in registry_backends]
+        pins = self.pins(branch)
         backend_ids = list(dict.fromkeys([*registry_backends, *self.backend_labels, *self.backend_prs,
-                                          *self.merged_commits, *self.backend_pr_discovery]))
+                                          *self.merged_commits, *self.backend_pr_discovery, *pins]))
         candidate_prs = None
         if backend_ids and self.github_repo:
             try:
@@ -992,9 +1078,12 @@ class BranchMonitor:
                 discovered_backends.add(backend)
         backends = []
         for backend in backend_ids:
-            pr, pr_data = self._pr(backend, branch, force, errors, candidate_prs, sha)
+            pr, pr_data = self._pr(backend, branch, force, errors, candidate_prs, sha, pinned=pins.get(backend))
             if backend in discovered_backends and pr is None:
                 continue
+            # When nothing matched, offer the open PRs that at least name this
+            # backend so a person can pin the right one in one step.
+            pr_candidates = self._pr_candidates(backend, candidate_prs) if pr is None else []
             integration = self._integration(backend, branch, sha, pr_data)
             ci = self._backend_ci(backend, integration, jobs, branch_ci, pr_data, force, errors, branch=branch)
             current_ci = self._branch_backend_ci(backend, jobs, branch_ci) if integration["status"] == "merged" else ci
@@ -1006,7 +1095,8 @@ class BranchMonitor:
             acceptance = acceptance_summary(pr, pr_data, records, gate, branch=branch, head=sha)
             backends.append({"id": backend, "label": self.backend_labels.get(backend, LABELS.get(backend, backend)),
                              "ci_enabled": any(registry.get(platform, False) for platform in self._ci_platforms(backend)), "integration": integration,
-                             "ci": ci, "current_ci": current_ci, "pr": pr, "gate": gate, "results": results,
+                             "ci": ci, "current_ci": current_ci, "pr": pr, "pr_candidates": pr_candidates,
+                             "gate": gate, "results": results,
                              "acceptance_records": records, "acceptance": acceptance})
         backends.sort(key=lambda item: (item["id"] != "cuda", str(item["label"]).casefold(), item["id"]))
         upstream_version = self._version(sha)
