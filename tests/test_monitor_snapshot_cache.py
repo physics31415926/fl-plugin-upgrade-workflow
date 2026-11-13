@@ -287,6 +287,37 @@ class MonitorSnapshotCacheTests(unittest.TestCase):
                     if entry.flight is not None and not entry.flight.is_set():
                         entry.flight = None
 
+    def test_invalidate_returns_at_once_and_reruns_after_a_running_collection(self):
+        cache = self.cache(refresh_interval=0)
+        self.monitor.release.clear()
+        cache.get("main")  # starts a background collection that blocks
+        self.assertTrue(self.monitor.entered.wait(5))
+        started = time.monotonic()
+        cache.invalidate("main")  # a pin landed while that collection runs
+        self.assertLess(time.monotonic() - started, 1)
+        self.monitor.release.set()
+        deadline = time.monotonic() + 5
+        while time.monotonic() < deadline:
+            with cache._lock:
+                idle = cache._entries["main"].flight is None
+            if idle and ("refresh", "main") in self.monitor.calls:
+                break
+            time.sleep(0.02)
+        time.sleep(0.1)
+        # One collection predated the pin, so exactly one more ran after it.
+        self.assertEqual([kind for kind, _ in self.monitor.calls if kind == "refresh"], ["refresh"])
+
+    def test_invalidate_when_idle_starts_a_collection_without_waiting(self):
+        cache = self.cache(refresh_interval=0)
+        cache.refresh("main")
+        self.monitor.calls.clear()
+        self.monitor.release.clear()
+        started = time.monotonic()
+        cache.invalidate("main")
+        self.assertLess(time.monotonic() - started, 1)
+        self.assertTrue(self.monitor.entered.wait(5))
+        self.monitor.release.set()
+
     def test_returned_values_cannot_mutate_cached_snapshot(self):
         cache = self.cache()
         value = cache.refresh()

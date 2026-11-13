@@ -2729,7 +2729,26 @@ window.__ModuleLoader__.load({
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ project: project.id, branch: target, backend, number }),
           })
-          await load()
+          // The dashboard answers before re-collecting (a collection outlasts
+          // the request timeout), so poll until the snapshot shows the pin.
+          const settled = row => number === null
+            ? !(row && row.pr && row.pr.selectedBy === 'pinned')
+            : Boolean(row && row.pr && row.pr.number === number)
+          const deadline = Date.now() + 180_000
+          for (let poll = 0; ; poll += 1) {
+            const body = await callJson(readPath('/api/branch-status', { project: project.id, branch: target }))
+            const rows = body && Array.isArray(body.backends) ? body.backends : []
+            const row = rows.find(item => item && String(item.id) === backend)
+            const busy = Boolean(body && body.collection && body.collection.refreshing)
+            // Stop once the pin shows, once collection has gone idle without it
+            // (give the re-collection a few polls to start), or at the deadline.
+            if (settled(row) || (!busy && poll >= 3) || Date.now() > deadline) {
+              setStatus(body)
+              setError(body && body.error ? String(body.error) : null)
+              break
+            }
+            await new Promise(done => setTimeout(done, 3_000))
+          }
         } catch (failure) {
           setError(String(failure.message))
         } finally {

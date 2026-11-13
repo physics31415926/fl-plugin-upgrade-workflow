@@ -45,6 +45,8 @@ class _Entry:
     last_success: float | None = None
     last_manual: float | None = None
     flight: threading.Event | None = None
+    # Set when local state changed during a collection that started before it.
+    rerun: bool = False
     last_read: float = field(default_factory=time.monotonic)
 
 
@@ -200,6 +202,23 @@ class MonitorSnapshotCache:
         with self._lock:
             return self._view(branch, entry, cached=False)
 
+    def invalidate(self, branch=None):
+        """Re-collect ``branch`` soon, without waiting for it.
+
+        For a local state change (a PR pin) the next snapshot must reflect.
+        A collection already running started before the change, so it is
+        followed by one more instead of being joined.
+        """
+        with self._lock:
+            branch, entry = self._entry(branch)
+            if self._closed:
+                return branch
+            if entry.flight is not None:
+                entry.rerun = True
+            else:
+                self._begin(branch, entry, manual=True)
+        return branch
+
     def _begin(self, branch, entry, *, manual):
         flight = entry.flight = threading.Event()
         entry.last_attempt = time.monotonic()
@@ -243,6 +262,9 @@ class MonitorSnapshotCache:
                 entry.flight = None
                 self._threads.discard(threading.current_thread())
                 flight.set()
+                if entry.rerun and not self._closed and self._entries.get(branch) is entry:
+                    entry.rerun = False
+                    self._begin(branch, entry, manual=True)
 
     def _load(self):
         if self.path is None:

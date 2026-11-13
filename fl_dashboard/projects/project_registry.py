@@ -52,6 +52,9 @@ class ProjectContext:
     def refresh_status(self, branch=None, *, throttle=True):
         return self.snapshot_cache().refresh(branch, throttle=throttle)
 
+    def invalidate_status(self, branch=None):
+        return self.snapshot_cache().invalidate(branch)
+
     def close_cache(self):
         with self._snapshot_lock:
             if self._snapshot_cache is not None:

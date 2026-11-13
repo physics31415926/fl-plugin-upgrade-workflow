@@ -1333,9 +1333,11 @@ def make_server(engine: Engine | None, host: str, port: int, monitor: object | N
                         if number is not None and (type(number) is not int or number <= 0):
                             raise WorkflowError("number must be a positive integer or null")
                         result = monitor.pin_pr(body.get("branch"), body.get("backend"), number)
-                        # Re-collect now so the panel shows the pinned PR at once.
-                        project.refresh_status(branch=result["branch"], throttle=False)
-                        self._json(200, result)
+                        # Answer at once and re-collect in the background: a
+                        # collection takes longer than the plugin waits, and one
+                        # already running predates the pin. The panel polls.
+                        project.invalidate_status(branch=result["branch"])
+                        self._json(200, {**result, "refreshing": True})
                 elif target == "/api/start":
                     engine.launch(dry_run=body.get("dry_run", False) is True)
                     self._json(HTTPStatus.ACCEPTED, {"accepted": True})
