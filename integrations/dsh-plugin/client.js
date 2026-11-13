@@ -3989,8 +3989,9 @@ window.__ModuleLoader__.load({
               'aria-current': selected === row.id,
               onClick: () => setSelected(row.id),
             },
+              // No branch here: everything the project view shows follows the
+              // branch picked inside it, so a fixed branch label would mislead.
               h('span', null, String(row.label || row.id)),
-              row.default_branch ? h('span', { className: 'flup-rail-sub' }, String(row.default_branch)) : null,
             )),
             !projects.length && state ? h('p', { className: 'flup-empty flup-rail-empty' }, t.noProjects) : null,
             /*
