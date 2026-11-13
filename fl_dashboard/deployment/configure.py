@@ -35,6 +35,7 @@ def git(repo: Path, *arguments: str, allowed=(0,)) -> subprocess.CompletedProces
         result = subprocess.run(
             ["git", "-c", f"safe.directory={repo.as_posix()}", "-C", str(repo), *arguments],
             capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=15,
+            creationflags=subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0,
         )
     except FileNotFoundError as exc:
         raise ConfigurationError("Git is required; install it and make it available on PATH.") from exc

@@ -196,7 +196,8 @@ class BranchMonitor:
     def _git(self, *args: str, timeout: int = 8, check: bool = True) -> subprocess.CompletedProcess[str]:
         try:
             done = subprocess.run(["git", "-c", f"safe.directory={self.repo}", "-C", str(self.repo), *args], capture_output=True,
-                                  text=True, encoding="utf-8", errors="replace", timeout=timeout)
+                                  text=True, encoding="utf-8", errors="replace", timeout=timeout,
+                                  creationflags=subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0)
         except (OSError, subprocess.TimeoutExpired) as exc:
             raise MonitorError(f"git {args[0]} unavailable: {exc}") from exc
         if check and done.returncode:
@@ -365,7 +366,8 @@ class BranchMonitor:
         if gh:
             try:
                 done = subprocess.run([gh, "api", url], capture_output=True, text=True,
-                                      encoding="utf-8", errors="replace", timeout=10)
+                                      encoding="utf-8", errors="replace", timeout=10,
+                                      creationflags=subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0)
                 if done.returncode == 0:
                     data = json.loads(done.stdout)
                     if isinstance(data, (dict, list)):

@@ -620,7 +620,8 @@ done
     def _git(self, *args):
         try:
             result = subprocess.run(["git", "-c", "safe.directory=" + self.repo.as_posix(), "-C", str(self.repo), *args],
-                                    capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=45)
+                                    capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=45,
+                                    creationflags=subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0)
         except (OSError, subprocess.TimeoutExpired) as exc:
             raise SessionError(f"Git failed: {exc}") from exc
         if result.returncode:

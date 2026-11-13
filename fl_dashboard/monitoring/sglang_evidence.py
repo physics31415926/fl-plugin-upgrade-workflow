@@ -329,7 +329,8 @@ def _actual_pairs(case, raw_pairs):
 
 def _git(repo, *items):
     return subprocess.run(["git", "-c", "safe.directory=" + str(repo), "-C", str(repo), *items],
-                          check=True, capture_output=True, text=True, encoding="utf-8").stdout.strip()
+                          check=True, capture_output=True, text=True, encoding="utf-8",
+                          creationflags=subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0).stdout.strip()
 
 
 def collect(repo, commit, branch, backend, case, model_path, output_dir, run_id=None, source_cache=None):

@@ -116,6 +116,7 @@ def git(repo: Path, *args: str, check: bool = True) -> subprocess.CompletedProce
         proc = subprocess.run(
             ["git", "-C", str(repo), *args], capture_output=True, text=True,
             encoding="utf-8", errors="replace", check=False,
+            creationflags=subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0,
         )
     except OSError as exc:
         raise WorkflowError(f"Could not run git: {exc}") from exc
@@ -477,7 +478,7 @@ class Engine:
             with log.open("w", encoding="utf-8", errors="replace") as output:
                 proc = subprocess.Popen(argv, cwd=attempt["worktree"], env=self._env(platform, attempt, scope, evidence_file),
                                         stdout=output, stderr=subprocess.STDOUT, text=True,
-                                        creationflags=subprocess.CREATE_NEW_PROCESS_GROUP if os.name == "nt" else 0,
+                                        creationflags=(subprocess.CREATE_NEW_PROCESS_GROUP | subprocess.CREATE_NO_WINDOW) if os.name == "nt" else 0,
                                         start_new_session=os.name != "nt")
                 with self.lock:
                     self.active_commands += 1
@@ -513,7 +514,8 @@ class Engine:
         try:
             if os.name == "nt":
                 subprocess.run(["taskkill", "/PID", str(proc.pid), "/T", "/F"],
-                               capture_output=True, check=False, timeout=10)
+                               capture_output=True, check=False, timeout=10,
+                               creationflags=subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0)
             else:
                 os.killpg(proc.pid, signal.SIGTERM)
             proc.wait(timeout=5)

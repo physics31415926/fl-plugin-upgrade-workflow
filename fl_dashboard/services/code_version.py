@@ -32,7 +32,8 @@ def git_head(root: Path = APP_ROOT) -> str | None:
     """The checkout's HEAD commit, or None when git cannot say."""
     try:
         result = subprocess.run(["git", "-C", str(root), "rev-parse", "HEAD"], capture_output=True,
-                                text=True, timeout=5, stdin=subprocess.DEVNULL)
+                                text=True, timeout=5, stdin=subprocess.DEVNULL,
+                                creationflags=subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0)
     except (OSError, subprocess.SubprocessError):
         return None
     head = result.stdout.strip()
@@ -118,7 +119,10 @@ def respawn(argv: list[str] | None = None) -> subprocess.Popen:
     kwargs: dict = {"cwd": os.getcwd(), "stdin": subprocess.DEVNULL,
                     "stdout": _inherited(sys.__stdout__), "stderr": _inherited(sys.__stderr__)}
     if os.name == "nt":
-        kwargs["creationflags"] = subprocess.DETACHED_PROCESS | subprocess.CREATE_NEW_PROCESS_GROUP
+        # CREATE_NO_WINDOW, not DETACHED_PROCESS: a detached process has no
+        # console, so every console child it starts (git, gh, ssh) would open
+        # its own visible window. A hidden console is inherited by children.
+        kwargs["creationflags"] = subprocess.CREATE_NO_WINDOW | subprocess.CREATE_NEW_PROCESS_GROUP
     else:
         kwargs["start_new_session"] = True
     return subprocess.Popen([sys.executable, *arguments], **kwargs)
