@@ -73,6 +73,28 @@ class MonitorSnapshotCacheTests(unittest.TestCase):
             entry.last_success = time.monotonic() - 120
             entry.last_manual = None
 
+    def test_branch_limit_evicts_least_recently_read_branch(self):
+        from fl_dashboard.monitoring.snapshot_cache import MAX_BRANCHES
+        cache = self.cache(refresh_interval=0)
+        names = [f"b{index}" for index in range(MAX_BRANCHES - 1)]
+        for name in names:
+            cache.get(name)
+            self.complete(cache, name)
+        cache.get("main")
+        self.complete(cache, "main")
+        # Touch b0 so b1 becomes the oldest; main is never evicted.
+        time.sleep(0.01)
+        cache.get("b0")
+        cache.get("new")
+        self.complete(cache, "new")
+        with cache._lock:
+            kept = set(cache._entries)
+        self.assertEqual(len(kept), MAX_BRANCHES)
+        self.assertIn("main", kept)
+        self.assertIn("b0", kept)
+        self.assertIn("new", kept)
+        self.assertNotIn("b1", kept)
+
     def test_cold_get_is_immediate_and_only_one_background_collection_runs(self):
         self.monitor.release.clear()
         cache = self.cache()
@@ -245,9 +267,25 @@ class MonitorSnapshotCacheTests(unittest.TestCase):
                 cache.get(branch)
         for number in range(11):
             cache.refresh("branch-" + str(number))
-        with self.assertRaisesRegex(ValueError, "limit"):
-            cache.get("thirteenth")
+        # A thirteenth branch evicts an idle one instead of failing; the
+        # count stays bounded.
+        self.assertEqual(cache.get("thirteenth")["branch"], "thirteenth")
+        with cache._lock:
+            self.assertEqual(len(cache._entries), 12)
         self.assertEqual(cache.get("main")["branch"], "main")
+        # Only when every slot is busy collecting does the limit still refuse.
+        with cache._lock:
+            for name, entry in cache._entries.items():
+                if name != "main":
+                    entry.flight = threading.Event()
+        try:
+            with self.assertRaisesRegex(ValueError, "limit"):
+                cache.get("fourteenth")
+        finally:
+            with cache._lock:
+                for entry in cache._entries.values():
+                    if entry.flight is not None and not entry.flight.is_set():
+                        entry.flight = None
 
     def test_returned_values_cannot_mutate_cached_snapshot(self):
         cache = self.cache()

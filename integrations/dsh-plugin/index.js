@@ -720,7 +720,18 @@ function summarizeBackend(backend, head) {
       ? { status: backend.acceptance.status ?? null, summary: backend.acceptance.summary ?? null, rows_total: backend.acceptance.rows_total ?? 0 }
       : null,
     gate: gate
-      ? { status: gate.status, passed: gate.passed, failed: gate.failed, missing: gate.missing, total: gate.total }
+      ? {
+        status: gate.status,
+        passed: gate.passed,
+        failed: gate.failed,
+        missing: gate.missing,
+        total: gate.total,
+        // Which commit the newest evidence belongs to. A `stale` gate has
+        // evidence, just not at this HEAD; the panel says so instead of a
+        // bare 0/20 that reads the same as "never run".
+        latestCommit: typeof gate.latest_commit === 'string' ? gate.latest_commit.slice(0, 12) : null,
+        detail: typeof gate.detail === 'string' ? gate.detail : null,
+      }
       : null,
   }
 }

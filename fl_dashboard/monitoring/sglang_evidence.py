@@ -351,6 +351,10 @@ def collect(repo, commit, branch, backend, case, model_path, output_dir, run_id=
     spec = importlib.util.spec_from_file_location("_flflow_sglang_original_case", repo / case["source"])
     module = importlib.util.module_from_spec(spec)
     pairs, execution_error, actual_model_path = [], None, None
+    # Importing the source would write __pycache__ into the pinned checkout,
+    # which the post-run `git status` check below then reads as a modified
+    # tree and rejects the whole run.
+    wrote_bytecode, sys.dont_write_bytecode = sys.dont_write_bytecode, True
     try:
         spec.loader.exec_module(module)
         if case["family"] == "pytest_concurrent":
@@ -413,6 +417,8 @@ def collect(repo, commit, branch, backend, case, model_path, output_dir, run_id=
         if isinstance(exc, (KeyboardInterrupt, GeneratorExit)):
             raise
         execution_error = type(exc).__name__ + ": " + str(exc)
+    finally:
+        sys.dont_write_bytecode = wrote_bytecode
     try:
         if _git(repo, "rev-parse", "HEAD") != commit or _git(repo, "status", "--porcelain"):
             execution_error = "Source repository changed during collection; pinned execution cannot be accepted"

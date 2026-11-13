@@ -1,7 +1,7 @@
 """Nonblocking, persisted last-good monitor snapshots, isolated by configuration."""
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 import hashlib
 import json
 import math
@@ -45,6 +45,7 @@ class _Entry:
     last_success: float | None = None
     last_manual: float | None = None
     flight: threading.Event | None = None
+    last_read: float = field(default_factory=time.monotonic)
 
 
 class MonitorSnapshotCache:
@@ -140,9 +141,17 @@ class MonitorSnapshotCache:
         branch = self._validate_branch(self.default_branch if branch is None else branch)
         if branch not in self._entries:
             if len(self._entries) >= MAX_BRANCHES:
-                raise ValueError("Snapshot branch limit reached")
+                # Evict the branch nobody has looked at for longest. The
+                # default branch and any branch mid-collection stay.
+                idle = [(entry.last_read, name) for name, entry in self._entries.items()
+                        if name != self.default_branch and entry.flight is None]
+                if not idle:
+                    raise ValueError("Snapshot branch limit reached")
+                del self._entries[min(idle)[1]]
             self._entries[branch] = _Entry()
-        return branch, self._entries[branch]
+        entry = self._entries[branch]
+        entry.last_read = time.monotonic()
+        return branch, entry
 
     def _placeholder(self, branch):
         config = getattr(self.monitor, "config", {})

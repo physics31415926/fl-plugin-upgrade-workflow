@@ -30,6 +30,8 @@ window.__ModuleLoader__.load({
         pinnedHint: 'Chosen by hand for this branch; outranks the config and automatic matching.',
         unpinHint: 'Go back to the configured or automatically matched PR.',
         draft: 'draft',
+        gateStale: commit => `Gate evidence exists, but for older commit ${commit}; the gate counts only runs at the current branch HEAD.`,
+        gateMissing: 'No gate evidence has been uploaded for the current branch HEAD.',
         running: 'Running',
         stopped: 'Stopped',
         starting: 'Starting',
@@ -304,6 +306,8 @@ window.__ModuleLoader__.load({
         pinnedHint: '在本分支上手动指定，优先于配置和自动匹配。',
         unpinHint: '恢复为配置或自动匹配的 PR。',
         draft: '草稿',
+        gateStale: commit => `已有门禁证据，但属于旧提交 ${commit}；门禁只认当前分支 HEAD 上的运行。`,
+        gateMissing: '当前分支 HEAD 上还没有上传过门禁证据。',
         running: '运行中',
         stopped: '已停止',
         starting: '启动中',
@@ -1828,6 +1832,26 @@ window.__ModuleLoader__.load({
       )
     }
 
+    /**
+     * The gate counts only evidence produced at the exact branch HEAD, so
+     * "0/20" alone hides the difference between "never run" and "ran on an
+     * older commit". Lead with the verdict and explain it in the tooltip.
+     */
+    function GateCell({ gate, t }) {
+      if (!gate) return '—'
+      const count = gate.total ? `${gate.passed ?? 0}/${gate.total}` : null
+      const detail = gate.detail
+        || (gate.status === 'stale' && gate.latestCommit ? t.gateStale(gate.latestCommit)
+          : gate.status === 'missing' ? t.gateMissing
+            : null)
+      return h(React.Fragment, null,
+        h(Status, { value: { status: gate.status, detail } }),
+        count && gate.status !== 'missing' && gate.status !== 'stale'
+          ? h('span', { className: 'flup-inline-note' }, count)
+          : null,
+      )
+    }
+
     function BackendTable({ status, t, onPin, pinning }) {
       const backends = (status && Array.isArray(status.backends)) ? status.backends : []
       if (!backends.length) return h('p', { className: 'flup-empty' }, t.noBackends)
@@ -1880,7 +1904,7 @@ window.__ModuleLoader__.load({
                 detail: backend.acceptance.summary,
               },
             })),
-            h('td', { className: 'flup-num' }, gate && gate.total ? `${gate.passed ?? 0}/${gate.total}` : '—'),
+            h('td', { className: 'flup-num' }, h(GateCell, { gate, t })),
           )
         })),
       )
